@@ -52,6 +52,11 @@ export class Hold {
     return this.start >= 0;
   }
 
+  /** Restart an in-flight hold right away (no grace): the pose is there but disqualified (e.g. moving). */
+  interrupt(): void {
+    if (!this.fired) this.start = -1;
+  }
+
   reset(): void {
     this.start = this.lastActive = this.cooldownUntil = -1;
     this.fired = false;
@@ -69,6 +74,8 @@ export class Gestures {
   readonly requestWeapon = new Hold();
   readonly drink: Record<Hand, Hold> = { left: new Hold(), right: new Hold() };
   private readonly swingArmed: Record<Hand, boolean> = { left: true, right: true };
+  /** body.t of each hand's last swing (drink is ignored right after one). */
+  private readonly lastSwingT: Record<Hand, number> = { left: -1e9, right: -1e9 };
   private blocking = false;
   private blockSince = -1;
   private blockBrokenSince = -1;
@@ -99,6 +106,7 @@ export class Gestures {
     for (const h of HANDS) {
       this.drink[h].reset();
       this.swingArmed[h] = true;
+      this.lastSwingT[h] = -1e9;
     }
     this.blocking = false;
     this.blockSince = this.blockBrokenSince = -1;
@@ -111,9 +119,9 @@ export class Gestures {
 
   update(body: Body, grip: GripTracker, state: PlayerInputState, emit: Emit): void {
     const t = body.t;
-    this.updateSwing(state, emit);
+    this.updateSwing(state, t, emit);
     this.updateBlock(body, state, t, emit);
-    this.updateDrink(body, grip, t, emit);
+    this.updateDrink(body, grip, state, t, emit);
     this.updateBow(body, grip, state, t, emit);
     this.updateCallSign(body, t, emit);
     this.updateRequestWeapon(body, t, emit);
@@ -128,13 +136,14 @@ export class Gestures {
   }
 
   /** swing: hand speed > 2.2 m/s while grip > 0.5; once per swing, re-armed below 1.0 m/s. */
-  private updateSwing(state: PlayerInputState, emit: Emit): void {
+  private updateSwing(state: PlayerInputState, t: number, emit: Emit): void {
     for (const h of HANDS) {
       const hs = state.hands[h];
       const speed = len3(hs.vel);
       if (this.swingArmed[h]) {
         if (hs.visible && speed > config.swingSpeed && hs.grip > config.swingMinGrip) {
           this.swingArmed[h] = false;
+          this.lastSwingT[h] = t;
           emit({ type: 'swing', hand: h, speed, dir: normalize3(v3(hs.vel.x, hs.vel.y, hs.vel.z)) });
         }
       } else if (speed < config.swingRearmSpeed) {
@@ -179,8 +188,14 @@ export class Gestures {
     }
   }
 
-  /** drink: a gripping (non-phone-shaped) hand within 0.12 m of the mouth (pose 9/10), held 600 ms. Re-arms when the hand leaves. */
-  private updateDrink(body: Body, grip: GripTracker, t: number, emit: Emit): void {
+  /**
+   * drink: ONE gripping (non-phone-shaped) hand at the mouth (palm within drinkMouthDist of pose 9/10), held about
+   * still for 600 ms. Re-arms when the hand leaves. Not a drink (all seen as one on the fixtures / in live fights):
+   * both fists up by the face (guard), a block, a nocked bow (the draw anchors by the cheek, ~0.10 m off), a fist
+   * moving past the face, or the moments right after that hand swung.
+   */
+  private updateDrink(body: Body, grip: GripTracker, state: PlayerInputState, t: number, emit: Emit): void {
+    const busy = this.blocking || this.debug.blockPose || this.nocked;
     for (const h of HANDS) {
       let near = false;
       // A phone/shaka hand at the ear is also near the mouth and reads as a grip: that's call_sign, not drink.
@@ -189,11 +204,27 @@ export class Gestures {
         const ml = body.img[MOUTH_L] as Vec2, mr = body.img[MOUTH_R] as Vec2;
         mouth.x = (ml.x + mr.x) / 2;
         mouth.y = (ml.y + mr.y) / 2;
-        const p = body.hand[h] ? body.palmImg[h] : (body.img[POSE_IDX[h].wrist] as Vec2);
-        near = body.meters(p, mouth) < config.drinkMouthDist;
+        const p = handPoint(body, h);
+        if (body.meters(p, mouth) < config.drinkMouthDist) {
+          const still = len3(state.hands[h].vel) < config.drinkMaxSpeed && t - this.lastSwingT[h] >= config.drinkAfterSwingMs;
+          // at the mouth but disqualified: restart the hold now — the grace period is for tracking blips, and
+          // would otherwise bridge a fist jiggling by the face
+          if (busy || !still || this.otherHandAtFace(body, state, h === 'left' ? 'right' : 'left', p)) this.drink[h].interrupt();
+          else near = true;
+        }
       }
       if (this.drink[h].update(near, t, config.drinkHoldMs, GRACE_MS)) emit({ type: 'drink', hand: h });
     }
+  }
+
+  /**
+   * The other hand is up by the face too (a guard), and is a hand of its own: not a duplicate of the drinking hand
+   * (both sides locked onto one hand read as two hands at the same spot).
+   */
+  private otherHandAtFace(body: Body, state: PlayerInputState, o: Hand, p: Vec2): boolean {
+    if (!state.hands[o].visible) return false;
+    const q = handPoint(body, o);
+    return body.meters(q, mouth) < config.drinkOtherHandDist && body.meters(q, p) > 0.06;
   }
 
   /**
@@ -310,6 +341,11 @@ export class Gestures {
     for (const h of HANDS) consider('drink', this.drink[h].progress(t, config.drinkHoldMs));
     return best;
   }
+}
+
+/** Palm centre when the hand model has this hand, else the pose wrist (aspect-corrected image units). */
+function handPoint(body: Body, h: Hand): Vec2 {
+  return body.hand[h] ? body.palmImg[h] : (body.img[POSE_IDX[h].wrist] as Vec2);
 }
 
 function isPhoneShape(body: Body, h: Hand): boolean {

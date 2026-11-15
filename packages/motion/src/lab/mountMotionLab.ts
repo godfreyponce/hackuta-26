@@ -44,6 +44,7 @@ export function mountMotionLab(root: HTMLElement, opts: MotionLabOptions = {}): 
       <span class="badge" data-k="ms">– ms</span>
       <span class="badge" data-k="res">–</span>
       <span class="badge" data-k="roi" hidden>–</span>
+      <span class="badge" data-k="light" hidden>–</span>
       <span class="badge" data-k="tracking">off</span>
       <span class="badge" data-k="vis">vis –</span>
       <span class="badge" data-k="calibrated">uncalibrated</span>
@@ -370,9 +371,16 @@ export function mountMotionLab(root: HTMLElement, opts: MotionLabOptions = {}): 
     const hr = s?.handHitRate;
     roiB.hidden = !s || s.handRoi === undefined;
     if (s && hr) {
-      roiB.textContent = `${s.handRoi ? 'hand crops' : 'full frame'} · hit L ${(hr.left * 100).toFixed(0)}% R ${(hr.right * 100).toFixed(0)}% · retries ${s.roiRetries ?? 0}/s`;
+      roiB.textContent = `${s.handRoi ? 'hand crops' : 'full frame'} · hit L ${(hr.left * 100).toFixed(0)}% R ${(hr.right * 100).toFixed(0)}% · retries ${s.roiRetries ?? 0}/s${s.roiRetrySkips ? ` (${s.roiRetrySkips} over budget)` : ''}`;
       const lo = Math.min(hr.left, hr.right);
       roiB.dataset.level = !s.fps ? '' : lo >= 0.9 ? 'ok' : lo >= 0.6 ? 'warn' : 'bad';
+    }
+    // camera as delivered + image brightness; 'lighting' = the game would tell the player to add light
+    const lightB = badge('light');
+    lightB.hidden = !s || !s.cameraFps;
+    if (s?.cameraFps) {
+      lightB.textContent = `camera ${s.cameraFps.toFixed(0)} fps${s.brightness !== undefined ? ` · light ${(s.brightness * 100).toFixed(0)}%` : ''}${s.hint === 'lighting' ? ' · TOO DARK' : ''}`;
+      lightB.dataset.level = s.hint === 'lighting' ? 'bad' : 'ok';
     }
     const tracking = st?.tracking ?? 'off';
     badge('tracking').textContent = tracking;

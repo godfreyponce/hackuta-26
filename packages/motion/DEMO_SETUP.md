@@ -23,6 +23,7 @@ Open the Motion Lab once on the demo laptop and check that the header says **GPU
 
 - Put the light **in front of the player**, behind or beside the laptop. **Never put a window or bright lamp behind the player.**
 - If the Lab's `vis` badge stays under 0.5, or the game shows "Find better light", add front light. A phone flashlight bounced off a white wall works.
+- In a dim room the Mac camera slows down (30 → 15–20 fps: longer exposures) and the hands blur first. The tracker watches for it: `getStats().cameraFps` (what the camera really delivers), `brightness` (0–1), and `hint === 'lighting'` once the camera stays under 24 fps or the image is very dark for 2 s. The Lab header shows `camera N fps · light N%` and turns red with `TOO DARK`. Below 25% brightness the hand crops are brightened (up to 3×, `cropBoostBelowLuma` / `cropBoostMax`): in the bench a fist at 13% brightness went from never found to found every frame — but add light anyway, blur and the slow camera remain.
 - Use a **plain background** if you can. Busy posters and other people confuse the hand model.
 - Avoid sleeves that match the background, and gloves.
 
@@ -45,7 +46,7 @@ Each step waits until it actually sees the move, shows a hint if something's off
 - Use Chrome. Close other tabs and apps that use the camera (Zoom, FaceTime, Photo Booth).
 - Plug in the charger. Battery saver can throttle the GPU and halve the fps.
 - If the header says **CPU** (degraded), reload the page. If it stays on CPU, switch the pose model to **lite**.
-- Hands are found in two 256×256 crops placed from the pose wrists (the header shows `hand crops · hit L … R …`; the overlay draws the dashed `L crop` / `R crop` squares). If detection can't keep up with the camera (ms/frame > 0.8 × the frame interval for 3 s), the left and right crops run on alternate frames; the header shows `hands L/R alt`. With `handRoi` at 0 (old full-frame path) the fallback is 960×540 + hands every other frame (`hands ½`).
+- Hands are found in two 256×256 crops placed from the pose wrists (the header shows `hand crops · hit L … R …`; the overlay draws the dashed `L crop` / `R crop` squares). Both crops run first; a crop that missed gets a same-frame retry while the frame has room (`handRoiRetryShare` of the camera's frame interval; `over budget` counts the ones that didn't fit). If detection can't keep up with the camera (ms/frame without those retries > 0.8 × the frame interval for 3 s), the left and right crops run on alternate frames; the header shows `hands L/R alt`. With `handRoi` at 0 (old full-frame path) the fallback is 960×540 + hands every other frame (`hands ½`).
 - The fps badge needs to stay **≥ 30**. The Windows dev laptop only managed 15–17 fps, so demo on the M-series Mac.
 
 ## Quick troubleshooting

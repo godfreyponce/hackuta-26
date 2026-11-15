@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { InputEvent } from '@ithaca/shared';
 import { Engine } from '../src/engine';
-import { ASPECT, run, type FrameSpec, type P3 } from './synth';
+import { ASPECT, NEUTRAL, run, type FrameSpec, type P3 } from './synth';
 
 function engine() {
   const e = new Engine();
@@ -149,22 +149,74 @@ describe('block (C.5)', () => {
 
 describe('drink (C.5)', () => {
   const AT_MOUTH: Record<number, P3> = { 16: [0.05, 0.6, -0.1], 14: [0.2, 0.35, -0.05] };
-  it('gripping hand at the mouth for 600 ms fires once', () => {
+  const REST: Record<number, P3> = { 16: NEUTRAL[16] as P3, 14: NEUTRAL[14] as P3 };
+  const lerp = (a: P3, b: P3, k: number): P3 => [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k, a[2] + (b[2] - a[2]) * k];
+  const FIST = { right: { curl: 1 } };
+  /** The right fist brought from the hip to the mouth over `ms` (a real lift: ~1.5 m/s, not a teleport). */
+  const lift = (start: number, ms = 450, to: Record<number, P3> = AT_MOUTH) => (tt: number): FrameSpec => {
+    const k = Math.min((tt - start) / ms, 1);
+    return { joints: { 16: lerp(REST[16]!, to[16]!, k), 14: lerp(REST[14]!, to[14]!, k) }, hands: FIST };
+  };
+
+  it('gripping hand held at the mouth for 600 ms fires once', () => {
     const { events, push } = engine();
-    let t = run(push, 400, { hands: { right: { curl: 1 } } });
-    t = run(push, 500, { joints: AT_MOUTH, hands: { right: { curl: 1 } } }, t);
+    let t = run(push, 400, { hands: FIST });
+    const s1 = t;
+    t = run(push, 450, lift(s1), t);
+    t = run(push, 450, { joints: AT_MOUTH, hands: FIST }, t);
     expect(count(events, 'drink')).toBe(0);
-    t = run(push, 1500, { joints: AT_MOUTH, hands: { right: { curl: 1 } } }, t);
+    t = run(push, 1500, { joints: AT_MOUTH, hands: FIST }, t);
     expect(count(events, 'drink')).toBe(1);
     // Leave and come back: drinks again.
-    t = run(push, 400, { hands: { right: { curl: 1 } } }, t);
-    run(push, 800, { joints: AT_MOUTH, hands: { right: { curl: 1 } } }, t);
+    t = run(push, 400, { hands: FIST }, t);
+    const s2 = t;
+    t = run(push, 450, lift(s2), t);
+    run(push, 900, { joints: AT_MOUTH, hands: FIST }, t);
     expect(count(events, 'drink')).toBe(2);
   });
 
   it('open hand at the mouth does not drink', () => {
     const { events, push } = engine();
     run(push, 2000, { joints: AT_MOUTH, hands: { right: { curl: 0 } } });
+    expect(count(events, 'drink')).toBe(0);
+  });
+
+  it('both fists up by the face (a guard / block) is not a drink', () => {
+    const { events, push } = engine();
+    const BOTH_AT_FACE: Record<number, P3> = { 15: [-0.1, 0.62, -0.25], 16: [0.06, 0.6, -0.2], 13: [-0.3, 0.55, -0.15], 14: [0.25, 0.45, -0.1] };
+    run(push, 2500, { joints: BOTH_AT_FACE, hands: { left: { curl: 1 }, right: { curl: 1 } } });
+    expect(count(events, 'drink')).toBe(0);
+    const { events: ev2, push: push2 } = engine();
+    run(push2, 2500, { joints: GUARD, hands: { left: { curl: 1 }, right: { curl: 1 } } });
+    expect(count(ev2, 'block_start')).toBe(1);
+    expect(count(ev2, 'drink')).toBe(0);
+  });
+
+  it('a fist moving by the face mid-fight is not a drink', () => {
+    const { events, push } = engine();
+    // the right fist shakes ±5 cm about the mouth three times a second (~1 m/s): never leaves drinking range
+    run(push, 3000, (tt) => {
+      const k = Math.sin((tt / 160) * Math.PI);
+      return { joints: { 16: [0.05 + 0.05 * k, 0.6, -0.1], 14: [0.2 + 0.02 * k, 0.35, -0.05] }, hands: FIST };
+    });
+    expect(count(events, 'drink')).toBe(0);
+  });
+
+  it('a fist held 0.1 m off the mouth (bow anchor at the cheek) is not a drink', () => {
+    const { events, push } = engine();
+    // palm centre ≈ (0.11, 0.68): 0.11 m from the mouth
+    run(push, 2500, { joints: { 16: [0.15, 0.62, -0.1], 14: [0.3, 0.38, -0.05] }, hands: FIST });
+    expect(count(events, 'drink')).toBe(0);
+  });
+
+  it('no drink while a bow is nocked, even with the draw hand at the mouth', () => {
+    const { events, push } = engine();
+    const LEFT_OUT: Record<number, P3> = { 13: [-0.12, 0.5, -0.28], 15: [-0.08, 0.5, -0.56] };
+    const both = { left: { curl: 1 }, right: { curl: 1 } };
+    let t = run(push, 300, { joints: LEFT_OUT, hands: { left: { curl: 1 }, right: { curl: 0 } } });
+    t = run(push, 300, { joints: { ...LEFT_OUT, 16: [-0.05, 0.5, -0.5], 14: [0.15, 0.45, -0.25] }, hands: both }, t);
+    expect(count(events, 'bow_nock')).toBe(1);
+    run(push, 2000, { joints: { ...LEFT_OUT, ...AT_MOUTH }, hands: both }, t);
     expect(count(events, 'drink')).toBe(0);
   });
 });

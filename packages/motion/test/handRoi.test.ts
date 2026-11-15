@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { config, resetConfig } from '../src/config';
 import {
   clipBlit,
+  coverRoi,
+  cropTarget,
   cropToFull,
   duplicateSide,
   fullToCrop,
@@ -159,6 +161,40 @@ describe('crop geometry', () => {
     const r1 = roiFromHand(h, W, H, 0.5, -0.25, 100);
     expect(r1.x0 - r0.x0).toBeCloseTo(50, 6);
     expect(r1.y0 - r0.y0).toBeCloseTo(-25, 6);
+  });
+});
+
+describe('coverRoi / cropTarget (hand reaching toward the camera, hand at the frame edge)', () => {
+  const inside = (a: CropRect, b: CropRect) => a.x0 >= b.x0 - 1e-6 && a.y0 >= b.y0 - 1e-6 && a.x0 + a.size <= b.x0 + b.size + 1e-6 && a.y0 + a.size <= b.y0 + b.size + 1e-6;
+  const P: CropRect = { x0: 500, y0: 300, size: 120 };
+
+  it('keeps the pose ROI when the hand ROI is not bigger', () => {
+    expect(coverRoi(P, { x0: 520, y0: 320, size: 100 }, H)).toBe(P);
+  });
+
+  it('grows to hold both a bigger hand ROI and the pose ROI', () => {
+    const hand: CropRect = { x0: 470, y0: 280, size: 220 }; // centre (580, 390) inside P
+    const c = coverRoi(P, hand, H);
+    expect(inside(hand, c)).toBe(true);
+    expect(inside(P, c)).toBe(true);
+    expect(c.size).toBeLessThan(hand.size + P.size);
+  });
+
+  it("ignores a hand ROI centred outside the pose ROI (another hand, or the pose jumped)", () => {
+    expect(coverRoi(P, { x0: 800, y0: 300, size: 300 }, H)).toBe(P);
+  });
+
+  it('never exceeds 0.9 of the frame height', () => {
+    expect(coverRoi(P, { x0: 300, y0: 100, size: 900 }, H).size).toBeLessThanOrEqual(0.9 * H + 1e-6);
+  });
+
+  it('pose ROI off the frame: falls back to a recent hand ROI, else reports off-frame', () => {
+    const off: CropRect = { x0: -260, y0: 300, size: 200 }; // 100% outside
+    const edge: CropRect = { x0: -40, y0: 300, size: 120 }; // 33% outside
+    expect(cropTarget(off, edge, false, W, H)).toEqual({ rect: edge, offFrame: false });
+    expect(cropTarget(off, null, false, W, H)).toEqual({ rect: null, offFrame: true });
+    expect(cropTarget(null, null, false, W, H)).toEqual({ rect: null, offFrame: false }); // no wrist: not "off-frame"
+    expect(cropTarget(P, edge, false, W, H).rect).toBe(P); // a stale hand ROI does not resize
   });
 });
 

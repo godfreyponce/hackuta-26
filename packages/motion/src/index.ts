@@ -15,5 +15,5 @@ export type { ReplayController, ReplayOptions } from './replay';
 export { Recorder, parseRecording, runReplay, downloadRecording } from './recording';
 export type { ReplayRunResult } from './recording';
 export { replayProfile } from './recording';
-export { roiFromPose, roiFromHand, sticky, outsideFraction, clipBlit, cropToFull, duplicateSide, CROP_PX } from './handRoi';
+export { roiFromPose, roiFromHand, sticky, outsideFraction, clipBlit, cropToFull, duplicateSide, coverRoi, cropTarget, CROP_PX } from './handRoi';
 export type { CropRect } from './handRoi';

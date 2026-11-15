@@ -89,6 +89,52 @@ export function sticky(prev: CropRect | null, next: CropRect): CropRect {
   return dc < config.handRoiSticky * prev.size && Math.abs(next.size / prev.size - 1) < 0.2 ? prev : next;
 }
 
+/**
+ * A pose ROI that hides the hand it is for: a hand reaching toward the camera (bow arm, throw, sword thrust)
+ * is nearer, so bigger, than its foreshortened wrist→knuckle span says — on the fixtures only 55% of bow-arm
+ * hands and 52% of throwing hands fit in the pose crop. When this side's own hand was seen a moment ago and its
+ * landmark ROI (`hand`, roiFromHand) is centred inside the pose ROI but is bigger, return the smallest square
+ * around the midpoint of both centres that holds that hand ROI (and so the pose ROI). Otherwise `pose` as is.
+ * (Fixtures: 68% → 88% of left hands fully inside, 93% → 96% of right hands; small hands unchanged.)
+ */
+export function coverRoi(pose: CropRect, hand: CropRect, H: number): CropRect {
+  if (hand.size <= pose.size) return pose;
+  const px = pose.x0 + pose.size / 2, py = pose.y0 + pose.size / 2;
+  const hx = hand.x0 + hand.size / 2, hy = hand.y0 + hand.size / 2;
+  // a hand ROI centred outside the pose ROI is not this pose wrist's hand (or the pose jumped): trust the pose
+  if (hx < pose.x0 || hx > pose.x0 + pose.size || hy < pose.y0 || hy > pose.y0 + pose.size) return pose;
+  const cx = (px + hx) / 2, cy = (py + hy) / 2;
+  const size = clamp(2 * Math.max(Math.abs(hx - cx), Math.abs(hy - cy)) + hand.size, pose.size, Math.max(pose.size, 0.9 * H));
+  return { x0: cx - size / 2, y0: cy - size / 2, size };
+}
+
+/** A crop more than this share outside the frame is not run (there is almost nothing of the hand to see). */
+export const MAX_OUTSIDE = 0.6;
+
+/**
+ * Where to crop one side this frame. `pose` = roiFromPose (null: wrist untracked); `hand` = roiFromHand of this
+ * side's own recent result (null: none); `handFresh` = that result is recent enough to size the crop (coverRoi).
+ * - pose ROI inside the frame: the pose ROI (grown by coverRoi when it hides the hand);
+ * - pose ROI mostly off-frame or missing: the hand ROI — the pose extrapolates a wrist at the frame edge past it,
+ *   the hand model just saw where the hand really is.
+ * `offFrame`: there was a pose ROI but no crop runs because it lies outside the frame (the tracker then lets the
+ * full frame look for that hand after a while — it may poke in at the edge).
+ */
+export function cropTarget(
+  pose: CropRect | null,
+  hand: CropRect | null,
+  handFresh: boolean,
+  W: number,
+  H: number,
+): { rect: CropRect | null; offFrame: boolean } {
+  if (pose && outsideFraction(pose, W, H) <= MAX_OUTSIDE) {
+    const c = hand && handFresh ? coverRoi(pose, hand, H) : pose;
+    return { rect: c === pose || outsideFraction(c, W, H) <= MAX_OUTSIDE ? c : pose, offFrame: false };
+  }
+  const h = hand && outsideFraction(hand, W, H) <= MAX_OUTSIDE ? hand : null;
+  return { rect: h, offFrame: !!pose && !h };
+}
+
 /** Fraction of the rect's area outside the W×H frame (0 = fully inside, 1 = fully outside). */
 export function outsideFraction(r: CropRect, W: number, H: number): number {
   const iw = Math.max(0, Math.min(r.x0 + r.size, W) - Math.max(r.x0, 0));

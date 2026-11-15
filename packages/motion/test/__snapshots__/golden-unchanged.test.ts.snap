@@ -39,7 +39,7 @@ exports[`golden: passing moves and calibration are unchanged > drink 1`] = `
 [
   "0 grab right",
   "400 swing right 17.851 -0.224,0.971,-0.085",
-  "1017 drink right",
+  "1267 drink right",
   "1400 swing right 17.851 0.224,-0.971,0.085",
 ]
 `;
