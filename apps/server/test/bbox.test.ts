@@ -34,6 +34,12 @@ test('a missing, short, non-numeric or tiny box becomes the full frame', () => {
   assert.deepEqual(toUnitBox([1, 1, 1, 1], 'xy'), FULL_FRAME);
 });
 
+test('a box_2d that is not an array becomes the full frame instead of throwing', () => {
+  for (const raw of ['173,461,663,482', { 0: 173, 1: 461, 2: 663, 3: 482, length: 4 }, 42, null]) {
+    assert.deepEqual(toUnitBox(raw, 'yx'), FULL_FRAME, JSON.stringify(raw));
+  }
+});
+
 test('the shared schema scales a 0..1000 bbox', () => {
   const v = visionResultSchema.parse({
     is_object: true, object_name: 'Mug', display_name: 'Cup', weapon_class: 'potion',

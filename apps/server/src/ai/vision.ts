@@ -30,8 +30,8 @@ export const FULL_FRAME: Box = [0, 0, 1, 1];
  * Model box → [x0, y0, x1, y1] in 0..1. Gemini's native box_2d is [ymin, xmin, ymax, xmax] in 0..1000 ('yx').
  * An unusable box becomes FULL_FRAME, which cropForModel turns into the picture area without black bars.
  */
-export function toUnitBox(raw: readonly number[] | undefined, order: 'xy' | 'yx'): Box {
-  if (!raw || raw.length !== 4 || !raw.every(Number.isFinite)) return FULL_FRAME;
+export function toUnitBox(raw: unknown, order: 'xy' | 'yx'): Box {
+  if (!Array.isArray(raw) || raw.length !== 4 || !raw.every(Number.isFinite)) return FULL_FRAME;
   // A 0..1 box may overshoot 1 slightly; a 0..1000 box under 2 would be a speck the 3% rule rejects anyway.
   const scale = Math.max(...raw) > 2 ? 1000 : 1;
   const [a, b, c, d] = raw.map((n) => clamp01(n / scale)) as Box;
