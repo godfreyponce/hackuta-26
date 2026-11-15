@@ -8,6 +8,8 @@
     "start": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
     "forge:test": "tsx scripts/forge-test.ts",
+    "prefabs:build": "tsx scripts/build-prefabs.ts",
+    "prefabs:test": "tsx scripts/prefab-test.ts",
     "fake-agent": "tsx scripts/fake-agent.ts",
     "seed:armory": "tsx scripts/seed-armory.ts",
     "purge:friends": "tsx scripts/purge-friends.ts"

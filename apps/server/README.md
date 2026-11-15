@@ -25,4 +25,6 @@ Notes for other parts:
 - Forge: `FORGE_CLEAN_IMAGE=1` redraws the object without the hand (SD3.5 turbo) before 3D;
   `FORGE_3D_MODEL=spar` uses Stable Point Aware 3D. Measured: clean + spar ≈ 8.4 s and a much better shape than fast-on-raw.
 - `weapon.spawn` is guaranteed (prefab fallback) within `SF3D_TIMEOUT_MS` + 5 s of detection.
+  The server serves the fallback models at `/prefabs/<class>.glb` from `apps/server/prefabs/`
+  (rebuild: `pnpm --filter @ithaca/server prefabs:build`, check: `prefabs:test`).
 - Same object name forged in the last 2 h reuses its GLB (instant, no credits).
