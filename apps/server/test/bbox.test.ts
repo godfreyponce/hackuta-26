@@ -74,6 +74,17 @@ test('contentRect finds the picture inside black bars', async () => {
   assert.equal(r.height, 720);
 });
 
+test('contentRect trims only the side bars, so a dark band at the top of the picture stays', async () => {
+  const pic = await sharp({ create: { width: 486, height: 720, channels: 3, background: '#c8b49a' } })
+    .composite([{ input: { create: { width: 486, height: 120, channels: 3, background: '#000' } }, left: 0, top: 0 }]).png().toBuffer();
+  const frame = await sharp({ create: { width: 1280, height: 720, channels: 3, background: '#000' } })
+    .composite([{ input: pic, left: 397, top: 0 }]).jpeg().toBuffer();
+  const r = await contentRect(frame);
+  assert.ok(Math.abs(r.left - 397) <= 2 && Math.abs(r.width - 486) <= 4, JSON.stringify(r));
+  assert.equal(r.top, 0, JSON.stringify(r));
+  assert.equal(r.height, 720, JSON.stringify(r));
+});
+
 test('contentRect ignores a speck smaller than 16 px', async () => {
   const dot = await sharp({ create: { width: 4, height: 4, channels: 3, background: '#fff' } }).png().toBuffer();
   const frame = await sharp({ create: { width: 1280, height: 720, channels: 3, background: '#000' } })

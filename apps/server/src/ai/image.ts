@@ -13,7 +13,8 @@ export async function contentRect(jpeg: Buffer): Promise<Rect> {
   try {
     const { info } = await sharp(upright).trim({ background: '#000000', threshold: 24 }).toBuffer({ resolveWithObject: true });
     if (info.width < 16 || info.height < 16) return full;
-    return { left: Math.abs(info.trimOffsetLeft ?? 0), top: Math.abs(info.trimOffsetTop ?? 0), width: info.width, height: info.height };
+    // Call-frame bars are side bars only: a dark band at the top or bottom is picture, not bar.
+    return { left: Math.abs(info.trimOffsetLeft ?? 0), top: 0, width: info.width, height: H };
   } catch {
     return full;
   }
