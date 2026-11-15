@@ -35,6 +35,8 @@ export interface EngineCallbacks {
 export interface PostState { sat: number; chroma: number; flash: number; letterbox: number; heal: number; exposure: number; verdigris: number }
 
 const FIXED = 1 / 60;
+/** W7 safety net (webcam): ?autoarm=1 pulls a xiphos to an empty-handed player with a wooer close. Off by default. */
+const AUTO_ARM = typeof location !== 'undefined' && new URLSearchParams(location.search).get('autoarm') === '1';
 
 const _sv1 = new THREE.Vector3();
 const _UP = new THREE.Vector3(0, 1, 0);
@@ -42,6 +44,7 @@ const _gv1 = new THREE.Vector3(), _gv2 = new THREE.Vector3(), _gv3 = new THREE.V
 const _gm = new THREE.Matrix4();
 const _gq = new THREE.Quaternion();
 const _sv2 = new THREE.Vector3();
+const _rv1 = new THREE.Vector3(), _rv2 = new THREE.Vector3(), _rv3 = new THREE.Vector3();
 
 export class Engine {
   readonly scene: THREE.Scene;
@@ -115,6 +118,7 @@ export class Engine {
   private lastActiveHand: Hand = 'right';
   private hoverAcc = 0;
   private hoverW: ReturnType<WeaponManager['pickRay']> = null;
+  private hoverChangeT = -9;
   private lastRealDt = 1 / 60;
   private kickVel = 0;
   private recoilOff: Record<Hand, THREE.Vector3> = { left: new THREE.Vector3(), right: new THREE.Vector3() };
@@ -124,6 +128,25 @@ export class Engine {
   private lastDecapSlow = -99;
   private seenDecap = false;
   private seenTips = new Set<string>();
+  // ── webcam hands & grabs: per-hand cone target, grip-level trigger, take cooldown, lost/reacquired times ──
+  private target: Record<Hand, WeaponEnt | null> = { left: null, right: null };
+  private gripT: Record<Hand, number> = { left: 0, right: 0 };
+  /** the grip-level trigger re-arms once the hand has been seen open after a take */
+  private levelArmed: Record<Hand, boolean> = { left: true, right: true };
+  private takeCd: Record<Hand, number> = { left: -9, right: -9 };
+  /** realT the hand model last saw this hand (Part C's handFresh) */
+  private freshAt: Record<Hand, number> = { left: -9, right: -9 };
+  private lostAt: Record<Hand, number> = { left: -9, right: -9 };
+  private backAt: Record<Hand, number> = { left: -9, right: -9 };
+  private wasLive: Record<Hand, boolean> = { left: false, right: false };
+  private unnockT = 0;
+  private unarmedT = 0;
+  private refuseT: Record<string, number> = {};
+  private trackSeen = 'ok';
+  private trackSince = 0;
+  private trackSent = 'ok';
+  /** takes by path (dev play log): the grab event, the grip-level trigger, the auto-arm safety net */
+  readonly takeStats = { event: 0, level: 0, auto: 0 };
   /** HUD overlay feed (read every frame by CombatOverlay) */
   damageArcs: { angle: number; t: number; heavy: boolean }[] = [];
   ripples: { pos: THREE.Vector3; t: number; color: 'brass' | 'gold' | 'verdigris' }[] = [];
@@ -275,6 +298,7 @@ export class Engine {
       },
       onArrowsSpent: () => this.cb.toast({ kind: 'info', title: 'ARROWS SPENT', sub: 'Telemachus brings more between waves' }, 1400),
       speedScale: () => (this.input?.kind === 'keyboard_mouse' ? 0.65 : 1),
+      onTake: (w, side) => this.onTake(w, side),
     }, this.hall.staticHandles);
     this.scene.add(this.weapons.group);
 
@@ -348,31 +372,33 @@ export class Engine {
     }
     switch (e.type) {
       case 'grab': {
+        // webcam: each tracked hand takes for itself (cone target, reach, else the nearest weapon)
+        if (!isKeyboardMouse(this.input)) { this.webcamGrab(e.hand); break; }
         const ray = this.aimRay(e.hand);
         // what you click decides the hand: the bow is taken up as with B (left hand, bow mode); the aspis goes on the left arm
         const pick = this.weapons.pickRay(ray);
-        if (pick?.cls === 'bow' && isKeyboardMouse(this.input)) { this.input.setBowMode(true); break; }
+        if (pick?.cls === 'bow') { this.input.setBowMode(true); break; }
         if (pick?.cls === 'shield' && !this.weapons.drawing && !(this.weapons.heldBy('left') && this.weapons.heldBy('right'))) {
           if (this.weapons.heldBy('left')) this.weapons.swapHands(); // a sword in the left goes to the right first
           if (!this.weapons.heldBy('left')) { this.weapons.grab(this.handViews.left, ray, true); break; }
         }
-        if (!this.weapons.heldBy(e.hand)) {
-          this.weapons.grab(this.handViews[e.hand], ray);
-          // webcam: a fist that pointed at nothing still takes something — what glows, else the nearest on the table
-          if (!isKeyboardMouse(this.input) && !this.weapons.heldBy(e.hand) && !this.weapons.drawing) {
-            const w = (this.hoverW && this.hoverW.state !== 'held' && this.hoverW.state !== 'incoming' ? this.hoverW : null) ?? this.weapons.nearestForHand(this.handViews[e.hand]);
-            if (w && !(w.cls === 'shield' && e.hand === 'right' && !this.weapons.heldBy('left'))) this.weapons.pullTo(w, this.handViews[e.hand]);
-            else if (w) this.weapons.pullTo(w, this.handViews.left); // the aspis goes on the left arm
-          }
-        }
+        if (!this.weapons.heldBy(e.hand)) this.weapons.grab(this.handViews[e.hand], ray);
         else {
-          // already armed: the free hand takes what you point at (second blade → dual wield, aspis → sword & shield)
+          // keyboard (one button): the free hand takes what you point at (second blade → dual wield, aspis → sword & shield)
           const other = e.hand === 'right' ? 'left' : 'right';
           if (!this.weapons.heldBy(other) && !this.weapons.drawing) this.weapons.grab(this.handViews[other], ray, true);
         }
         break;
       }
       case 'release': {
+        if (!isKeyboardMouse(this.input)) {
+          // webcam grip flicker: a slow "release" just after a take (or while it is still flying in) is noise —
+          // the weapon stays; a real throw (≥ 4 m/s) always goes
+          const sp = Math.hypot(e.vel.x, e.vel.y, e.vel.z);
+          const held = this.weapons.heldBy(e.hand);
+          if (this.weapons.incomingTo(e.hand)) break;
+          if (held && held.attachT !== undefined && this.weapons.realT - held.attachT < 0.35 && sp < 4) break;
+        }
         const v = this.bodyToWorldDir(new THREE.Vector3(e.vel.x, e.vel.y, e.vel.z));
         // webcam throws: the speed is good but the direction is 35–56° off (Part C) — steer toward the wooer you meant
         if (this.input?.kind !== 'keyboard_mouse' && this.weapons.heldBy(e.hand)) this.throwAssist(v);
@@ -382,9 +408,13 @@ export class Engine {
       case 'swing': break; // the continuous per-hand swing voice (updateTrails) carries this now
       case 'block_start': this.blocking = true; this.weapons.blocking = true; this.prevGuardAt = this.guardAt; this.guardAt = this.realT; this.weapons.guardChangeT = this.realT; break;
       case 'block_end': this.blocking = false; this.weapons.blocking = false; this.guardUpEndT = this.realT; this.weapons.guardChangeT = this.realT; break;
-      case 'bow_nock':
+      case 'bow_nock': {
+        // webcam: a nock read while the left hand holds an aspis or blade must not rack it (Part C can misread one)
+        const L = this.weapons.heldBy('left');
+        if (!isKeyboardMouse(this.input) && L && L.cls !== 'bow') break;
         if (this.weapons.ensureBow(this.handViews.left)) this.weapons.nock();
         break;
+      }
       case 'bow_release': {
         const aim = this.bodyToWorldDir(new THREE.Vector3(e.aim.x, e.aim.y, e.aim.z));
         this.weapons.loose(e.draw, aim);
@@ -396,9 +426,158 @@ export class Engine {
         break;
       case 'call_sign': this.cb.requestCall(); break;
       case 'request_weapon': this.cb.requestWeapon(); break;
-      case 'tracking_lost': this.trackingLost = true; this.cb.tracking('lost'); break;
-      case 'tracking_ok': this.trackingLost = false; this.cb.tracking('ok'); break;
+      case 'tracking_lost': this.trackingLost = true; this.trackSent = 'lost'; this.cb.tracking('lost'); break;
+      case 'tracking_ok': this.trackingLost = false; this.trackSent = 'ok'; this.cb.tracking('ok'); break;
     }
+  }
+
+  /** webcam or a recording of one (Part C): tracked hands, VR-style */
+  private get tracked() { return this.input?.kind === 'motion' || this.input?.kind === 'replay'; }
+
+  /** A webcam 'grab' event (a fist) for one hand. */
+  private webcamGrab(side: Hand) {
+    const W = this.weapons, hv = this.handViews[side];
+    if (W.heldBy(side)) {
+      // a re-closed fist around what you hold just re-confirms the grip; a full pair of hands pointed at more says so
+      const other: Hand = side === 'right' ? 'left' : 'right';
+      if (W.heldBy(other) && W.coneTarget(this.eye, hv.pos, null)) this.refuse('full');
+      return;
+    }
+    // the bow: pointed at (closer in angle than any other target) it is taken up in the LEFT hand, only while that
+    // hand is free — never stolen into the right. Only from a real hand position (live, or frozen < 0.4 s): a ghost
+    // resting low in the view points at the table's right end by construction
+    const real = hv.visible || this.realT - this.lostAt[side] <= 0.4;
+    if (real && !W.drawing && !W.heldBy('left') && !W.incomingTo('left') && this.realT >= this.takeCd[side]) {
+      const bow = W.bowInCone(this.eye, hv.pos);
+      if (bow && (!this.target[side] || W.angleFromEye(bow, this.eye, hv.pos) < W.angleFromEye(this.target[side]!, this.eye, hv.pos))) {
+        this.takeCd[side] = this.realT + 0.4;
+        if (W.ensureBow(this.handViews.left)) this.takeStats.event++;
+        return;
+      }
+    }
+    this.takeFor(side, 'event');
+  }
+
+  /**
+   * Take a weapon into one hand (webcam): reach or an arrow catch first, then pull what the hand targets (the
+   * grab event alone also falls back to the nearest weapon, so a fist never comes back empty). The aspis goes on
+   * the left arm while it is free. Nothing happens while that hand holds something, while something is already
+   * flying to it, during a 0.4 s cooldown, or while an arrow is drawn (that fist is the draw).
+   */
+  private takeFor(side: Hand, path: 'event' | 'level' | 'auto'): boolean {
+    const W = this.weapons, hv = this.handViews[side];
+    if (W.heldBy(side) || W.incomingTo(side) || this.realT < this.takeCd[side]) return false;
+    if (W.drawing) { if (path === 'event' && this.target[side]) this.refuse('bow'); return false; }
+    this.takeCd[side] = this.realT + 0.4;
+    if (W.catchArrowInto(hv)) { this.levelArmed[side] = false; this.takeStats[path]++; return true; }
+    // the grip-level trigger takes only what glows (a relaxed hand hanging by the table must not pick it up);
+    // a discrete fist takes what is in reach, else the target, else the nearest — except when the right fist is
+    // probably the nock (the bow is up, or Part C sees the left arm held out in the bow pose)
+    const nock = side === 'right' && (W.holds('bow') || !!(this.input as { getDebugGestures?: () => { bowReady?: boolean } }).getDebugGestures?.()?.bowReady);
+    const w = path === 'level' ? this.target[side]
+      : W.reachFor(hv) ?? this.target[side] ?? (!nock ? W.nearestForHand(hv) : null);
+    if (!w) { if (path === 'event' && !nock) this.refuse('reach'); return false; }
+    const toLeft = w.cls === 'shield' && side === 'right' && !W.heldBy('left') && !W.incomingTo('left');
+    const to = toLeft ? this.handViews.left : hv;
+    W.pullTo(w, to);
+    if (w.state !== 'incoming') return false;
+    if (toLeft) this.takeCd.left = this.realT + 0.4;
+    this.levelArmed[side] = false;
+    this.target[side] = null;
+    this.takeStats[path]++;
+    return true;
+  }
+
+  /** A weapon settled in a hand: flash, sparks, a small jolt and a click (webcam — the keyboard keeps its feel). */
+  private onTake(w: WeaponEnt, side: Hand) {
+    if (!this.tracked || this.mode !== 'match') return;
+    this.hands[side].flash();
+    this.fx.sparks(this.handViews[side].pos, null, 10, '#ffd28a');
+    this.recoilOff[side].set(0, -0.025, 0.02);
+    this.kick(0.35);
+    audio.ui('select');
+    if (w.cls !== 'bow' && w.cls !== 'shield' && w.cls !== 'potion') this.tutorial('take', 'TAKEN', 'Swing it — open your hand fast to throw');
+  }
+
+  /** Why a fist took nothing: a thunk and a short line (at most every 3 s each). */
+  private refuse(kind: 'reach' | 'full' | 'bow') {
+    if (this.realT - (this.refuseT[kind] ?? -9) < 3) return;
+    this.refuseT[kind] = this.realT;
+    audio.thunk(0.2);
+    const [title, sub] = kind === 'reach' ? ['NOTHING IN REACH', 'Point your hand at a weapon and close it']
+      : kind === 'full' ? ['HANDS FULL', 'Open a hand to throw what it holds']
+        : ['LOWER THE BOW', 'Drop your bow arm, then take a weapon'];
+    this.cb.toast({ kind: 'info', title, sub }, 1300);
+  }
+
+  /** Part C: forget grips the game never saw (a fist closed in the lobby or while paused) — guarded, optional. */
+  private resyncGrip() {
+    const c = this.input as { resyncGrip?: (keep: Record<Hand, boolean>) => void } | null;
+    try { c?.resyncGrip?.({ left: !!this.weapons.heldBy('left'), right: !!this.weapons.heldBy('right') }); }
+    catch (err) { console.warn('[engine] resyncGrip failed', err); }
+  }
+
+  /**
+   * Per frame, webcam, in a match: each free hand's cone target (W4) and the grip-level trigger (W1) — a hand
+   * seen closed (grip ≥ 0.5) for 0.12 s, freshly seen by the hand model, with a weapon targeted, takes it even if
+   * Part C's discrete 'grab' never fired. Also clears a bow draw Part C cancelled silently.
+   */
+  private updateWebcamHands(state: PlayerInputState, realDt: number) {
+    const W = this.weapons;
+    const dbg = this.input as { getDebugBody?: () => { handFresh: Record<Hand, boolean> } | null; getDebugGestures?: () => { nocked: boolean } };
+    const body = dbg.getDebugBody?.() ?? null;
+    for (const side of ['left', 'right'] as const) {
+      const hs = state.hands[side], hv = this.handViews[side];
+      if (body ? body.handFresh[side] : hs.visible) this.freshAt[side] = this.realT;
+      const fresh = this.realT - this.freshAt[side] <= 0.25;
+      const free = !W.heldBy(side) && !W.incomingTo(side);
+      let t = this.target[side];
+      if (!free) t = null;
+      else if (hv.visible) t = W.coneTarget(this.eye, hv.pos, t);
+      else if (this.realT - this.lostAt[side] > 0.5) t = null; // a lost hand keeps its target for 0.5 s
+      if (t && t.state !== 'racked' && t.state !== 'free') t = null;
+      this.target[side] = t;
+      if (hs.visible && fresh && hs.grip < 0.4) this.levelArmed[side] = true;
+      const closed = free && hs.visible && fresh && hs.grip >= 0.5;
+      this.gripT[side] = closed ? this.gripT[side] + realDt : 0;
+      if (closed && this.gripT[side] >= 0.12 && this.levelArmed[side] && !W.drawing && !W.holds('bow') && this.target[side]) {
+        this.takeFor(side, 'level');
+      }
+    }
+    // Part C cancels a nocked arrow without an event (left arm dropped): let the draw go too
+    const flags = dbg.getDebugGestures?.();
+    if (W.drawing && flags && !flags.nocked) {
+      this.unnockT += realDt;
+      if (this.unnockT > 0.25) { W.drawing = false; this.unnockT = 0; }
+    } else this.unnockT = 0;
+    // optional safety net (?autoarm=1, off by default): empty-handed 5 s with a wooer close → a xiphos flies to you
+    if (AUTO_ARM) {
+      const empty = !W.heldBy('left') && !W.heldBy('right') && !W.incomingTo('left') && !W.incomingTo('right');
+      this.unarmedT = empty ? this.unarmedT + realDt : 0;
+      if (this.unarmedT > 5 && this.enemies.list.some((en) => !en.dead && en.kind !== 'hero' && en.state !== 'idle' && Math.hypot(en.pos.x - this.eye.x, en.pos.z - this.eye.z) < 4)) {
+        this.unarmedT = -10;
+        this.takeCd.right = -9;
+        if (this.takeFor('right', 'auto')) this.cb.toast({ kind: 'info', title: 'TAKE IT, FATHER', sub: 'A fist holds it — open your hand fast to throw' }, 2200);
+      }
+    }
+  }
+
+  /** Forward 'ok' ↔ 'degraded' to the HUD (Part C only sends events for lost/ok), held 0.5 s so it can't flicker. */
+  private pollTracking(s: PlayerInputState['tracking']) {
+    if (s !== 'ok' && s !== 'degraded') return;
+    if (s !== this.trackSeen) { this.trackSeen = s; this.trackSince = this.realT; }
+    if (!this.trackingLost && s !== this.trackSent && this.realT - this.trackSince >= 0.5) { this.trackSent = s; this.cb.tracking(s); }
+  }
+
+  /** Per-hand status for the HUD glove chips (webcam, in a match): live / ghost / lost and how closed the hand is. */
+  handStatus(): Record<Hand, { state: 'live' | 'ghost' | 'lost'; grip: number; holding: boolean }> | null {
+    if (!this.tracked || this.mode !== 'match' || !this.lastState) return null;
+    const one = (side: Hand) => {
+      const hs = this.lastState!.hands[side];
+      const st: 'live' | 'ghost' | 'lost' = hs.visible ? 'live' : this.trackingLost || this.realT - this.lostAt[side] > 2 ? 'lost' : 'ghost';
+      return { state: st, grip: hs.visible ? clamp(hs.grip, 0, 1) : 0, holding: !!this.weapons.heldBy(side) };
+    };
+    return { left: one('left'), right: one('right') };
   }
 
   private yaw = 0;
@@ -491,6 +670,12 @@ export class Engine {
     this.slow.active = false;
     this.timeScale = 1;
     this.paused = false;
+    for (const side of ['left', 'right'] as const) {
+      this.target[side] = null; this.gripT[side] = 0; this.levelArmed[side] = true; this.takeCd[side] = -9;
+    }
+    this.unnockT = 0; this.unarmedT = 0;
+    // a fist closed in the lobby / calibration was dropped by the menu: start the match with the grip latch open
+    this.resyncGrip();
     this.mode = 'match';
     for (const g of Object.values(this.hands)) g.root.visible = true;
     this.cb.hud({ health: 100, score: 0, combo: 1, kills: 0, boss: null, intermission: null, pinnedPrompt: false });
@@ -506,7 +691,12 @@ export class Engine {
     this.setupMenu();
   }
 
-  setPaused(p: boolean) { this.paused = p; }
+  setPaused(p: boolean) {
+    // resuming: grips changed while paused were dropped — resync before events flow again (releases emitted here
+    // are for hands the game doesn't hold, and still land while paused)
+    if (this.paused && !p && this.mode === 'match') this.resyncGrip();
+    this.paused = p;
+  }
 
   private finish(victory: boolean) {
     if (this.mode !== 'match') return;
@@ -728,6 +918,7 @@ export class Engine {
       const g = (this.input as { getPendingGesture?: () => { name: string; progress: number } | null }).getPendingGesture?.() ?? null;
       this.cb.pendingGesture(g);
     }
+    if (state && this.tracked) this.pollTracking(state.tracking);
 
     // time scale: slow-mo ramp (150 ms in, hold, 250 ms out) · hitstop · tracking-lost soft slow
     let target = 1;
@@ -830,19 +1021,30 @@ export class Engine {
       if (!hs || !playing) { g.root.visible = false; continue; }
       g.root.visible = true;
       hv.visible = hs.visible;
+      if (hs.visible !== this.wasLive[side]) {
+        this.wasLive[side] = hs.visible;
+        if (hs.visible) this.backAt[side] = this.realT; else this.lostAt[side] = this.realT;
+      }
       if (hs.visible) {
         const tgt = this.handTarget[side].set(hs.pos.x, hs.pos.y, hs.pos.z).applyAxisAngle(new THREE.Vector3(0, 1, 0), this.yaw).add(this.eye);
         tgt.add(this.recoilOff[side]);
         this.recoilOff[side].multiplyScalar(Math.exp(-realDt / 0.15));
         const prev = hv.pos.clone();
+        // webcam reacquire: the hand glides in from where it rested (no teleport, and the jump is no punch)
+        const back = this.tracked && this.realT - this.backAt[side] < 0.15;
         // parried → input damped; during hitstop the hand that landed the blow sticks in the target and catches up after
-        const rate = this.realT < this.dampUntil[side] ? 10 : this.realT < this.handStickUntil ? 6 : 42;
+        const rate = this.realT < this.dampUntil[side] ? 10 : this.realT < this.handStickUntil ? 6 : back ? 12 : 42;
         hv.pos.lerp(tgt, 1 - Math.exp(-rate * realDt)); // ≈0.5/frame at 60 fps, hides jitter
         hv.vel.copy(hv.pos).sub(prev).multiplyScalar(1 / Math.max(1e-3, realDt));
+        if (back) hv.vel.clampLength(0, 2);
         hv.forward.set(hs.forward.x, hs.forward.y, hs.forward.z).applyAxisAngle(new THREE.Vector3(0, 1, 0), this.yaw).normalize();
         hv.up.set(hs.up.x, hs.up.y, hs.up.z).applyAxisAngle(new THREE.Vector3(0, 1, 0), this.yaw).normalize();
         basisQuat(hv.forward, hv.up, hv.quat);
-      } else hv.vel.set(0, 0, 0);
+      } else {
+        hv.vel.set(0, 0, 0);
+        // webcam (VR-style): a lost hand freezes 0.4 s, then settles at a rest spot low in the view — never gone
+        if (this.tracked && this.realT - this.lostAt[side] > 0.4) this.restHand(side, realDt);
+      }
       hv.grip = hs.grip;
       // a fist around a hilt: the forearm runs back toward the elbow (not along the blade), the blade leaves the
       // fist across the palm — so you see a hand gripping a sword, never the bracer's end staring at you
@@ -867,9 +1069,14 @@ export class Engine {
         _gq.setFromRotationMatrix(_gm);
         const at = _gv1.set(0, 0.055, -0.022).applyQuaternion(_gq);
         g.update(_gv6.copy(hv.pos).sub(at), _gq, hs.grip, hs.visible, true, realDt);
-      } else g.update(hv.pos, hv.quat, hs.grip, hs.visible, !!heldW, realDt);
+      } else {
+        // a ghost hand shows relaxed fingers unless it holds something (Part C pins a lost hand's grip at 1)
+        const showGrip = hs.visible || !this.tracked ? hs.grip : heldW ? 1 : 0.3;
+        g.update(hv.pos, hv.quat, showGrip, hs.visible, !!heldW, realDt);
+      }
     }
     this.hands.left.setHealth(this.health / 100);
+    if (state && this.tracked && this.mode === 'match' && !this.paused) this.updateWebcamHands(state, realDt);
     this.updatePlayerBody(state, realDt, playing);
     // blade history for deflect timing (last 0.5 s)
     for (const side of ['left', 'right'] as const) {
@@ -888,6 +1095,20 @@ export class Engine {
     this.weapons.bowDraw = state?.bowDraw ?? 0;
   }
 
+  /** Ease a lost hand to its camera-relative rest spot (≈40° below the view centre, inside the fight view). */
+  private restHand(side: Hand, realDt: number) {
+    const hv = this.handViews[side];
+    const sd = side === 'left' ? -1 : 1;
+    const k = 1 - Math.exp(-3 * realDt);
+    hv.pos.lerp(_rv1.set(0.2 * sd, -0.36, -0.42).applyAxisAngle(_UP, this.yaw).add(this.eye), k);
+    hv.forward.lerp(_rv2.set(0, 0.55, -0.83).applyAxisAngle(_UP, this.yaw), k).normalize();
+    hv.up.lerp(_rv3.set(sd, 0, 0).applyAxisAngle(_UP, this.yaw), k);
+    hv.up.addScaledVector(hv.forward, -hv.up.dot(hv.forward));
+    if (hv.up.lengthSq() < 1e-6) hv.up.copy(_rv3).addScaledVector(hv.forward, -_rv3.dot(hv.forward));
+    hv.up.normalize();
+    basisQuat(hv.forward, hv.up, hv.quat);
+  }
+
   private updateCamera(state: PlayerInputState | null, realDt: number) {
     const cam = this.camera;
     if ((this.mode as string) === 'inspect') {
@@ -903,7 +1124,8 @@ export class Engine {
       const drawing = this.weapons.drawing && (state?.bowDraw ?? 0) > 0.2;
       // webcam: a wider, VR-like view so your tracked hands and arms stay in frame through the fighting range
       const wide = this.input?.kind === 'motion' || this.input?.kind === 'replay';
-      const fovTarget = (drawing ? 48 : this.slow.active ? 48 : 55) + (wide ? 20 : 0);
+      // (webcam slow-mo keeps the wide view: narrowing it on a kill drops your hands out of frame)
+      const fovTarget = (drawing ? 48 : this.slow.active && !wide ? 48 : 55) + (wide ? 20 : 0);
       this.fov = damp(this.fov, fovTarget, 6, realDt);
       // handheld sway ~0.3° @ 0.7 Hz + trauma² shake (≤ 2°)
       const sway = THREE.MathUtils.degToRad(0.3);
@@ -921,7 +1143,8 @@ export class Engine {
       // armed with a wooer in reach, a low cut must not drag the view off the fight: only Tab looks down then
       const fighting = !unarmed && near;
       const full = tab || (cy < -0.92 && !fighting);
-      const glance = this.mode === 'match' && unarmed && !near ? 0.45 : 0;
+      // webcam: still unarmed with a wooer close, a smaller glance keeps the table hilts (≈58° down) in frame
+      const glance = this.mode === 'match' && unarmed ? (!near ? 0.45 : wide ? 0.2 : 0) : 0;
       // webcam: the head rests a little lower (≈11°) — your hands and forearms ride the bottom of the view
       const bodyTilt = this.input?.kind === 'motion' || this.input?.kind === 'replay' ? 0.2 : 0;
       const target = bodyTilt + (full ? (fighting ? 0.5 : 0.62) : Math.max(glance, cy < -0.55 && !fighting ? Math.min(1, (-0.55 - cy) / 0.37) * 0.42 : 0));
@@ -956,16 +1179,13 @@ export class Engine {
         this.weapons.setHover(this.hoverW, this.realT);
       }
     } else if (this.mode === 'match' && this.input) {
-      // webcam: the weapon your free hand points at (eye → hand) glows and is named — make a fist to take it
-      this.hoverAcc += realDt;
-      if (this.hoverAcc > 0.1) {
-        this.hoverAcc = 0;
-        let w: ReturnType<WeaponManager['pickRay']> = null;
-        for (const h of ['right', 'left'] as const) {
-          if (w || this.weapons.heldBy(h) || !this.handViews[h].visible) continue;
-          w = this.weapons.pickRay(this.aimRay(h));
-        }
-        if (w !== this.hoverW) { this.hoverW = w; if (w) audio.ui('move'); }
+      // webcam: the weapon a free hand targets (eye → hand cone, updateWebcamHands) glows and is named — close the
+      // hand to take it. The right hand's target first; a tick only once a target has held 150 ms (no chatter)
+      const w = this.target.right ?? this.target.left;
+      if (w !== this.hoverW) {
+        if (w && this.realT - this.hoverChangeT >= 0.15) audio.ui('move');
+        this.hoverW = w;
+        this.hoverChangeT = this.realT;
       }
       this.weapons.setHover(this.hoverW, this.realT);
     }
@@ -1165,8 +1385,19 @@ export class Engine {
       playerPosture: this.playerPosture,
       counter: this.realT < this.counterUntil,
       enemies: this.enemies.list,
-      hover: this.hoverW && this.hoverW.state !== 'held' ? { name: this.hoverW.name, pos: this.hoverW.center } : null,
+      hover: this.hoverW && this.hoverW.state !== 'held' ? { name: this.hoverW.name, pos: this.hoverW.center, progress: this.hoverProgress() } : null,
+      /** webcam: both hands (world), for the off-screen glove chevrons */
+      hands: this.tracked ? (['left', 'right'] as const).map((side) => ({ side, pos: this.handViews[side].pos, live: this.handViews[side].visible })) : [],
     };
+  }
+
+  /** webcam: how close the targeting hand is to taking (grip toward Part C's 0.65, or the 0.12 s grip-level hold) */
+  private hoverProgress(): number | undefined {
+    if (!this.tracked || !this.lastState || !this.hoverW) return undefined;
+    const side: Hand = this.target.right === this.hoverW ? 'right' : 'left';
+    const hs = this.lastState.hands[side];
+    if (!hs.visible) return 0;
+    return clamp(Math.max(hs.grip / 0.65, this.gripT[side] / 0.12), 0, 1);
   }
 
   private updateTrails(dt: number) {

@@ -308,8 +308,52 @@ function TrackingOverlay() {
       </div>
     );
   }
-  if (tracking === 'degraded') return <div style={{ position: 'absolute', top: 120, left: 26 }}><span className="chip warn"><span className="dot" />Find better light</span></div>;
-  return null;
+  return (
+    <>
+      <GloveChips />
+      {tracking === 'degraded' && <div style={{ position: 'absolute', top: 120, left: 26 }}><span className="chip warn"><span className="dot" />Find better light</span></div>}
+    </>
+  );
+}
+
+/** Webcam: one chip per hand — live (seen), ghost (just lost, resting), lost — and a bar for how closed it is. */
+function GloveChips() {
+  const refs = { left: useRef<HTMLSpanElement>(null), right: useRef<HTMLSpanElement>(null) };
+  useEffect(() => {
+    let raf = 0;
+    const last = { left: '', right: '' };
+    const loop = () => {
+      raf = requestAnimationFrame(loop);
+      const st = runtime.engine?.handStatus() ?? null;
+      for (const side of ['left', 'right'] as const) {
+        const el = refs[side].current;
+        if (!el) continue;
+        const h = st?.[side];
+        const key = h ? `${h.state}|${Math.round(h.grip * 20)}|${h.holding}` : '';
+        if (key === last[side]) continue;
+        last[side] = key;
+        el.style.display = h ? '' : 'none';
+        if (!h) continue;
+        el.className = `glove-chip ${h.state}${h.holding ? ' holding' : ''}`;
+        el.title = `${side} hand: ${h.state}`;
+        const bar = el.querySelector('i');
+        if (bar) bar.style.transform = `scaleX(${h.grip.toFixed(2)})`;
+        const word = el.querySelector('em');
+        if (word) word.textContent = h.state === 'live' ? (h.grip >= 0.5 ? 'fist' : 'open') : h.state;
+      }
+    };
+    loop();
+    return () => cancelAnimationFrame(raf);
+  }, []);
+  return (
+    <div className="glove-chips" aria-hidden>
+      {(['left', 'right'] as const).map((side) => (
+        <span key={side} ref={refs[side]} className="glove-chip" style={{ display: 'none' }}>
+          <b>{side === 'left' ? 'L' : 'R'}</b><em /><span className="grip"><i /></span>
+        </span>
+      ))}
+    </div>
+  );
 }
 
 function PauseMenu({ onResume }: { onResume: () => void }) {

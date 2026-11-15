@@ -5,6 +5,9 @@ import type { Hand } from '@ithaca/shared';
 import { RAPIER, GROUPS } from './physics';
 
 const bronze = () => new THREE.MeshStandardMaterial({ color: '#6A5236', metalness: 0.88, roughness: 0.42, transparent: true, opacity: 1 });
+/** ghost tint (Meta's ghost hands: pale grey) and the warm take flash, as emissive colours */
+const GHOST = new THREE.Color('#BCBCBC');
+const FLASH = new THREE.Color('#ffd28a');
 
 export class Gauntlet {
   readonly root = new THREE.Group();
@@ -18,6 +21,14 @@ export class Gauntlet {
   private inlay: THREE.Mesh | null = null;
   private inlayMat: THREE.MeshStandardMaterial | null = null;
   private opacity = 1;
+  /** 0 = live (tracked), 1 = ghost (tracking lost: frozen, then resting at the bottom of the view) */
+  private ghostK = 0;
+  /** take flash, 1 → 0 over ~120 ms */
+  private flashK = 0;
+  /** Meta-style ghost outline: back-face shells around the glove, shown only while the hand is a ghost */
+  private outline = new THREE.MeshBasicMaterial({ color: '#e8f4ff', side: THREE.BackSide, transparent: true, opacity: 0, depthWrite: false });
+  private shells: THREE.Mesh[] = [];
+  private shellsOn = false;
   grip = 0;
 
   constructor(readonly side: Hand, world: InstanceType<typeof RAPIER.World>) {
@@ -89,6 +100,17 @@ export class Gauntlet {
       this.mats.push(this.inlayMat);
     }
     this.root.traverse((o) => { if ((o as THREE.Mesh).isMesh) (o as THREE.Mesh).renderOrder = 2; });
+    // outline shells (children, so they follow the finger curl and hide with the vambrace)
+    const shells: THREE.Mesh[] = [];
+    this.root.traverse((o) => { const m = o as THREE.Mesh; if (m.isMesh && m !== this.inlay) shells.push(m); });
+    for (const m of shells) {
+      const s = new THREE.Mesh(m.geometry, this.outline);
+      s.scale.setScalar(1.12);
+      s.renderOrder = 1;
+      s.visible = false;
+      m.add(s);
+      this.shells.push(s);
+    }
 
     this.body = world.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(0, 1.3, -0.4));
     world.createCollider(RAPIER.ColliderDesc.ball(0.065).setCollisionGroups(GROUPS.held), this.body);
@@ -102,15 +124,34 @@ export class Gauntlet {
     this.inlayMat.emissive.set(h01 < 0.35 ? '#ff3a22' : '#ffb25a');
   }
 
+  /** a short warm pulse when the hand takes something (≈120 ms) */
+  flash() { this.flashK = 1; }
+
+  /** Live/ghost blend, 0..1 (diagnostics / tests). */
+  get ghost() { return this.ghostK; }
+
+  /**
+   * The engine always decides where the hand is (a lost hand freezes, then rests at the bottom of the view),
+   * so the glove always follows `pos`; `visible` only picks the live or the ghost look.
+   */
   update(pos: THREE.Vector3, quat: THREE.Quaternion, grip: number, visible: boolean, holding: boolean, dt: number) {
-    if (visible) {
-      this.root.position.copy(pos);
-      this.root.quaternion.copy(quat);
-      this.body.setNextKinematicTranslation({ x: pos.x, y: pos.y, z: pos.z });
+    this.root.position.copy(pos);
+    this.root.quaternion.copy(quat);
+    this.body.setNextKinematicTranslation({ x: pos.x, y: pos.y, z: pos.z });
+    this.ghostK += ((visible ? 0 : 1) - this.ghostK) * (1 - Math.exp(-6 * dt));
+    if (this.ghostK < 1e-3) this.ghostK = 0;
+    this.flashK *= Math.exp(-12 * dt);
+    if (this.flashK < 1e-3) this.flashK = 0;
+    this.opacity = 1 - 0.6 * this.ghostK;
+    const ge = 0.55 * this.ghostK, fe = 1.4 * this.flashK;
+    for (const m of this.mats) {
+      m.opacity = this.opacity;
+      if (m === this.inlayMat) continue;
+      m.emissive.setRGB(GHOST.r * ge + FLASH.r * fe, GHOST.g * ge + FLASH.g * fe, GHOST.b * ge + FLASH.b * fe);
     }
-    const target = visible ? 1 : 0.3;
-    this.opacity += (target - this.opacity) * (1 - Math.exp(-8 * dt));
-    for (const m of this.mats) m.opacity = this.opacity;
+    this.outline.opacity = 0.8 * this.ghostK;
+    const showShell = this.ghostK > 0.02;
+    if (showShell !== this.shellsOn) { this.shellsOn = showShell; for (const s of this.shells) s.visible = showShell; }
     // fingers curl toward the palm (−Z); a held weapon caps the curl
     this.grip += (grip - this.grip) * (1 - Math.exp(-20 * dt));
     const g = holding ? Math.min(this.grip, 0.75) : this.grip;

@@ -155,7 +155,34 @@ export function CombatOverlay() {
           ctx.strokeText(label, s.x, s.y - 22 * k);
           ctx.fillStyle = BRASS_HI;
           ctx.fillText(label, s.x, s.y - 22 * k);
+          // webcam: a ring left of the label fills as the hand closes — you see your fist registering
+          if (o.hover.progress !== undefined) {
+            const rx = s.x - ctx.measureText(label).width / 2 - 19 * k, ry = s.y - 26.5 * k, rr = 10 * k;
+            ctx.lineCap = 'round';
+            ctx.lineWidth = 6.5 * k; ctx.strokeStyle = 'rgba(0,0,0,0.7)';
+            ctx.beginPath(); ctx.arc(rx, ry, rr, 0, Math.PI * 2); ctx.stroke();
+            ctx.lineWidth = 3.5 * k; ctx.strokeStyle = 'rgba(232,223,204,0.35)';
+            ctx.beginPath(); ctx.arc(rx, ry, rr, 0, Math.PI * 2); ctx.stroke();
+            if (o.hover.progress > 0.01) {
+              ctx.strokeStyle = o.hover.progress >= 1 ? '#fff1c8' : BRASS_HI;
+              ctx.beginPath(); ctx.arc(rx, ry, rr, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * o.hover.progress); ctx.stroke();
+            }
+          }
         }
+      }
+
+      // ── webcam: a glove chevron at the screen edge for a hand out of frame (solid live, outlined ghost) ──
+      for (const h of o.hands) {
+        v.copy(h.pos).project(cam);
+        const behind = v.z > 1;
+        let nx = behind ? -v.x : v.x, ny = behind ? -v.y : v.y;
+        if (!behind && Math.abs(nx) <= 1 && Math.abs(ny) <= 1) continue;
+        if (behind && Math.abs(nx) < 1e-3 && Math.abs(ny) < 1e-3) ny = -1;
+        const m = Math.max(Math.abs(nx), Math.abs(ny));
+        nx /= m; ny /= m; // onto the frame's edge, keeping the direction
+        const pad = 30 * k;
+        const x = Math.min(W - pad, Math.max(pad, (nx + 1) / 2 * W)), y = Math.min(H - pad, Math.max(pad, (1 - ny) / 2 * H));
+        gloveMark(ctx, x, y, 15 * k, Math.atan2(y - cy, x - cx), h.live, h.side === 'left' ? 'L' : 'R');
       }
 
       // ── counter window after a perfect dodge ──
@@ -203,6 +230,35 @@ function glyph(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, k
   ctx.lineWidth = r * 0.28;
   path(); ctx.stroke();
   if (kind === 'star') { ctx.fillStyle = color; ctx.beginPath(); ctx.arc(0, 0, r * 0.32, 0, Math.PI * 2); ctx.fill(); }
+  ctx.restore();
+}
+
+/** A hand out of frame: a round glove badge (L/R) with a chevron pointing toward the hand. */
+function gloveMark(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, ang: number, live: boolean, label: string) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.globalAlpha = live ? 0.95 : 0.75;
+  ctx.lineWidth = Math.max(2, r * 0.16);
+  ctx.strokeStyle = 'rgba(8,6,4,0.85)';
+  ctx.fillStyle = live ? BRASS_HI : 'rgba(10,8,6,0.55)';
+  // chevron toward the hand
+  ctx.save();
+  ctx.rotate(ang);
+  ctx.beginPath();
+  ctx.moveTo(r * 1.75, 0); ctx.lineTo(r * 1.05, -r * 0.6); ctx.lineTo(r * 1.05, r * 0.6); ctx.closePath();
+  ctx.stroke();
+  ctx.fillStyle = live ? BRASS_HI : '#e8f4ff';
+  ctx.fill();
+  ctx.restore();
+  // badge
+  ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2);
+  ctx.fillStyle = live ? BRASS_HI : 'rgba(10,8,6,0.55)';
+  ctx.fill(); ctx.stroke();
+  if (!live) { ctx.strokeStyle = '#e8f4ff'; ctx.lineWidth = Math.max(1.5, r * 0.12); ctx.beginPath(); ctx.arc(0, 0, r * 0.86, 0, Math.PI * 2); ctx.stroke(); }
+  ctx.fillStyle = live ? '#1a120a' : '#e8f4ff';
+  ctx.font = `800 ${Math.round(r * 1.05)}px 'Cinzel', serif`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(label, 0, r * 0.06);
   ctx.restore();
 }
 
