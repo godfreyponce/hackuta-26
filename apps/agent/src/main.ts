@@ -8,6 +8,7 @@ import { env } from './env.ts';
 import { Hub } from './hub.ts';
 import { prerenderLines } from './lines.ts';
 import { errText, log, warn } from './log.ts';
+import { recoverLeftovers } from './recovery.ts';
 
 let active: CallSession | null = null;
 const attempts = new Map<string, number>();
@@ -65,6 +66,6 @@ process.on('uncaughtException', (e) => { warn('uncaught', { error: errText(e) })
 process.on('unhandledRejection', (e) => { warn('unhandled_rejection', { error: errText(e) }); });
 
 log('agent_starting', { mode: env.AGENT_MODE, voice: env.ELEVENLABS_VOICE_ID, model: env.ELEVENLABS_MODEL_ID });
-await prerenderLines();
+await Promise.all([prerenderLines(), recoverLeftovers()]);
 hub.connect();
 startHealthServer();

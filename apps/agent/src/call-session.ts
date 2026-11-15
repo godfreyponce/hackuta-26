@@ -9,6 +9,7 @@ import type { CallState, GameEvent, ServerToAgent, WeaponSpawn } from './contrac
 import { env } from './env.ts';
 import type { Hub } from './hub.ts';
 import { pick, type LineKey } from './lines.ts';
+import { clearActiveCall, noteActiveCall } from './recovery.ts';
 import { errText, log, maskPhone, warn } from './log.ts';
 import { Mixer } from './mixer.ts';
 import { Narrator, PRIORITY } from './narrator.ts';
@@ -215,6 +216,7 @@ export class CallSession {
       participantToken: bridgeToken, remoteIdentity: AGENT_FT_IDENTITY,
     }, `${this.keyBase}-create`);
     log('chert_call_created', { callId: this.callId, ms: Date.now() - this.dialedAt });
+    await noteActiveCall(this.callId, `${this.keyBase}-end`).catch(() => {});
     void this.pollEvents();
   }
 
@@ -349,6 +351,7 @@ export class CallSession {
       ]);
       await Promise.allSettled([this.ft.disconnect(), this.game.disconnect()]);
       await this.roomService().deleteRoom(this.ftRoom).catch((e) => warn('delete_room_failed', { error: errText(e) }));
+      if (this.callId) await clearActiveCall().catch(() => {});
       this.status(final, reason);
       log('call_cleaned_up', { ftRoom: this.ftRoom, elapsedMs: this.bridgeReadyAt ? Date.now() - this.bridgeReadyAt : 0 });
       this.onDone();
