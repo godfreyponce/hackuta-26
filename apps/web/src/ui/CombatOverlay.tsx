@@ -139,6 +139,21 @@ export function CombatOverlay() {
         }
       }
 
+      // ── hovered weapon on the table / floor: its name, click to take ──
+      if (o.hover) {
+        const s = toScreen(o.hover.pos);
+        if (s.on) {
+          ctx.globalAlpha = 0.95;
+          ctx.font = `700 ${13 * k}px 'Cinzel', serif`;
+          ctx.textAlign = 'center';
+          const label = `${o.hover.name.toUpperCase()} · CLICK`;
+          ctx.lineWidth = 4 * k; ctx.strokeStyle = 'rgba(0,0,0,0.75)';
+          ctx.strokeText(label, s.x, s.y - 22 * k);
+          ctx.fillStyle = BRASS_HI;
+          ctx.fillText(label, s.x, s.y - 22 * k);
+        }
+      }
+
       // ── counter window after a perfect dodge ──
       if (o.counter) {
         // label + pulsing ring at the reticle: the window is readable, not just a tint

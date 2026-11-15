@@ -97,6 +97,12 @@ export class Engine {
   private counterUntil = 0;
   private kickPitch = 0;
   private lookDown = 0;
+  private guardBrokenUntil = -9;
+  private guardDownT = 0;
+  private lastActiveHand: Hand = 'right';
+  private hoverAcc = 0;
+  private hoverW: ReturnType<WeaponManager['pickRay']> = null;
+  private lastRealDt = 1 / 60;
   private kickVel = 0;
   private recoilOff: Record<Hand, THREE.Vector3> = { left: new THREE.Vector3(), right: new THREE.Vector3() };
   private dampUntil: Record<Hand, number> = { left: 0, right: 0 };
@@ -170,6 +176,26 @@ export class Engine {
       hitstop: (ms) => this.hitstop(ms),
       shake: (v) => this.addTrauma(v),
       difficultyMult: () => (this.difficulty === 'easy' ? 0.75 : 1),
+      wave: () => Math.max(1, this.director.wave),
+      playerBlades: () => {
+        const out: { tip: THREE.Vector3; vel: THREE.Vector3 }[] = [];
+        for (const side of ['right', 'left'] as const) {
+          const w = this.weapons.heldBy(side);
+          if (!w || !w.spec.sharp || w.cls === 'bow' || w.cls === 'shield') continue;
+          out.push({ tip: w.tip, vel: w.tip.clone().sub(w.prevTip).multiplyScalar(1 / Math.max(1e-3, this.lastRealDt)) });
+        }
+        return out;
+      },
+      onBossPhase: (e, ph) => {
+        if (ph === 2) {
+          this.cb.toast({ kind: 'warn', title: 'THE GILDED SHIELD FALLS', sub: 'Antinous calls the wooers to him' }, 2200);
+          for (const x of [-2.2, 2.2]) this.enemies.spawn('suitor', new THREE.Vector3(x, 0, -6.5));
+          this.addTrauma(0.25);
+        } else if (ph === 3) {
+          this.cb.toast({ kind: 'warn', title: 'ANTINOUS IS DESPERATE', sub: 'His thrusts cannot be parried — lean away' }, 2200);
+        }
+        void e;
+      },
     });
     this.enemies.setBodyTemplate(this.bodyTpl);
     this.scene.add(this.enemies.renderer.group);
@@ -204,6 +230,8 @@ export class Engine {
       shake: (v) => this.addTrauma(v),
       playerPos: () => this.eye,
       kbPull: () => isKeyboardMouse(this.input),
+      drivenHand: () => (isKeyboardMouse(this.input) ? this.input.mode.activeHand : null),
+      onArrowsSpent: () => this.cb.toast({ kind: 'info', title: 'ARROWS SPENT', sub: 'Telemachus brings more between waves' }, 1400),
       speedScale: () => (this.input?.kind === 'keyboard_mouse' ? 0.65 : 1),
     }, this.hall.staticHandles);
     this.scene.add(this.weapons.group);
@@ -259,6 +287,7 @@ export class Engine {
     this.unsubInput = c.on((e) => this.onInput(e));
     if (isKeyboardMouse(c)) {
       this.unsubMode = c.onMode((m) => {
+        if (m.activeHand !== this.lastActiveHand) { this.lastActiveHand = m.activeHand; this.weapons.guardChangeT = this.realT; } // switching hands never cuts
         if (m.bow) this.weapons.ensureBow(this.handViews.left);
         else this.weapons.dismissBow();
         this.cb.bowMode(m.bow);
@@ -290,8 +319,8 @@ export class Engine {
         break;
       }
       case 'swing': audio.whoosh(e.speed); break;
-      case 'block_start': this.blocking = true; this.weapons.blocking = true; this.guardAt = this.realT; break;
-      case 'block_end': this.blocking = false; this.weapons.blocking = false; break;
+      case 'block_start': this.blocking = true; this.weapons.blocking = true; this.guardAt = this.realT; this.weapons.guardChangeT = this.realT; break;
+      case 'block_end': this.blocking = false; this.weapons.blocking = false; this.weapons.guardChangeT = this.realT; break;
       case 'bow_nock':
         if (this.weapons.ensureBow(this.handViews.left)) this.weapons.nock();
         break;
@@ -421,6 +450,8 @@ export class Engine {
   }
 
   private onWaveStart(w: WaveDef) {
+    // Telemachus restocks the quiver between waves (12 to start, +6 a wave, max 18)
+    this.weapons.quiver = w.n <= 1 ? 12 : Math.min(18, this.weapons.quiver + 6);
     this.waveKills = 0;
     audio.gong(82, 6, 0.42);
     audio.setIntensity(0.35 + w.n * 0.2);
@@ -445,7 +476,7 @@ export class Engine {
     this.addTrauma(0.3);
     this.kick(1.2);
     if (alive && (part === P.UArmR || part === P.LArmR)) this.cb.toast({ kind: 'trickshot', title: 'DISARMED', sub: 'his sword arm is gone', points: 150 }, 1300);
-    else if (alive && (part === P.UArmL || part === P.LArmL)) this.cb.toast({ kind: 'info', title: 'SHIELD ARM SEVERED', points: 100 }, 1000);
+    else if (alive && (part === P.UArmL || part === P.LArmL)) this.cb.toast({ kind: 'info', title: e.look.shield !== 'none' ? 'SHIELD ARM SEVERED' : 'ARM SEVERED', points: 100 }, 1000);
     if (alive) this.scoring.addPoints(part === P.UArmR || part === P.LArmR ? 150 : 100);
   }
 
@@ -454,7 +485,7 @@ export class Engine {
     const now = this.simT;
     const multi = w ? w.throwKills.filter((t) => now - t < 1.5).length + (w.state === 'free' ? 1 : 0) : 0;
     const res = this.scoring.onKill({
-      t: now, realT: this.realT, zone: how.decapitated ? 'head' : info.source === 'melee' && info.zone === 'head' ? 'torso' : info.zone, /* HEADSHOT: thrown & loosed shots only */ distance: Math.hypot(e.pose[P.Torso].c.x - this.eye.x, e.pose[P.Torso].c.z - this.eye.z),
+      t: now, realT: this.realT, zone: how.decapitated || (info.source === 'melee' && info.zone === 'head') ? 'torso' : info.zone, /* HEADSHOT: thrown & loosed shots only — a beheading is its own toast */ distance: Math.hypot(e.pose[P.Torso].c.x - this.eye.x, e.pose[P.Torso].c.z - this.eye.z),
       airborne: !!(info as HitInfo & { airborne?: boolean }).airborne,
       ricochet: !!w && w.state === 'free' && w.staticHits >= 1,
       multiCount: info.source === 'bomb' ? 0 : multi,
@@ -578,6 +609,7 @@ export class Engine {
     if (this.disposed) return;
     realDt = Math.min(realDt, 0.1);
     this.realT += realDt;
+    this.lastRealDt = realDt;
     const state = this.input?.getState() ?? null;
     this.lastState = state;
     if (state && this.input && 'getPendingGesture' in this.input) {
@@ -653,7 +685,9 @@ export class Engine {
     const sign = Math.abs(lean) > 0.5 ? Math.sign(lean) : 0;
     if (sign !== 0 && sign !== this.leanSign) this.leanCrossT = this.realT;
     this.leanSign = sign;
-    if (this.realT - this.postureT > 1) this.playerPosture = Math.max(0, this.playerPosture - realDt * 15);
+    // balance returns only once you stop turtling (guard down ≥ 1 s)
+    if (!this.blocking) this.guardDownT += realDt; else this.guardDownT = 0;
+    if (this.realT - this.postureT > 1 && this.guardDownT > 1) this.playerPosture = Math.max(0, this.playerPosture - realDt * 15);
     const playing = this.mode === 'match' || this.mode === 'ended';
     for (const side of ['left', 'right'] as const) {
       const hv = this.handViews[side];
@@ -667,7 +701,8 @@ export class Engine {
         tgt.add(this.recoilOff[side]);
         this.recoilOff[side].multiplyScalar(Math.exp(-realDt / 0.15));
         const prev = hv.pos.clone();
-        const rate = this.realT < this.dampUntil[side] ? 10 : 42; // parried → input damped
+        // parried → input damped; during hitstop the hand that landed the blow sticks in the target and catches up after
+        const rate = this.realT < this.dampUntil[side] ? 10 : this.hitstopT > 0 ? 6 : 42;
         hv.pos.lerp(tgt, 1 - Math.exp(-rate * realDt)); // ≈0.5/frame at 60 fps, hides jitter
         hv.vel.copy(hv.pos).sub(prev).multiplyScalar(1 / Math.max(1e-3, realDt));
         hv.forward.set(hs.forward.x, hs.forward.y, hs.forward.z).applyAxisAngle(new THREE.Vector3(0, 1, 0), this.yaw).normalize();
@@ -744,6 +779,17 @@ export class Engine {
         const w = this.weapons.heldBy(h);
         this.input.setArmed(h, !!w && w.cls !== 'bow' && w.cls !== 'shield', w ? w.segB.length() : undefined, !!w);
       }
+      // hover: with a hand free, the weapon under the cursor glows and is named (10 Hz pick)
+      if (this.mode === 'match') {
+        this.hoverAcc += realDt;
+        if (this.hoverAcc > 0.1) {
+          this.hoverAcc = 0;
+          const free = !this.weapons.heldBy('left') || !this.weapons.heldBy('right');
+          const w = free && !this.input.mode.bow ? this.weapons.pickRay(this.aimRay(this.input.mode.activeHand)) : null;
+          if (w !== this.hoverW) { this.hoverW = w; if (w) audio.ui('move'); }
+        }
+        this.weapons.setHover(this.hoverW, this.realT);
+      }
     }
   }
 
@@ -782,8 +828,9 @@ export class Engine {
     const win = motion ? 0.3 : 0.22;
     const perfectWin = motion ? 0.26 : 0.15;
     const now = this.realT;
+    const guardUp = this.blocking && now >= this.guardBrokenUntil;
     // 1) blade in the path of the blow
-    if (!a.unblockable) {
+    if (!a.unblockable && now >= this.guardBrokenUntil) {
       let enteredAt = -1, entries = 0, prevIn = false, lastSpeed = 0;
       for (const h of this.bladeHist) {
         if (now - h.t > 0.4) continue;
@@ -797,9 +844,19 @@ export class Engine {
         if (now - enteredAt <= perfectWin && entries <= 2) return 'perfect';
         return lastSpeed > 3 ? 'beat' : 'block';
       }
-      if (this.weapons.shieldHeld()) return 'shield';
-      // explicit guard (RMB / guard pose): timed = perfect parry, held = clean block
-      if (this.blocking) return now - this.guardAt <= perfectWin + 0.05 ? 'perfect' : 'block';
+      // the aspis: raised (RMB) it takes anything; carried low it still covers your left flank
+      if (this.weapons.shieldHeld()) {
+        if (guardUp) return now - this.guardAt <= perfectWin + 0.05 ? 'perfect' : 'shield';
+        if (a.dir === 'left') return 'shield';
+      }
+      // RMB guard is directional: it covers overheads and the side your blade is on (cursor x); a blow from the
+      // other side, or a thrust, is only half-stopped ('guard': partial damage + posture) — meet those with the blade
+      if (guardUp) {
+        const cx = isKeyboardMouse(this.input) ? this.input.cursor.x : 0;
+        const covered = a.dir === 'top' || (a.dir === 'left' && cx < 0.25) || (a.dir === 'right' && cx > -0.25);
+        if (!covered) return 'guard';
+        return now - this.guardAt <= perfectWin + 0.05 ? 'perfect' : 'block';
+      }
     }
     // 2) dodge: lean past ~0.3 m (or crouch under a horizontal cut)
     const st = this.lastState;
@@ -844,7 +901,7 @@ export class Engine {
         this.recoil('right', new THREE.Vector3().subVectors(this.eye, at).normalize().negate(), 0.08, 150);
         break;
       case 'guard':
-        this.addPlayerPosture(20);
+        this.addPlayerPosture(25);
         break;
       case 'perfectDodge':
         this.lastPerfectDodge = this.realT;
@@ -870,9 +927,10 @@ export class Engine {
     this.postureT = this.realT;
     if (this.playerPosture >= 100) {
       this.playerPosture = 40;
+      this.guardBrokenUntil = this.realT + 1.2; // the next blow lands
       this.recoil('right', new THREE.Vector3(0.6, -0.4, 0.4), 0.4, 600);
-      audio.metal(1, 700);
-      this.cb.toast({ kind: 'warn', title: 'GUARD BROKEN' }, 1000);
+      audio.blockFlat(1, 0);
+      this.cb.toast({ kind: 'warn', title: 'GUARD BROKEN', sub: 'Your guard is down — dodge!' }, 1100);
     }
   }
 
@@ -906,6 +964,7 @@ export class Engine {
       playerPosture: this.playerPosture,
       counter: this.realT < this.counterUntil,
       enemies: this.enemies.list,
+      hover: this.hoverW && this.hoverW.state !== 'held' ? { name: this.hoverW.name, pos: this.hoverW.center } : null,
     };
   }
 

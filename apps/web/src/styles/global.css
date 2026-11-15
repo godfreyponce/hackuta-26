@@ -179,6 +179,9 @@ button, input, select { font: inherit; color: inherit; }
 .combat-overlay { position: fixed; inset: 0; width: 100vw; height: 100vh; pointer-events: none; z-index: 0; }
 .vitals { position: absolute; left: 48px; bottom: 48px; width: 260px; display: flex; flex-direction: column; gap: 6px; opacity: 0.62; transition: opacity 0.3s; }
 .vitals.on { opacity: 1; }
+.hands-slots { position: absolute; left: 48px; bottom: 96px; display: flex; gap: 14px; font-size: 11px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--dust); text-shadow: 0 1px 3px #000; }
+.hands-slots .on { color: var(--brass-hi); }
+.hud.cine .hands-slots { opacity: 0; }
 .vitals .health { height: 8px; border-radius: 1px; border-color: rgba(196,154,74,0.8); }
 .vitals .health > i { background: linear-gradient(180deg, #efe6d4, #cfc4ae); }
 .vitals .health > i.low { background: linear-gradient(180deg, #ff6a4a, #a32a1c); }

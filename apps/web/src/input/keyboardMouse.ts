@@ -67,6 +67,8 @@ class HandTrack {
   bdir = new THREE.Vector3(0.1, 0.25, -1).normalize();
   omega = new THREE.Vector3();
   wasArmed = false;
+  /** blade direction initialised for the weapon now in hand (reset on drop) */
+  bladeInit = false;
   constructor(p: THREE.Vector3) { this.pos = p.clone(); this.target = p.clone(); this.tip.copy(p).multiplyScalar(2); }
   record(t: number) {
     this.hist.push({ t, x: this.pos.x, y: this.pos.y, z: this.pos.z });
@@ -347,9 +349,9 @@ export function createKeyboardMouseController(): KeyboardMouseController {
     const f = tmp;
     if (mode.bow && h === 'left') f.copy(rayDir(aimDir));
     else if (tr.shield) f.set(h === 'right' ? -0.12 : 0.12, rmb ? 0.12 : 0.02, -1).normalize(); // aspis face → the enemy
-    else if (rmb && !hands.left.shield && !hands.right.shield) f.set(h === 'right' ? -0.92 : 0.92, 0.24, -0.32).normalize();
+    else if (rmb && !hands.left.shield && !hands.right.shield) f.copy(tr.armed ? tr.bdir : tmp2.set(h === 'right' ? -0.92 : 0.92, 0.24, -0.32).normalize());
     else if (tr.armed && h === mode.activeHand) f.copy(tr.bdir);
-    else if (tr.armed) f.set(h === 'right' ? -0.3 : 0.3, 0.8, -0.5).normalize(); // off-hand blade raised to parry
+    else if (tr.armed) { f.set(h === 'right' ? -0.3 : 0.3, 0.8, -0.5).normalize(); tr.bdir.copy(f); tr.omega.set(0, 0, 0); tr.bladeInit = true; } // off-hand blade raised to parry
     else if (h === mode.activeHand && !mode.bow) f.subVectors(tr.tip, tr.pos).normalize(); // empty hand reaching
     else {
       rayDir(aimDir);
@@ -389,9 +391,11 @@ export function createKeyboardMouseController(): KeyboardMouseController {
       R.target.copy(rest).lerp(tmp.set(0.05, -0.13, -0.14), state.bowDraw);
       L.grip = 1; R.grip = drawing ? 1 : 0.4;
     } else if (rmb && !L.shield && !R.shield) {
-      // guard: sword raised crosswise in front of the face, through all three attack lanes
+      // guard: sword raised crosswise in front of the face, through all three attack lanes — the blade turns into
+      // it on the same angular spring (no instant snap: a snapping blade would itself be a killing swing)
       L.target.set(-0.16, -0.04, -0.46);
       R.target.set(0.2, 0.0, -0.52);
+      for (const tr of [L, R]) if (tr.armed) springBlade(tr, tmp.set(tr === R ? -0.92 : 0.92, 0.24, -0.32).normalize(), dt, 22, 0.8, 12);
     } else {
       const active = hands[mode.activeHand];
       const off = mode.activeHand === 'right' ? L : R;
@@ -417,7 +421,7 @@ export function createKeyboardMouseController(): KeyboardMouseController {
         // the blade swings toward the aim point on a damped angular spring: a flick drags it behind the hand,
         // then it whips through and settles — heavier/longer weapons are slower (Mordhau-style turn cap)
         const want = tmp3.copy(goal).sub(active.pos).normalize();
-        if (!active.wasArmed) { active.bdir.copy(want); active.omega.set(0, 0, 0); }
+        if (!active.bladeInit) { active.bdir.copy(want); active.omega.set(0, 0, 0); active.bladeInit = true; }
         const wn = clamp(16 * Math.sqrt(0.65 / Math.max(0.3, active.blade)), 7, 19);
         springBlade(active, want, dt, wn, 0.55, wn > 12 ? 12 : 8);
         const prev = tmp4.copy(active.tip);
@@ -491,7 +495,7 @@ export function createKeyboardMouseController(): KeyboardMouseController {
     on(cb) { listeners.add(cb); return () => listeners.delete(cb); },
     onMode(cb) { modeListeners.add(cb); return () => modeListeners.delete(cb); },
     setCamera(m) { cam = m; },
-    setArmed(h, a, bladeM, holding) { const t = hands[h]; t.armed = a; if (bladeM) t.blade = bladeM; t.holding = holding ?? a; t.shield = !!t.holding && !a && !(mode.bow && h === 'left'); },
+    setArmed(h, a, bladeM, holding) { const t = hands[h]; if (!a) t.bladeInit = false; t.armed = a; if (bladeM) t.blade = bladeM; t.holding = holding ?? a; t.shield = !!t.holding && !a && !(mode.bow && h === 'left'); },
     setTarget(el) { attach(el); },
     getDebugVideo: () => null,
   };

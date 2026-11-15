@@ -35,6 +35,7 @@ export interface WeaponEnt {
   hand: Hand | null;
   rackPose: { pos: THREE.Vector3; quat: THREE.Quaternion } | null;
   rackKind: 'bow' | 'dagger' | 'spear' | 'forged' | 'shield' | null;
+  attachT?: number;
   segA: THREE.Vector3; segB: THREE.Vector3; radius: number;
   prevTip: THREE.Vector3; prevCenter: THREE.Vector3; tip: THREE.Vector3; center: THREE.Vector3;
   speed: number;
@@ -67,6 +68,10 @@ export interface WeaponHooks {
   onRecoil(hand: Hand, dir: THREE.Vector3, dist: number, dampMs: number): void;
   /** keyboard/mouse swings are slower than real arms: thresholds × this */
   speedScale(): number;
+  /** quiver empty */
+  onArrowsSpent?(): void;
+  /** the hand the mouse is driving (keyboard/mouse), or null */
+  drivenHand?(): Hand | null;
   onChamber(w: WeaponEnt, at: THREE.Vector3): void;
   hitstop(ms: number): void;
   shake(v: number): void;
@@ -141,6 +146,16 @@ function lyingQuat(axis: THREE.Vector3, face: THREE.Vector3) {
   const z = face.clone().addScaledVector(y, -face.dot(y)).normalize();
   const x = new THREE.Vector3().crossVectors(y, z);
   return new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, y, z));
+}
+
+const HOVER = new THREE.Color('#c8902a');
+function glow(o: THREE.Object3D, k: number) {
+  o.traverse((m) => {
+    const mat = (m as THREE.Mesh).material as THREE.MeshStandardMaterial | undefined;
+    if (!mat || !('emissive' in mat)) return;
+    if (!mat.userData.baseEmissive) mat.userData.baseEmissive = mat.emissive.clone();
+    mat.emissive.copy(mat.userData.baseEmissive as THREE.Color).lerp(HOVER, k);
+  });
 }
 
 function loadGlb(url: string, timeoutMs = 8000): Promise<THREE.Object3D> {
@@ -240,6 +255,10 @@ export class WeaponManager {
   private spearTimer = 0;
   private shieldTimer = 0;
   private dualClashT = -9;
+  /** realT of the last guard raise/lower — swings into/out of guard never count as cuts */
+  guardChangeT = -9;
+  /** arrows left in the quiver (12 at the start, +6 each wave) */
+  quiver = 12;
   t = 0;
   realT = 0;
   private speedHist = new Map<number, { t: number; sp: number; x: number; y: number; z: number }[]>();
@@ -422,6 +441,31 @@ export class WeaponManager {
     return w;
   }
 
+  // ── hover (keyboard/mouse): the weapon the cursor points at glows brass ──
+  private hovered: WeaponEnt | null = null;
+  /** Same test as the pull-grab, without taking it. */
+  pickRay(aimRay: { origin: THREE.Vector3; dir: THREE.Vector3 }): WeaponEnt | null {
+    let best: WeaponEnt | null = null, bestScore = Infinity;
+    const end = new THREE.Vector3().copy(aimRay.origin).addScaledVector(aimRay.dir, 4);
+    for (const w of this.list) {
+      if ((w.state !== 'racked' && w.state !== 'free') || w.cls === 'arrow') continue;
+      const gp = this.gripWorld(w, new THREE.Vector3());
+      const along = new THREE.Vector3().subVectors(gp, aimRay.origin).dot(aimRay.dir);
+      if (along < 0.2 || along > 3.5) continue;
+      const perp = Math.sqrt(segSegDistLocal(aimRay.origin, end, gp, w.tip.lengthSq() > 0 ? w.tip : gp));
+      const tol = 0.1 + along * 0.05;
+      if (perp < tol && perp / tol < bestScore) { bestScore = perp / tol; best = w; }
+    }
+    return best;
+  }
+  setHover(w: WeaponEnt | null, t: number) {
+    if (this.hovered !== w) {
+      if (this.hovered?.obj) glow(this.hovered.obj, 0);
+      this.hovered = w;
+    }
+    if (w?.obj && w.state !== 'held') glow(w.obj, 0.55 + 0.25 * Math.sin(t * Math.PI * 4));
+  }
+
   // ── hand interaction ──
   grab(h: HandView, aimRay?: { origin: THREE.Vector3; dir: THREE.Vector3 }, rayOnly = false) {
     if (this.held[h.side]) return;
@@ -500,6 +544,7 @@ export class WeaponManager {
     w.hand = h.side;
     w.incoming = null;
     this.held[h.side] = w;
+    w.attachT = this.realT;
     this.setKinematic(w, GROUPS.held);
     w.hitCd.clear();
     audio.metal(0.3, 1900);
@@ -563,6 +608,7 @@ export class WeaponManager {
   nock() {
     const bowHand = this.held.left?.cls === 'bow' ? 'left' : this.held.right?.cls === 'bow' ? 'right' : null;
     if (!bowHand) return false;
+    if (this.quiver <= 0) { this.hooks.onArrowsSpent?.(); return false; }
     this.drawing = true;
     audio.bowDraw();
     return true;
@@ -589,11 +635,14 @@ export class WeaponManager {
     const bowHand = this.held.left?.cls === 'bow' ? this.held.left : this.held.right?.cls === 'bow' ? this.held.right : null;
     this.drawing = false;
     if (!bowHand || draw < 0.1) return false;
+    if (this.quiver <= 0) return false;
+    this.quiver--;
     const origin = this.nockedArrow.tail.clone();
-    const speed = 20 + 40 * draw;
+    // a tap is a weak plink; only a full draw (≥ 0.85 s) flies true and hard
+    const speed = 14 + 46 * draw;
     const dir = aim.clone().normalize();
     const target = new THREE.Vector3();
-    const enemy = this.enemies.nearestTorso(origin, dir, THREE.MathUtils.degToRad(6), target);
+    const enemy = this.enemies.nearestTorso(origin, dir, THREE.MathUtils.degToRad(4), target);
     if (enemy) {
       const bal = ballisticDir(origin, target, speed, 9.81 * 0.35);
       if (bal) dir.copy(bal);
@@ -885,8 +934,15 @@ export class WeaponManager {
     const last = w.hitCd.get(key) ?? -1;
     if (this.realT - last < 0.25) return;
     w.hitCd.set(key, this.realT);
+    if (source === 'melee' && this.realT - this.guardChangeT < 0.25) return;
+    // a blade that has just been picked up (it flies to the hand) never cuts on arrival
+    if (w.state === 'held' && this.realT - (w.attachT ?? -9) < 0.2) return;
+    // the parked off-hand blade (not the one the mouse drives) only touches — it blocks, it doesn't cut
+    const driven = this.hooks.drivenHand?.() ?? null;
+    if (w.state === 'held' && driven && w.hand && w.hand !== driven) speed = Math.min(speed, 1.4);
     const zone = this.enemies.zoneOf(hit.part);
-    let relSpeed = Math.min(speed, source === 'arrow' ? 70 : 32);
+    // arrows: damage follows the draw (60 m/s full draw → the old 22 m/s cap; a tap → about a third)
+    let relSpeed = source === 'arrow' ? Math.min(22, speed * 0.367) : Math.min(speed, 32);
     // B&S-style contact data for held blades: where along the edge it touched, how fast THAT point moved
     // this frame (not the tip's peak), and whether the stroke was committed
     let contactFrac: number | undefined, contactSpeed: number | undefined, strokeLen: number | undefined, strokeTurn: number | undefined;
@@ -928,7 +984,8 @@ export class WeaponManager {
         w.body.setAngvel({ x: rand(-8, 8), y: rand(-8, 8), z: rand(-8, 8) }, true);
       } else if (w.hand) {
         // your blow was turned: the sword kicks back (research: 0.15–0.2 m over ~150 ms)
-        this.hooks.onRecoil(w.hand, dir, res.parried ? 0.2 : 0.12, res.parried ? 0.4 : 0.15);
+        // parried by his guard: knocked well aside, hand slowed for ~0.45 s — he ripostes
+        this.hooks.onRecoil(w.hand, dir, res.parried ? 0.25 : 0.12, res.parried ? 0.45 : 0.15);
       }
       this.hooks.shake(res.parried ? 0.15 : 0.08);
       return;

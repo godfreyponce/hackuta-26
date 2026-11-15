@@ -39,6 +39,26 @@ function HealthBlock() {
   );
 }
 
+function HandsBlock() {
+  const [held, setHeld] = useState<{ l: string | null; r: string | null; q: number }>({ l: null, r: null, q: 0 });
+  useEffect(() => {
+    const t = setInterval(() => {
+      const w = runtime.engine?.weapons;
+      if (!w) return;
+      const l = w.heldBy('left')?.name ?? null, r = w.heldBy('right')?.name ?? null, q = w.quiver;
+      setHeld((p) => (p.l === l && p.r === r && p.q === q ? p : { l, r, q }));
+    }, 250);
+    return () => clearInterval(t);
+  }, []);
+  return (
+    <div className="hands-slots" aria-label="What you hold">
+      <span className={held.l ? 'on' : ''}>L · {held.l ?? 'empty'}</span>
+      <span className={held.r ? 'on' : ''}>R · {held.r ?? 'empty'}</span>
+      <span>Arrows · {held.q}</span>
+    </div>
+  );
+}
+
 function ScoreBlock() {
   const score = useApp((s) => s.hud.score);
   const wave = useApp((s) => s.hud.wave);
@@ -355,6 +375,7 @@ export function Hud() {
     <div className={`hud ${cine ? 'cine' : ''}`}>
       <CombatOverlay />
       <HealthBlock />
+      <HandsBlock />
       <ScoreBlock />
       <CallPanel />
       <BossBar />
@@ -368,7 +389,7 @@ export function Hud() {
       {kb && hint && (
         <div className="bl callpanel small" style={{ maxWidth: 360 }}>
           <div className="hud-label" style={{ marginBottom: 6 }}>Controls · <span className="kbd">H</span> hide</div>
-          <div className="muted">Click a weapon on the table to take it (click a second for your other hand) · swing with the mouse · <span className="kbd">W</span> thrust · <span className="kbd">RMB</span> guard · flick + release <span className="kbd">LMB</span> to throw · <span className="kbd">X</span> set down · <span className="kbd">B</span> bow · <span className="kbd">A</span>/<span className="kbd">D</span> dodge</div>
+          <div className="muted">Click a weapon on the table to take it — hold <span className="kbd">Tab</span> to look down, click a second for your other hand · swing with the mouse · <span className="kbd">W</span> thrust · <span className="kbd">RMB</span> guard · flick + release <span className="kbd">LMB</span> to throw · <span className="kbd">X</span> set down · <span className="kbd">B</span> bow · <span className="kbd">A</span>/<span className="kbd">D</span> dodge</div>
         </div>
       )}
       <TrackingOverlay />

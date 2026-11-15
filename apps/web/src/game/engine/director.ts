@@ -16,12 +16,14 @@ export interface WaveDef {
 // Lines quoted from Odyssey XXII, tr. Butcher & Lang (1879, public domain).
 export const WAVES: WaveDef[] = [
   { n: 1, title: 'The Bow Is Strung', sub: '“Lo, now is this terrible trial ended at last.”',
-    spawns: ['suitor', 'suitor', 'suitor', 'suitor', 'suitor', 'suitor'], maxAlive: 4, interval: [3.2, 5.0] },
+    spawns: ['suitor', 'suitor', 'suitor', 'suitor', 'suitor', 'suitor'], maxAlive: 4, interval: [1.4, 2.4] },
   { n: 2, title: 'The Wooers Rally', sub: '“Draw your blades, and hold up the tables.”',
-    spawns: ['suitor', 'suitor', 'archer', 'suitor', 'suitor', 'suitor', 'suitor', 'archer', 'suitor', 'suitor', 'suitor', 'suitor'], maxAlive: 6, interval: [2.4, 4.0] },
+    spawns: ['suitor', 'suitor', 'archer', 'suitor', 'suitor', 'suitor', 'archer', 'suitor', 'suitor', 'suitor'], maxAlive: 5, interval: [1.2, 2.2] },
   { n: 3, title: 'Antinous', sub: 'The first of the wooers, and the last.',
-    spawns: ['suitor', 'boss', 'suitor', 'suitor', 'suitor', 'suitor', 'suitor'], maxAlive: 5, interval: [2.6, 4.2] },
+    spawns: ['boss', 'suitor', 'suitor', 'suitor', 'suitor', 'suitor', 'suitor'], maxAlive: 5, interval: [1.6, 2.6] },
 ];
+
+const SPAWN_BENCHES: [number, number][] = [[-2.6, -8.4], [2.6, -9.6], [-2.6, -11.2], [2.6, -12.4], [-2.4, -7.2], [2.4, -10.6]];
 
 export type DirectorPhase = 'intro' | 'fight' | 'cleared' | 'done';
 
@@ -96,8 +98,14 @@ export class Director {
       this.nextSpawn -= dt;
       if (this.spawnIdx < d.spawns.length && this.nextSpawn <= 0 && this.hooks.aliveCount() < d.maxAlive) {
         const kind = d.spawns[this.spawnIdx];
-        const door = HALL.doors[this.door++ % 2];
-        const at = new THREE.Vector3(door.x + rand(-0.5, 0.5), 0, door.z + 0.6);
+        // pacing: wooers rise from the feast benches along the walls (8–13 m out, staggered sides) instead of
+        // walking the whole 26 m hall single-file; every third comes through the doors; Antinous strides in close
+        const k = this.door++;
+        const bench = SPAWN_BENCHES[k % SPAWN_BENCHES.length];
+        const door = HALL.doors[k % 2];
+        const at = kind === 'boss' ? new THREE.Vector3(rand(-0.6, 0.6), 0, -9.5)
+          : k % 3 === 2 ? new THREE.Vector3(door.x + rand(-0.5, 0.5), 0, door.z + 0.6)
+          : new THREE.Vector3(bench[0] + rand(-0.3, 0.3), 0, bench[1] + rand(-0.6, 0.6));
         if (this.hooks.spawn(kind, at)) {
           this.spawnIdx++;
           if (kind === 'boss') this.hooks.onBoss();

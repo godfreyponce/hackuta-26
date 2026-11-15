@@ -42,6 +42,9 @@ export interface Attack {
   glinted: boolean;
   whooshed: boolean;
   resolved: boolean;
+  /** ripostes and chained blows are never feinted; a feint happens at most once */
+  noFeint?: boolean;
+  feinted?: boolean;
 }
 
 export interface Stump { part: number; local: THREE.Vector3; until: number }
@@ -89,6 +92,16 @@ export interface Enemy {
   bleedUntil: number;
   /** last stagger (anti stun-lock) */
   staggerT: number;
+  /** guard zone he's holding against your blade (reads where it's heading) */
+  guard: { zone: GuardZone; setAt: number; nextReactAt: number };
+  guardPose: [number, number, number];
+  riposteDir: AttackDir | null;
+  chainLeft: number;
+  chainAt: number;
+  chainDir: AttackDir | null;
+  lastFeintT: number;
+  bossPhase: number;
+  bossBrokeInPhase: number;
   /** throat cut: bleeding (5 hp/s) until, and the neck gives way more easily until */
   throatBleedUntil: number;
   neckWoundUntil: number;
@@ -140,6 +153,12 @@ export interface HitResult {
 export interface EnemyArrow { pos: THREE.Vector3; vel: THREE.Vector3; prev: THREE.Vector3; alive: boolean; stuck: number; fromId: number }
 
 export interface EnemyHooks {
+  /** current wave (1..3) — sets attack turns and archetype skill */
+  wave(): number;
+  /** the player's held blades: point and its velocity (world) — what the wooers' guards read */
+  playerBlades(): { tip: THREE.Vector3; vel: THREE.Vector3 }[];
+  /** Antinous changes phase (2: shield dropped + calls suitors, 3: desperate) */
+  onBossPhase(e: Enemy, phase: number): void;
   onKill(e: Enemy, info: HitInfo, rag: Ragdoll, how: { decapitated: boolean; finisher: boolean; severed: number | null }): void;
   onPlayerHit(dmg: number, source: 'melee' | 'arrow', from: THREE.Vector3, heavy: boolean): void;
   /** decide the outcome of a blow at its impact moment */
@@ -162,7 +181,9 @@ export interface EnemyHooks {
   laneOffset(dir: AttackDir, out: THREE.Vector3): THREE.Vector3;
 }
 
-const RING_ANGLES = [-0.6, 0, 0.6];
+// five slots around Odysseus; the outer two sit at his flanks (edge of view — chevrons + panned audio)
+const RING_ANGLES = [-1.0, -0.5, 0, 0.5, 1.0];
+type GuardZone = 'none' | 'high' | 'left' | 'right' | 'low';
 const RING_R = 1.35;
 const MAX_RAGDOLLS = 12;
 const RAGDOLL_TTL = 14;
@@ -201,7 +222,7 @@ export class EnemyManager {
   readonly arrows: EnemyArrow[] = [];
   private freeSlots: number[];
   private nextId = 1;
-  private ringOwner: (number | null)[] = [null, null, null];
+  private ringOwner: (number | null)[] = [null, null, null, null, null];
   private lastImpactAt = -99;
   melanthius = false;
   t = 0;
@@ -244,6 +265,7 @@ export class EnemyManager {
       dead: false, diedAt: 0, ring: null, attack: null, nextAttackAt: 0, spot: null, lastHit: new Map(), spawnT: this.t,
       name: boss ? 'Antinous' : undefined, pinned: false, feastSeed: Math.random() * 10, forward: new THREE.Vector3(0, 0, 1),
       charging: false, blockTimes: [], flinch: { t: -9, dir: new THREE.Vector3(), amount: 0 }, bleedUntil: 0, gibs: [], staggerT: -9, throatBleedUntil: 0, neckWoundUntil: 0,
+      guard: { zone: 'none', setAt: -9, nextReactAt: 0 }, guardPose: [0.32, 0.24, 0.7], riposteDir: null, chainLeft: 0, chainAt: 0, chainDir: null, lastFeintT: -9, bossPhase: 1, bossBrokeInPhase: 0,
     };
     if (kind === 'archer') {
       const side = Math.random() < 0.5 ? -1 : 1;
@@ -261,7 +283,7 @@ export class EnemyManager {
     for (const e of this.list) this.release(e);
     this.list.length = 0;
     this.arrows.length = 0;
-    this.ringOwner = [null, null, null];
+    this.ringOwner = [null, null, null, null, null];
     this.melanthius = false;
   }
 
@@ -399,12 +421,77 @@ export class EnemyManager {
       const d = Math.hypot(e.pos.x - sx, e.pos.z - sz);
       if (d < bestD) { bestD = d; best = k; }
     }
-    if (best >= 0) { e.ring = best; this.ringOwner[best] = e.id; e.nextAttackAt = Math.max(e.nextAttackAt, this.t + 1.2); }
+    if (best >= 0) { e.ring = best; this.ringOwner[best] = e.id; e.nextAttackAt = Math.max(e.nextAttackAt, this.t + rand(0.25, 0.7)); }
   }
 
-  private windupOwner(): Enemy | null {
-    for (const e of this.list) if (!e.dead && (e.state === 'windup' || e.state === 'strike')) return e;
-    return null;
+  /** Skill per archetype (combat research): guard chance/react time, feints, combos, wind-up. */
+  private arche(e: Enemy) {
+    const w = this.hooks.wave();
+    const easy = this.hooks.difficultyMult() < 1;
+    let r: { pGuard: number; react: number; pFeint: number; pCombo: number; maxCombo: number; windup: number };
+    if (e.kind === 'boss') {
+      const ph = e.bossPhase;
+      r = { pGuard: 0.75, react: ph >= 3 ? 0.17 : 0.2, pFeint: ph >= 2 ? 0.35 : 0.2, pCombo: 0.6, maxCombo: ph >= 2 ? 3 : 2, windup: ph >= 2 ? 0.65 : 0.8 };
+    } else if (e.kind === 'archer') r = { pGuard: 0.2, react: 0.5, pFeint: 0, pCombo: 0, maxCombo: 0, windup: 0.9 };
+    else if (w <= 1) r = { pGuard: 0.4, react: 0.42, pFeint: 0, pCombo: 0, maxCombo: 0, windup: 0.95 };          // reveler
+    else if (e.look.shield !== 'none' || e.look.armor === 'muscle') r = { pGuard: 0.7, react: 0.34, pFeint: 0.15, pCombo: 0.2, maxCombo: 1, windup: 0.8 }; // hoplite
+    else r = { pGuard: 0.55, react: 0.3, pFeint: w >= 3 ? 0.25 : 0.18, pCombo: w >= 3 ? 0.3 : 0.2, maxCombo: 1, windup: w >= 3 ? 0.75 : 0.8 }; // swordsman
+    if (easy) { r.windup += 0.15; r.react += 0.15; r.pFeint = 0; }
+    return r;
+  }
+
+  /** attack turns: 1 attacker in wave 1, 2 from wave 2 (Antinous always has his own); impacts ≥ 0.4 s apart */
+  private canStartAttack(e: Enemy) {
+    const easy = this.hooks.difficultyMult() < 1;
+    const turns = Math.max(1, (this.hooks.wave() >= 2 ? 2 : 1) - (easy ? 1 : 0));
+    let n = 0;
+    for (const o of this.list) if (o !== e && !o.dead && o.kind !== 'boss' && (o.state === 'windup' || o.state === 'strike')) n++;
+    if (e.kind !== 'boss' && n >= turns) return false;
+    const planned = this.t + this.arche(e).windup + 0.12;
+    for (const o of this.list) if (o !== e && o.attack && !o.attack.resolved && Math.abs(o.attack.impactAt - planned) < 0.4) return false;
+    return this.t - this.lastImpactAt > 0.2;
+  }
+
+  /** His guard reads your blade: predict where it crosses him 0.18 s ahead and raise high / left / right / low. */
+  private updateGuard(e: Enemy, distPlayer: number, a: Anim, dt: number) {
+    const guardable = e.armed && !e.severed.has(P.LArmR) && distPlayer < 2.4 && ['approach', 'wait', 'recover', 'block'].includes(e.state) && e.kind !== 'archer';
+    if (!guardable) { e.guard.zone = 'none'; return; }
+    const blades = this.hooks.playerBlades();
+    if (this.t >= e.guard.nextReactAt) {
+      const ar = this.arche(e);
+      let best: THREE.Vector3 | null = null, bd = Infinity;
+      for (const b of blades) {
+        const p = _c2.copy(b.tip).addScaledVector(b.vel, 0.18);
+        const d = p.distanceTo(e.pose[P.Torso].c);
+        if (d < bd) { bd = d; best = p.clone(); }
+      }
+      // a trained man stands in a ready guard (high) until he reads your blade; drunken revelers (wave 1) don't
+      if ((!best || bd >= 1.25) && e.guard.zone === 'none' && this.hooks.wave() >= 2) { e.guard.zone = 'high'; e.guard.setAt = this.t; }
+      if (best && bd < 1.25 && Math.random() < ar.pGuard) {
+        const right = _c1.set(-e.forward.z, 0, e.forward.x);
+        const zone: GuardZone = best.y > e.pose[P.Torso].c.y + 0.12 * e.look.scale ? 'high'
+          : best.y < e.pose[P.Pelvis].c.y ? 'low' : (best.sub(e.pos).dot(right) > 0 ? 'right' : 'left');
+        if (zone !== e.guard.zone) { e.guard.zone = zone; e.guard.setAt = this.t; }
+      }
+      e.guard.nextReactAt = this.t + ar.react * (e.posture > 70 ? 1.4 : 1);
+    }
+    // show the guard: blade level over the brow (high), upright across a flank, or point down (low)
+    const want: [number, number, number] = e.guard.zone === 'high' ? [2.35, 0.3, 1.5] : e.guard.zone === 'left' ? [1.35, 0.95, 1.6]
+      : e.guard.zone === 'right' ? [1.3, -0.55, 1.35] : e.guard.zone === 'low' ? [0.55, 0.25, 1.45] : [0.32, 0.24, 0.7];
+    const k = 1 - Math.exp(-14 * dt);
+    for (let i = 0; i < 3; i++) e.guardPose[i] += (want[i] - e.guardPose[i]) * k;
+    if (e.state === 'approach' || e.state === 'wait') a.armR = [e.guardPose[0], e.guardPose[1], e.guardPose[2]];
+  }
+
+  private guardCovers(e: Enemy, zone: GuardZone, info: HitInfo) {
+    const p = info.part;
+    switch (zone) {
+      case 'high': return p === P.Head || (p === P.Torso && info.point.y > e.pose[P.Torso].b.y - 0.1 * e.look.scale);
+      case 'left': return p === P.Torso || p === P.UArmL || p === P.LArmL;
+      case 'right': return p === P.Torso || p === P.UArmR || p === P.LArmR;
+      case 'low': return p === P.Pelvis || p === P.ULegL || p === P.ULegR || p === P.LLegL || p === P.LLegR;
+      default: return false;
+    }
   }
 
   private setState(e: Enemy, s: EState, dur = 0) { e.state = s; e.stateT = 0; e.stateDur = dur; }
@@ -415,7 +502,8 @@ export class EnemyManager {
     const distPlayer = toPlayer.length();
     let target: THREE.Vector3 | null = null;
     let moving = false;
-    const meleeCapable = e.armed && !(e.kind === 'archer' && !e.charging);
+    // a disarmed wooer doesn't stand idle — he comes at you with his fists (half damage)
+    const meleeCapable = (e.armed || ((e.kind === 'suitor' || e.kind === 'boss') && !e.severed.has(P.LArmR))) && !(e.kind === 'archer' && !e.charging);
 
     if (e.kind === 'archer' && !e.charging) target = e.spot;
     else {
@@ -460,7 +548,8 @@ export class EnemyManager {
     } else { e.vel.x = damp(e.vel.x, 0, 10, dt); e.vel.z = damp(e.vel.z, 0, 10, dt); }
     e.pos.addScaledVector(e.vel, dt);
     e.pos.x = clamp(e.pos.x, -2.75, 2.75);
-    e.pos.z = clamp(e.pos.z, HALL.zFar + 0.8, -1.25);
+    // in front of the weapon table they stop at its far edge; beside it (flank slots) they may come level with you
+    e.pos.z = clamp(e.pos.z, HALL.zFar + 0.8, Math.abs(e.pos.x) > 1.0 ? -0.45 : -1.25);
     const r0 = Math.hypot(e.pos.x, e.pos.z);
     if (r0 < 1.3) { e.pos.x *= 1.3 / r0; e.pos.z *= 1.3 / r0; }
 
@@ -490,13 +579,14 @@ export class EnemyManager {
 
     const atRing = e.ring !== null && target && Math.hypot(e.pos.x - target.x, e.pos.z - target.z) < 0.4;
     const diff = this.hooks.difficultyMult();
+    this.updateGuard(e, distPlayer, a, dt);
 
     switch (e.state) {
       case 'approach':
       case 'wait':
         if (e.kind === 'archer' && !e.charging) {
           if (target && Math.hypot(e.pos.x - target.x, e.pos.z - target.z) < 0.5 && this.t > e.nextAttackAt) this.setState(e, 'aim');
-        } else if (meleeCapable && atRing && this.t > e.nextAttackAt && !this.windupOwner() && this.t - this.lastImpactAt > 0.35) {
+        } else if (meleeCapable && atRing && this.t > e.nextAttackAt && this.canStartAttack(e)) {
           this.beginAttack(e, head);
         }
         break;
@@ -506,7 +596,9 @@ export class EnemyManager {
         break;
       case 'recover':
         a.armR = [0.4, 0.2, 0.5];
-        if (e.stateT > 0.5) { e.nextAttackAt = this.t + rand(1.6, 2.8) / diff; this.setState(e, 'wait'); }
+        // combo: chain an opposite-side blow
+        if (e.chainDir && this.t >= e.chainAt) { const d = e.chainDir; e.chainDir = null; this.beginAttack(e, head, { dir: d, windup: 0.45, chained: true }); break; }
+        if (e.stateT > 0.5) { e.nextAttackAt = this.t + rand(1.2, 2.2) / diff; this.setState(e, 'wait'); }
         break;
       case 'recoil': {
         // blow turned aside: sword arm thrown back, open
@@ -534,7 +626,11 @@ export class EnemyManager {
         const k = Math.sin(Math.min(1, e.stateT / e.stateDur) * Math.PI);
         a.armR = [1.6, -0.2 * k, 1.5]; a.twist = -0.25 * k;
         if (e.look.shield !== 'none') a.armL = [1.35, 0.05, 1.0];
-        if (e.stateT > e.stateDur) { e.nextAttackAt = Math.min(e.nextAttackAt, this.t + 0.35); this.setState(e, 'wait'); }
+        if (e.stateT > e.stateDur) {
+          // parried you → riposte at once from that side (0.45 s, never feinted)
+          if (e.riposteDir) { const d = e.riposteDir; e.riposteDir = null; this.beginAttack(e, head, { dir: d, windup: 0.45, noFeint: true }); break; }
+          e.nextAttackAt = Math.min(e.nextAttackAt, this.t + 0.35); this.setState(e, 'wait');
+        }
         break;
       }
       case 'maimed':
@@ -557,7 +653,7 @@ export class EnemyManager {
       case 'shoot':
         a.armL = [1.55, 0.05, 0.05]; a.armR = [1.2, -0.5, 0.6];
         if (e.stateT > 0.5) {
-          e.nextAttackAt = this.t + rand(2.6, 3.8) / diff;
+          e.nextAttackAt = this.t + rand(3.4, 4.8) / diff;
           if (Math.random() < 0.4 && e.spot) e.spot.set(-e.spot.x, 0, clamp(e.spot.z + rand(-2, 2), -19, -10.5));
           this.setState(e, 'approach');
         }
@@ -582,14 +678,18 @@ export class EnemyManager {
   }
 
   // ── attacks ─────────────────────────────────────────────────────────────
-  private beginAttack(e: Enemy, head: THREE.Vector3) {
+  private beginAttack(e: Enemy, head: THREE.Vector3, opts: { dir?: AttackDir; windup?: number; noFeint?: boolean; chained?: boolean } = {}) {
     const boss = e.kind === 'boss';
-    const unblockable = boss && Math.random() < 0.3;
-    const dir: AttackDir = unblockable ? 'thrust' : pick(['top', 'left', 'right', 'top', 'left', 'right', 'thrust'] as AttackDir[]);
-    const windup = boss ? (unblockable ? 1.1 : 0.85) : e.look.armor === 'muscle' ? 0.8 : 0.9;
+    const ar = this.arche(e);
+    const unblockable = !opts.dir && boss && Math.random() < (e.bossPhase >= 3 ? 0.3 : e.bossPhase === 2 ? 0.2 : 0.12);
+    const dir: AttackDir = opts.dir ?? (unblockable ? 'thrust' : pick(['top', 'left', 'right', 'top', 'left', 'right', 'thrust'] as AttackDir[]));
+    // off-screen flank attackers get +0.2 s so the chevron/whoosh can be read
+    const flank = e.ring === 0 || e.ring === RING_ANGLES.length - 1 ? 0.2 : 0;
+    const windup = opts.windup ?? ((unblockable ? 1.1 : ar.windup) + flank);
+    if (!opts.chained) e.chainLeft = Math.random() < ar.pCombo ? ar.maxCombo : 0;
     const a: Attack = {
       dir, unblockable, windup, startT: this.t, impactAt: this.t + windup + 0.12, lane: new THREE.Vector3(), locked: false,
-      glinted: false, whooshed: false, resolved: false,
+      glinted: false, whooshed: false, resolved: false, noFeint: !!opts.noFeint || !!opts.chained,
     };
     this.hooks.laneOffset(dir, a.lane).add(head);
     e.attack = a;
@@ -625,7 +725,22 @@ export class EnemyManager {
       this.hooks.laneOffset(at.dir, at.lane).add(head);
       if (toImpact <= 0.25) at.locked = true;
     }
-    if (!at.glinted && toImpact <= (at.unblockable ? 0.7 : 0.6)) {
+    // feint: halfway through, if you already reacted (guard up, or your blade in his lane), he pulls it and swings
+    // from another side — only from wave 2, at most once per attack and once per 4 s
+    if (!at.noFeint && !at.feinted && w >= 0.5 && w <= 0.65 && toImpact >= 0.45 && this.t - e.lastFeintT > 4) {
+      const reacted = this.hooks.blocking() || this.hooks.playerBlades().some((b) => b.tip.distanceTo(at.lane) < 0.35);
+      if (reacted && Math.random() < this.arche(e).pFeint) {
+        at.feinted = true;
+        e.lastFeintT = this.t;
+        const others = (['top', 'left', 'right', 'thrust'] as AttackDir[]).filter((d) => d !== at.dir);
+        at.dir = pick(others);
+        at.startT = this.t; at.windup = 0.5; at.impactAt = this.t + 0.62;
+        at.glinted = false; at.whooshed = false; at.locked = false;
+        audio.glanceScrape(0.15, at.dir === 'left' ? -0.5 : at.dir === 'right' ? 0.5 : 0);
+        combatLog({ kind: 'feint', id: e.id, dir: at.dir });
+      }
+    }
+    if (!at.glinted && toImpact <= Math.min(at.unblockable ? 0.7 : 0.6, at.windup)) {
       at.glinted = true;
       const tip = new THREE.Vector3();
       this.renderer.swordSegment(e.pose, e.look, _c1, tip);
@@ -649,9 +764,16 @@ export class EnemyManager {
     if (at.unblockable && (o === 'perfect' || o === 'beat' || o === 'block' || o === 'shield' || o === 'guard')) o = 'hit';
     const contact = at.lane.clone();
     this.hooks.onOutcome(e, at, o, contact);
+    // combo: after a block / guard / dodge / hit he chains the opposite side (a clean deflect ends the string)
+    if (e.chainLeft > 0 && (o === 'block' || o === 'shield' || o === 'guard' || o === 'dodge' || o === 'hit')) {
+      e.chainLeft--;
+      e.chainDir = at.dir === 'left' ? 'right' : at.dir === 'right' ? 'left' : pick(['left', 'right'] as AttackDir[]);
+      e.chainAt = this.t + 0.12;
+    } else e.chainLeft = 0;
     // the damage arc shows the side the blade came from (its lane), exaggerated off the player's eye line
     const from = _v3.subVectors(at.lane, head).multiply(_v2.set(2.6, 1, 1)).add(head);
-    const base = e.kind === 'boss' ? (at.unblockable ? 30 : 22) : 12;
+    // per-wave blow damage (10 / 13 / 15), fists half; Antinous 22 (30 unblockable)
+    const base = e.kind === 'boss' ? (at.unblockable ? 30 : 22) : [10, 13, 15][Math.min(2, this.hooks.wave() - 1)] * (e.armed ? 1 : 0.5);
     switch (o) {
       case 'perfect':
         this.addPosture(e, 40);
@@ -663,11 +785,12 @@ export class EnemyManager {
         break;
       case 'block':
       case 'shield':
+        if (o === 'block' && !at.unblockable) this.hooks.onPlayerHit(base * 0.1, 'melee', from, false); // a held block leaks
         this.addPosture(e, 8);
         if (e.state !== 'broken') this.setState(e, 'recoil', 0.3);
         break;
       case 'guard':
-        this.hooks.onPlayerHit(base * 0.2, 'melee', from, false);
+        this.hooks.onPlayerHit(base * 0.4, 'melee', from, false); // half-stopped: wrong side or a thrust
         this.setState(e, 'recover');
         break;
       case 'dodge':
@@ -685,9 +808,12 @@ export class EnemyManager {
   private addPosture(e: Enemy, amt: number) {
     e.posture = Math.min(100, e.posture + amt);
     e.postureT = this.t;
+    // Antinous breaks at most once per phase — deflects and chambers are the way in, not hacking at him
+    if (e.kind === 'boss' && e.bossBrokeInPhase === e.bossPhase) e.posture = Math.min(e.posture, 95);
     if (e.posture >= 100 && e.state !== 'broken' && !e.dead) {
       e.attack = null;
-      this.setState(e, 'broken', 2.0);
+      if (e.kind === 'boss') e.bossBrokeInPhase = e.bossPhase;
+      this.setState(e, 'broken', e.kind === 'boss' ? 1.4 : 2.0);
       audio.gong(110, 2.5, 0.35);
       this.renderer.flash[e.slot] = 1;
     }
@@ -741,8 +867,8 @@ export class EnemyManager {
       if (this.hooks.parryCheck(ar.prev, ar.pos)) { ar.alive = false; ar.stuck = 0.01; continue; }
       if (segSegDist2(ar.prev, ar.pos, head, head) < 0.27 * 0.27) {
         ar.alive = false; ar.stuck = 0.01;
-        if (this.hooks.blocking() || this.hooks.shieldHeld()) { this.hooks.onArrowBlocked(ar.pos); this.hooks.onPlayerHit(8 * 0.2, 'arrow', ar.prev, false); }
-        else this.hooks.onPlayerHit(8, 'arrow', ar.prev, false);
+        if (this.hooks.blocking() || this.hooks.shieldHeld()) { this.hooks.onArrowBlocked(ar.pos); this.hooks.onPlayerHit(6 * 0.2, 'arrow', ar.prev, false); }
+        else this.hooks.onPlayerHit(6, 'arrow', ar.prev, false);
         continue;
       }
       if (ar.prev.z < head.z && ar.pos.z >= head.z) audio.arrowWhiz();
@@ -858,19 +984,19 @@ export class EnemyManager {
     const vulnerable = ['windup', 'strike', 'stagger', 'broken', 'recoil', 'maimed', 'down', 'getup'].includes(e.state);
     const broken = e.state === 'broken';
 
-    // 1) active block with sword or shield (melee only)
-    if (info.source === 'melee' && alive && frontal && !vulnerable && tier >= 2) {
+    // 1) his guard reads your blade — deterministic, no dice: a cut into a guard he raised ≥ 0.10 s ago is blocked;
+    // a fast cut (≥ 6 m/s mouse) into one held ≥ 0.25 s is PARRIED: your blade is knocked aside and he ripostes
+    if (info.source === 'melee' && alive && frontal && !vulnerable && e.guard.zone !== 'none' && this.t - e.guard.setAt >= 0.1 && this.guardCovers(e, e.guard.zone, info)) {
       const hasShield = e.look.shield !== 'none' && e.shieldHp > 0 && !e.severed.has(P.LArmL);
       const hasSword = e.armed && !e.severed.has(P.LArmR);
-      const legSwing = info.part === P.ULegL || info.part === P.ULegR || info.part === P.LLegL || info.part === P.LLegR;
-      let chance = hasShield && !legSwing ? 0.55 : hasSword ? (e.kind === 'boss' ? 0.4 : 0.3) : 0;
-      if (e.posture > 70) chance *= 0.5;
-      e.blockTimes = e.blockTimes.filter((t) => this.t - t < 1);
-      if (e.blockTimes.length < 2 && Math.random() < chance) {
-        e.blockTimes.push(this.t);
-        res.blocked = true; res.parried = true;
+      {
+        const fast = (info.contactSpeed ?? info.speed) >= 6 * this.hooks.speedScale();
+        const parry = fast && this.t - e.guard.setAt >= 0.25 && e.posture < 70;
+        res.blocked = true; res.parried = parry;
         this.addPosture(e, e.kind === 'boss' ? 8 : tier === 3 ? 22 : 14);
-        if (e.state !== 'broken') this.setState(e, 'block', 0.3);
+        if (e.state !== 'broken') this.setState(e, 'block', parry ? 0.22 : 0.3);
+        if (parry) e.riposteDir = info.dir.dot(_v.set(-e.forward.z, 0, e.forward.x)) > 0 ? 'left' : 'right';
+        combatLog({ kind: 'guarded', zone: e.guard.zone, parry, speed: +(info.contactSpeed ?? info.speed).toFixed(2) });
         if (hasShield && tier === 3 && info.massKg && info.massKg > 2) this.setState(e, 'stagger', 0.6); // heavy blow staggers through the shield
         const I = Math.min(1, Math.max(0, ((info.contactSpeed ?? info.speed) - 1.5) / 10.5));
         let at = info.point;
@@ -887,7 +1013,7 @@ export class EnemyManager {
     }
 
     // 2) passive shield coverage (thrown, arrows, slow swings)
-    if (alive && e.shieldHp > 0 && e.look.shield !== 'none' && !e.severed.has(P.LArmL) && info.source !== 'bomb' && info.zone !== 'head' && frontal && !broken) {
+    if (alive && e.shieldHp > 0 && e.look.shield !== 'none' && !e.severed.has(P.LArmL) && info.source !== 'bomb' && (info.zone !== 'head' || e.kind === 'boss') && frontal && !broken) {
       const sc = _v.copy(e.pose[P.LArmL].c).addScaledVector(e.forward, 0.12 * e.look.scale);
       const off = _v2.subVectors(info.point, sc);
       off.addScaledVector(e.forward, -off.dot(e.forward));
@@ -922,7 +1048,7 @@ export class EnemyManager {
         // glance: 20% as blunt, posture, sparks, bounce
         res.glanced = true;
         dmg = this.rawDamage(info) * 0.2;
-        this.addPosture(e, tier >= 3 ? 30 : tier === 2 ? 20 : 12);
+        this.addPosture(e, (tier >= 3 ? 30 : tier === 2 ? 20 : 12) * (e.kind === 'boss' ? 0.3 : 1));
         const I = Math.min(1, Math.max(0, (info.speed - 1.5) / 10.5));
         const pan = audio.pan(info.point);
         if (info.part === P.Head) { this.fx.contact(info.point, info.dir.clone().negate(), info.dir, info.speed, 'helmet'); audio.helmetBell(I, pan); }
@@ -930,7 +1056,7 @@ export class EnemyManager {
       } else dmg = this.rawDamage(info) * (arm.cls === 'bronze' && !thrust ? 0.5 : 1);
     } else dmg = this.rawDamage(info) * (1 - BLUNT_ABSORB[arm.cls]);
     if (!res.glanced) dmg *= this.zoneMult(info.part, arm.neck);
-    if (broken) dmg *= 3;
+    if (broken) dmg *= e.kind === 'boss' ? 1.6 : 3;
     else if (e.state === 'stagger' || e.state === 'recoil') dmg *= 1.5; // riposte window
     if (tier === 0 && info.source === 'melee') {
       // touch: never silent
@@ -956,8 +1082,19 @@ export class EnemyManager {
         combatLog({ kind: 'throatCut', speed: +(info.contactSpeed ?? info.speed).toFixed(2) });
       }
     }
+    // Antinous can't be one-shot by any single blow (bombs, forged gifts): each costs him ≤ 22% — phases play out
+    if (e.kind === 'boss' && !broken) dmg = Math.min(dmg, e.maxHp * 0.22);
     res.damage = dmg;
     e.hp -= dmg;
+    // Antinous: phase 2 at 60% (the gilded shield drops, he calls for help), phase 3 at 30% (desperate)
+    if (e.kind === 'boss' && e.hp > 0) {
+      const ph = e.hp < e.maxHp * 0.3 ? 3 : e.hp < e.maxHp * 0.6 ? 2 : 1;
+      if (ph > e.bossPhase) {
+        e.bossPhase = ph;
+        if (ph === 2 && e.shieldHp > 0 && e.look.shield !== 'none') { e.shieldHp = 0; this.dropShield(e); }
+        this.hooks.onBossPhase(e, ph);
+      }
+    }
     e.lastHit.set(-99, this.t);
     this.renderer.flash[e.slot] = Math.min(1, 0.5 + dmg / 60);
     if (!res.glanced) {
@@ -971,7 +1108,7 @@ export class EnemyManager {
       }
     }
     if (severPart === P.Head || ((severPart === P.ULegL || severPart === P.ULegR || severPart === P.LLegL || severPart === P.LLegR))) e.hp = Math.min(e.hp, 0);
-    if (!res.glanced && tier >= 1) this.addPosture(e, tier === 3 ? 18 : 10);
+    if (!res.glanced && tier >= 1) this.addPosture(e, (tier === 3 ? 18 : 10) * (e.kind === 'boss' ? 0.3 : 1));
 
     if (e.hp <= 0) {
       res.killed = true;
@@ -1004,7 +1141,8 @@ export class EnemyManager {
       audio.grunt();
       // hit reaction: flinch (light) or directional stagger (solid/heavy)
       e.flinch = { t: this.t, dir: info.dir.clone(), amount: tier >= 2 ? 1 : 0.6 };
-      if (tier >= 2 && e.state !== 'broken' && e.state !== 'maimed') {
+      // only a heavy blow (or one on a man whose balance is going) staggers him; ordinary cuts make him flinch
+      if ((tier >= 3 || e.posture >= 60) && e.state !== 'broken' && e.state !== 'maimed') {
         // hyper-armour: once his wind-up is 40% done only a heavy blow (≥7 m/s, mouse-scaled) breaks it, and a
         // wooer can be staggered at most once per 1.5 s — fast sweeps no longer stun-lock him
         // interrupts only early in his wind-up (< 25%) or with a heavy blow (≥ 14 m/s, mouse-scaled) — otherwise
@@ -1155,15 +1293,16 @@ export class EnemyManager {
     this.hooks.onDropWeapon('shield', c, q, e.forward.clone().multiplyScalar(-0.5).setY(0.5), e.look);
   }
 
-  private toRagdoll(e: Enemy, info: HitInfo) {
+  private toRagdoll(e: Enemy, info: HitInfo, crumple = false) {
     if (!e.ragdoll) e.ragdoll = emptyBodies(e.look.scale);
     const parts: number[] = [];
     for (let i = 0; i < PART_COUNT; i++) if (!e.severed.has(i)) parts.push(i);
     addBodies(this.world, e.ragdoll, e.pose, parts, e.vel);
     if (e.ring !== null) { this.ringOwner[e.ring] = null; e.ring = null; }
     const body = e.ragdoll.bodies[info.part] ?? e.ragdoll.bodies[P.Torso];
-    const imp = _v.copy(info.dir).multiplyScalar(info.impulse);
-    imp.y += info.impulse * 0.25;
+    // a beheaded man crumples where he stands (small push along the cut, knees go) instead of cartwheeling
+    const imp = _v.copy(info.dir).multiplyScalar(info.impulse * (crumple ? 0.25 : 1));
+    imp.y += info.impulse * (crumple ? -0.1 : 0.25);
     body?.applyImpulse({ x: imp.x, y: imp.y, z: imp.z }, true);
     e.ragdoll.bodies[P.Torso]?.applyImpulse({ x: imp.x * 0.5, y: imp.y * 0.5, z: imp.z * 0.5 }, true);
     return e.ragdoll;
@@ -1179,7 +1318,7 @@ export class EnemyManager {
     const pelvisY = e.ragdoll?.bodies[P.Pelvis]?.translation().y ?? 0.95;
     const wasDown = e.state === 'down';
     e.attack = null;
-    const rag = this.toRagdoll(e, info);
+    const rag = this.toRagdoll(e, info, how.decapitated);
     e.dead = true;
     e.diedAt = this.t;
     e.state = 'dead';

@@ -48,17 +48,20 @@ export function createMockHub(getFriendName: () => string): Hub {
     switch (e.kind) {
       case 'match_start': say(`Here they come. Wave ${e.data?.wave ?? 1}.`, 50); break;
       case 'wave_start': say(`Here they come. Wave ${e.data?.wave ?? ''}.`, 50); break;
-      case 'player_pinned': say(`He's pinned! Find him a weapon, ${friend()} — anything long!`, 70); break;
-      case 'health_low': say(`He's bleeding badly. Hurry, ${friend()}.`, 70); break;
-      case 'boss_spawn': say("That's Antinous. Table for a shield. We need something sharp — or explosive.", 70); break;
+      case 'player_pinned': say(getFriendName() ? `He's pinned! Find him a weapon, ${friend()} — anything long!` : "He's pinned! Take another blade from the table!", 70); break;
+      case 'health_low': say(getFriendName() ? `He's bleeding badly. Hurry, ${friend()}.` : "He's bleeding. Hold the threshold, Odysseus.", 70); break;
+      case 'boss_spawn': say("That's Antinous. He hides behind that gilded shield — break it, or get round it.", 70); break;
       case 'wave_cleared': say('Wave cleared. Breathe.', 40); break;
       case 'item_kill': say(`Your ${e.data?.weaponName ?? 'gift'} just flattened a wooer. Ha!`, 50); break;
       case 'trickshot':
         if (e.data?.trickshot === 'pin') say('Pinned him to the pillar! Did you see that?', 50);
         else if (e.data?.trickshot === 'multi_kill') say('Two with one throw!', 50);
-        else if (e.data?.trickshot === 'headshot') say('Right between the eyes.', 30);
+        else if (e.data?.trickshot === 'headshot') say('Right between the eyes.', 30); // thrown & loosed only
         break;
-      case 'match_end': say(`The hall is ours. Thank you, ${friend()}.`, 100); break;
+      case 'match_end':
+        if ((e.data?.health ?? 1) <= 0) say('The wooers feast on in your hall.', 100);
+        else say(getFriendName() ? `The hall is ours. Thank you, ${friend()}.` : 'The hall is yours again, Odysseus.', 100);
+        break;
       default: break;
     }
   }
