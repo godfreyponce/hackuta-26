@@ -8,7 +8,7 @@ import {
   cancelQueueEntry, ChertError, chertEventKind, CREATE_AFTER_CANCEL_MAX_MS, createCall, endCall, endConfirmed, END_CALL_MAX_MS, getCallStatus,
   getEvents, getQueueEntry, isQueuedStatus, queuedNameAfter202, startsRingClock, terminalStatus, type ChertEvent, type Created, type QueueEntry,
 } from './chert.ts';
-import type { CallState, GameEvent, ServerToAgent, WeaponSpawn } from './contracts/protocol.ts';
+import type { CallState, GameEvent, ServerToAgent, WeaponSpawn } from '@ithaca/shared';
 import { env } from './env.ts';
 import type { Hub } from './hub.ts';
 import { pick, type LineKey } from './lines.ts';
@@ -144,7 +144,7 @@ export class CallSession {
 
   handle(m: ServerToAgent): void {
     switch (m.type) {
-      case 'call.end': void this.end(m.reason || 'web_ended', 'ended'); break;
+      case 'call.end': void this.end(m.reason, 'ended'); break;
       case 'game.event': this.onGameEvent(m.event); break;
       case 'scan.request': this.scanRequested = true; void this.runScan(); break;
       case 'weapon.spawn': this.onWeapon(m.weapon); break;

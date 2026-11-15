@@ -12,6 +12,7 @@
     "dev:fake-chert": "AGENT_MODE=live CHERT_API_BASE=http://localhost:8787/fake-chert CHERT_FACETIME_TOKEN=fake CHERT_PROJECT_ID=fake CHERT_LINE_ID=fake tsx --env-file=.env.local src/main.ts"
   },
   "dependencies": {
+    "@ithaca/shared": "workspace:*",
     "@livekit/rtc-node": "0.13.35",
     "livekit-server-sdk": "^2.19.3",
     "sharp": "^0.34.5",

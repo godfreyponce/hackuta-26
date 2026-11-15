@@ -31,5 +31,5 @@ Set `AGENT_MODE=live` plus `CHERT_FACETIME_TOKEN`, `CHERT_PROJECT_ID`, `CHERT_LI
 - `src/narrator.ts`, `src/lines.ts`: what the Quartermaster says, and when.
 - `src/scanner.ts`: caller frames to `POST /api/forge`.
 - `src/recovery.ts`: on start, ends a Chert call left over from a crash and deletes stale `ft-` rooms.
-- `src/contracts/`: local copy of spec 4.1. Swap to `packages/shared` when Part D pushes it.
+- Contracts (spec 4.1) come from `@ithaca/shared`. `src/hub.ts` checks every outgoing message against `agentToServerSchema` and drops one that fails, and cuts a narration longer than 400 characters at a word. The agent's `tsconfig.json` uses `moduleResolution: Bundler` because shared's imports have no file extension; tsx runs the agent, so this changes only the typecheck.
 - `../web/src/call/callMedia.ts`: the browser side (spec B.8) for Part A.

@@ -177,7 +177,9 @@ wss.on('connection', (ws, req) => {
       if (!agent) return ws.send(env('call.status', sid, { state: 'failed', reason: 'agent_offline' }));
       return toAgent(env('call.start', sid, { friend: FRIEND, gameRoom: `game-${sid}` }));
     }
-    if (['call.end', 'game.event', 'scan.request'].includes(m.type)) toAgent(raw.toString());
+    // Like apps/server/src/hub.ts: the web's call.end has no reason, so the hub adds one.
+    if (m.type === 'call.end') return toAgent(env('call.end', sid, { reason: 'web_request' }));
+    if (['game.event', 'scan.request'].includes(m.type)) toAgent(raw.toString());
   });
   ws.on('close', () => webs.get(sid)?.delete(ws));
 });

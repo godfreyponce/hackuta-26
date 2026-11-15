@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { dispose } from '@livekit/rtc-node';
 import { CallSession, END_MAX_MS } from './call-session.ts';
-import type { ServerToAgent } from './contracts/protocol.ts';
+import type { ServerToAgent } from '@ithaca/shared';
 import { env } from './env.ts';
 import { Hub } from './hub.ts';
 import { ensureGreeting, greetingReady, prerenderLines } from './lines.ts';
