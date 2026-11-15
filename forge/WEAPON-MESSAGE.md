@@ -1,3 +1,5 @@
+> **Dry-run prototype protocol.** The game does not use it. The real protocol is spec 4.1 (`packages/shared/src/protocol.ts`), which `apps/server` speaks.
+
 # Weapon messages: game and call side
 
 A proposal for Adam. The game and the Chert agent are two programs. These are the only messages between them, so each side can be built alone and joined at the end.
