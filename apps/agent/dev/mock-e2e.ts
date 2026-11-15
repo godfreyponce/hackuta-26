@@ -42,7 +42,21 @@ async function openGame() {
 
   const room = new Room();
   const tracks: string[] = [];
-  room.on(RoomEvent.TrackSubscribed, (_t: RemoteTrack, pub: RemoteTrackPublication, p: RemoteParticipant) => { tracks.push(pub.name ?? ''); out('game_sub', { name: pub.name, from: p.identity }); });
+  /** What the game's PIP would show: friend-cam frames, and the brightest frame's mean RGB (0 = black). */
+  const friendCam = { frames: 0, maxMean: 0, lastMean: 0 };
+  room.on(RoomEvent.TrackSubscribed, (t: RemoteTrack, pub: RemoteTrackPublication, p: RemoteParticipant) => {
+    tracks.push(pub.name ?? ''); out('game_sub', { name: pub.name, from: p.identity });
+    if (pub.name === 'friend-cam') void (async () => {
+      for await (const { frame } of new VideoStream(t)) {
+        if (friendCam.frames++ % 10) continue;
+        const d = frame.convert(VideoBufferType.RGBA).data;
+        let sum = 0;
+        for (let i = 0; i < d.length; i += 4 * 97) sum += d[i]! + d[i + 1]! + d[i + 2]!;
+        friendCam.lastMean = sum / (3 * Math.ceil(d.length / (4 * 97)));
+        friendCam.maxMean = Math.max(friendCam.maxMean, friendCam.lastMean);
+      }
+    })().catch(() => {});
+  });
   await room.connect(tok.url, tok.token);
   const fv = new VideoSource(640, 360);
   await room.localParticipant!.publishTrack(LocalVideoTrack.createVideoTrack('friend-view', fv), new TrackPublishOptions({ source: TrackSource.SOURCE_CAMERA }));
@@ -57,7 +71,7 @@ async function openGame() {
   const agentPubs = (name: string) => [...room.remoteParticipants.values()].filter((p) => p.identity === 'quartermaster-relay')
     .flatMap((p) => [...p.trackPublications.values()]).filter((t) => t.name === name).length;
   const close = async () => { micOn = false; clearInterval(fvTimer); await room.disconnect().catch(() => {}); ws.close(); };
-  return { sid, msgs, send, has, room, tracks, agentPubs, close };
+  return { sid, msgs, send, has, room, tracks, friendCam, agentPubs, close };
 }
 
 /** The phone side: joins the FaceTime room as the bridge and publishes the caller's camera and mic. */
@@ -119,9 +133,12 @@ async function mockMainLoop(): Promise<void> {
   check('greeting under 1 s after join', phone.s.firstVoiceAt > 0 && phone.s.firstVoiceAt - phone.s.joinedAt < 1_000, phone.s.firstVoiceAt ? phone.s.firstVoiceAt - phone.s.joinedAt : null);
   check('agent video reaches the phone', phone.s.agentVideoFrames > 0, phone.s.agentVideoFrames);
   check('friend-cam and friend-audio relayed', g.tracks.includes('friend-cam') && g.tracks.includes('friend-audio'), g.tracks);
+  check('friend-cam frames reach the game and are not black (live 1 #2)', g.friendCam.frames > 10 && g.friendCam.maxMean > 20, g.friendCam);
 
+  const camFramesBefore = g.friendCam.frames;
   await phone.republishCam(); // review #11
   await sleep(2_000);
+  check('friend-cam still has frames after the caller video restarts (live 1 #2)', g.friendCam.frames > camFramesBefore + 10, { before: camFramesBefore, after: g.friendCam.frames });
   check('one friend-cam after the caller video comes back', g.agentPubs('friend-cam') === 1, g.agentPubs('friend-cam'));
 
   g.send('game.event', { event: { kind: 'player_pinned', t: 1000 } });

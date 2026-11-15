@@ -18,10 +18,11 @@ import { Mixer } from './mixer.ts';
 import { Narrator, PRIORITY } from './narrator.ts';
 import { RelaySlots } from './relay-slots.ts';
 import { CallerScanner } from './scanner.ts';
-import { cropRgba, OUT_H, OUT_W, VideoRelay } from './video.ts';
+import { cropRgba, OUT_H, OUT_W, relayable, VideoRelay } from './video.ts';
 
 const POLL_MS = 400;
 const ANSWER_TIMEOUT_MS = 60_000;
+const FRIEND_CAM_LOG_MS = 10_000;
 const MUST_GO_BEFORE_MS = 20_000;
 const FAREWELL_WAIT_MS = 3_000;
 const AUTO_SCAN_AFTER_PIN_MS = 5_000;
@@ -231,12 +232,15 @@ export class CallSession {
     this.relay('friend-cam', from, stream, source, LocalVideoTrack.createVideoTrack('friend-cam', source),
       new TrackPublishOptions({ source: TrackSource.SOURCE_CAMERA, simulcast: false }));
     void (async () => {
-      let frames = 0;
+      let frames = 0, relayed = 0, loggedAt = Date.now();
       try {
         for await (const { frame } of stream) {
           this.scanner.offer(frame);
           if (++frames === 1) log('caller_video_first_frame', { width: frame.width, height: frame.height });
-          source.captureFrame(cropRgba(frame, env.callerCrop));
+          const cropped = cropRgba(frame, env.callerCrop);
+          if (relayable(cropped)) { source.captureFrame(cropped); relayed++; }
+          // Live 1: the game's friend-cam looked black; this shows whether frames were flowing mid-call.
+          if (Date.now() - loggedAt > FRIEND_CAM_LOG_MS) { loggedAt = Date.now(); log('friend_cam_frames', { frames, relayed, in: `${frame.width}x${frame.height}`, out: `${cropped.width}x${cropped.height}` }); }
         }
       } catch (e) { warn('caller_video_ended', { error: errText(e) }); }
     })();

@@ -60,6 +60,14 @@ export class VideoRelay {
   }
 }
 
+/**
+ * libwebrtc rounds a published frame down to a multiple of 4 px (measured: 14x16 came out 12x16) and aborts the whole
+ * process on width 0. WebRTC sends 8x8 frames when a track restarts, and a tight crop makes those 2 px wide.
+ * 16 px is a guess with room for the encoder's own downscale steps; nothing that small is worth showing.
+ */
+const MIN_RELAY_PX = 16;
+export const relayable = (f: VideoFrame): boolean => f.width >= MIN_RELAY_PX && f.height >= MIN_RELAY_PX;
+
 /** Crops an RGBA frame to normalized [x0,y0,x1,y1], with even width and height. */
 export function cropRgba(f: VideoFrame, crop: [number, number, number, number]): VideoFrame {
   const rgba = f.type === VideoBufferType.RGBA ? f : f.convert(VideoBufferType.RGBA);

@@ -14,7 +14,8 @@ const schema = z.object({
   CHERT_PROJECT_ID: z.string().default(''),
   CHERT_LINE_ID: z.string().default(''),
   CALL_MAX_MS: z.coerce.number().default(285_000),
-  CALLER_CROP: z.string().default('0.08,0.12,0.92,0.88'),
+  // Measured on live call 1: Chert sends 1280x720 with the phone picture in the middle third, the number bar on top, and our own picture-in-picture bottom left.
+  CALLER_CROP: z.string().default('0.32,0.09,0.68,0.80'),
   ELEVENLABS_API_KEY: z.string().min(1),
   ELEVENLABS_VOICE_ID: z.string().min(1),
   ELEVENLABS_MODEL_ID: z.string().default('eleven_flash_v2_5'),

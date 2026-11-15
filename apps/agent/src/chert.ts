@@ -142,7 +142,8 @@ const lastRawEvents = new Map<string, string>();
  */
 export async function getEvents(callId: string): Promise<ChertEvent[]> {
   const { body } = await req(`/calls/${callId}/events`, { headers: headers() });
-  const text = JSON.stringify(body) ?? '';
+  // Chert sends a new request_id on every reply (live 1); without this the body logs on every poll.
+  const text = JSON.stringify(body, (k, v: unknown) => (k === 'request_id' ? undefined : v)) ?? '';
   if (lastRawEvents.get(callId) !== text) { lastRawEvents.set(callId, text); logRaw('chert_events_raw', body); }
   const events: ChertEvent[] = eventList(body).map((raw) => {
     const e = raw as Record<string, unknown>;

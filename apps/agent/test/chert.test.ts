@@ -161,6 +161,19 @@ test('the raw events body is logged when it changes, so the first live call show
   assert.equal(lines.filter((l) => l.includes('chert_events_raw')).length, 2);
 });
 
+test('a new request_id alone does not log the events body again (live 1: it logged every poll)', async () => {
+  const lines: string[] = [];
+  const realLog = console.log;
+  console.log = (s: string) => { lines.push(s); };
+  try {
+    for (const rid of ['r1', 'r2', 'r3']) {
+      stubFetch(() => Response.json({ data: { call_id: 'c', events: [{ id: 'e1', type: 'dialing' }] }, request_id: rid }));
+      await getEvents('raw-2');
+    }
+  } finally { console.log = realLog; }
+  assert.equal(lines.filter((l) => l.includes('chert_events_raw')).length, 1);
+});
+
 test('a terminal call status ends the call, as the reference loop did (coord #3)', () => {
   const kinds = Object.fromEntries(['ended', 'call_ended', 'completed', 'cancelled', 'canceled', 'failed', 'declined',
     'queued', 'allocating', 'dialing', 'ringing', 'active'].map((s) => [s, terminalStatus(s)]));
