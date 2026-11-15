@@ -16,11 +16,11 @@ export function Title() {
       <div className="title-wrap">
         <div className="row" style={{ gap: 18 }}>
           <HelmetEmblem />
-          <div className="eyebrow">Odyssey · Book XXII · HackUTA 2026</div>
+          <div className="eyebrow">Odyssey · Book XXII</div>
         </div>
         <div>
           <h1 className="h1 logo">ITHACA</h1>
-          <div className="logo-sub">Phone a Friend</div>
+          <div className="logo-sub logo-name2">Calling</div>
         </div>
         <Meander style={{ maxWidth: 420 }} />
         <p className="lore" style={{ maxWidth: 560, margin: 0 }}>

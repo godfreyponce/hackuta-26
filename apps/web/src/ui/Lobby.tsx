@@ -51,7 +51,7 @@ export function Lobby() {
       </div>
       <div className="lobby">
         <section className="panel col">
-          <div className="panel-title"><h2 className="h2">Phone a friend</h2></div>
+          <div className="panel-title"><h2 className="h2">Call a friend</h2></div>
           <p className="lore" style={{ margin: 0 }}>
             “Father, lo, now I will bring thee a shield and two spears and a helmet all of bronze.”
             <cite>Telemachus · Odyssey XXII</cite>

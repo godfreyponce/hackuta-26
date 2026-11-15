@@ -162,6 +162,8 @@ button, input, select { font: inherit; color: inherit; }
 .title-wrap { margin: auto 0; max-width: 760px; display: flex; flex-direction: column; gap: 26px; }
 .logo { font-family: var(--font-greek); font-style: normal; font-size: clamp(60px, 9.4vw, 140px); font-weight: 700; letter-spacing: 0.16em; margin-right: -0.16em; color: var(--ivory); text-shadow: 0 0 60px rgba(240, 138, 46, 0.22); }
 .logo-sub { font-family: var(--font-greek); font-weight: 700; letter-spacing: 0.5em; font-size: clamp(13px, 1.3vw, 17px); color: var(--brass); text-transform: uppercase; }
+/* "Ithaca Calling": the second word is part of the name, not a tagline — its own line, a third of the logo's size */
+.logo-name2 { font-size: clamp(26px, 3.4vw, 50px); letter-spacing: 0.62em; color: var(--brass-hi); margin-top: 4px; text-shadow: 0 2px 18px rgba(0,0,0,0.55); }
 .title-menu { display: flex; flex-direction: column; gap: 12px; max-width: 360px; }
 .title-foot { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
 .emblem { width: 64px; height: 64px; }

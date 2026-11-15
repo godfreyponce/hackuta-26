@@ -23,7 +23,7 @@ export const KEYMAP: [string, string][] = [
   ['A / D', 'Lean to dodge · S crouch'],
   ['Shift', 'Mouse drives your left hand (dual wield)'],
   ['E', 'Drink a potion'],
-  ['C', 'Phone a friend (call Telemachus)'],
+  ['C', 'Call a friend (Telemachus)'],
   ['Q', 'Ask Telemachus for a weapon'],
   ['T', 'Push-to-talk toggle · Esc pause'],
 ];

@@ -89,7 +89,7 @@ export async function ensureSession(): Promise<boolean> {
     return true;
   } catch (err) {
     console.warn('[session] failed', err);
-    pushToast({ kind: 'warn', title: 'SERVER UNAVAILABLE', sub: 'Playing offline — Phone a Friend is disabled' }, 3000);
+    pushToast({ kind: 'warn', title: 'SERVER UNAVAILABLE', sub: 'Playing offline — calling a friend is off' }, 3000);
     return false;
   }
 }

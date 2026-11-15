@@ -53,7 +53,7 @@ export function Setup() {
     } catch {
       // server unreachable: keep a local hero so the fight still runs (score just won't post)
       useApp.setState({ player: { id: `local-${Math.random().toString(36).slice(2, 10)}`, name: nm }, session: null });
-      pushToast({ kind: 'warn', title: 'PLAYING OFFLINE', sub: 'The server is unreachable — Phone a Friend is off' }, 2800);
+      pushToast({ kind: 'warn', title: 'PLAYING OFFLINE', sub: 'The server is unreachable — calling a friend is off' }, 2800);
       throw new OfflineError();
     }
   }
