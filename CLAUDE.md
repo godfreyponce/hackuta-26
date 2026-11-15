@@ -1,5 +1,7 @@
 # HackUTA 2026 team repo
 
-Read `event/MAIN-BRIEF.md` first, then `event/HANDOFF.md`. All event context lives in `event/` (research, reports, hub, briefs, coordinator log). It is gitignored because this repo goes public before the Devpost deadline. Never commit anything from `event/`.
+Event notes live in a local `event/` folder. Git ignores it, and it is never committed. Do not commit anything from it or copy its text into tracked files: this repo is public.
 
-The win-agent skills (`/hack-kickoff`, `/hack-coord`, `/hack-submit`) find this event as slug `hackuta-2026`: `~/Developer/hackutd-26/hackathons/events/hackuta-2026` is a symlink to `event/` here.
+Keys go in `.env.local` files, which git also ignores. Commit only `.env.example` files, with placeholder values.
+
+Each app folder has its own README. Read it before you change that folder.

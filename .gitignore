@@ -1,4 +1,4 @@
-# Private team context (research, hub, briefs). Never commit: this repo goes public.
+# Local team notes. Never commit: this repo is public.
 event/
 .claude/skills/refresh-discord
 
