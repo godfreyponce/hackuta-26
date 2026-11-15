@@ -52,9 +52,15 @@ export const CREATE_AFTER_CANCEL_MAX_MS = Math.max(...RETRY_DELAYS_MS) + 2 * CHE
 
 /**
  * A busy shared line: Chert holds our place. Repeat the create with the same key once `state` is no longer waiting.
- * turnUntil: Chert's `turn_until` in epoch ms, when it sends one.
+ * turnUntil: Chert's `turn_until` in epoch ms, when it sends one. callId: set once Chert placed the call from the queue.
  */
-export type QueueEntry = { id: string; state: string; position: number | null; turnUntil: number | null };
+export type QueueEntry = { id: string; state: string; position: number | null; turnUntil: number | null; callId: string | null };
+
+export const QUEUE_TURN_MS = 20_000; // docs.trychert.com/facetime/limits: "The turn lasts 20 seconds."
+export const TURN_UNTIL_SLACK_MS = 2_000; // guess: room for clock skew between Chert and us
+/** When our turn ends: Chert's turn_until, but never past the documented 20 s turn plus slack, so a bad value cannot stall us. */
+export const queueTurnEndsAt = (turnUntil: number | null, now: number): number =>
+  turnUntil === null ? now + QUEUE_TURN_MS : Math.min(turnUntil, now + QUEUE_TURN_MS + TURN_UNTIL_SLACK_MS);
 export type Created = { id: string; queued: boolean; status: string | undefined } | { queue: QueueEntry };
 
 type RawQueue = { id?: unknown; state?: unknown; position?: unknown; call_id?: unknown; turn_until?: unknown };
@@ -69,7 +75,10 @@ function queueEntry(body: unknown): QueueEntry | null {
   const q = rawQueue(body);
   if (typeof q?.id !== 'string') return null;
   const turnUntil = typeof q.turn_until === 'string' ? Date.parse(q.turn_until) : NaN;
-  return { id: q.id, state: String(q.state ?? 'unknown'), position: typeof q.position === 'number' ? q.position : null, turnUntil: Number.isNaN(turnUntil) ? null : turnUntil };
+  return {
+    id: q.id, state: String(q.state ?? 'unknown'), position: typeof q.position === 'number' ? q.position : null,
+    turnUntil: Number.isNaN(turnUntil) ? null : turnUntil, callId: typeof q.call_id === 'string' ? q.call_id : null,
+  };
 }
 
 export async function createCall(c: CreateCall, idempotencyKey: string, cancelled: () => boolean = () => false): Promise<Created> {

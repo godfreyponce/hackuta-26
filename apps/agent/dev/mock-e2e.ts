@@ -359,7 +359,8 @@ async function liveTurnRejectedOnce(): Promise<void> {
   await post('/fake-chert/_queue', { state: 'ready', rejects: 1, turnMs: 20_000 });
   const sent = Date.now() + 8_000;
   while (Date.now() < sent && (await fakeLast()).createCount === before) await sleep(100);
-  check('a 409 invalid_state on the turn is retried with the same key and places the call (call 5)', (await fakeLast()).createCount === before + 1 && (await fakeLast()).queue!.rejected === 1, (await fakeLast()).queue);
+  const placed = await fakeLast();
+  check('a 409 invalid_state on the turn is retried with the same key and places the call (call 5)', placed.createCount === before + 1 && placed.queue!.rejected === 1 && placed.queue!.state === 'placed', placed.queue);
   check('no failure shown to the web', !g.has('call.status', 'failed'));
   g.send('call.end');
   check('ends', await waitFor(() => g.has('call.status', 'ended'), 15_000));
@@ -383,6 +384,27 @@ async function liveTurnRejectedAlways(): Promise<void> {
   check('retried within the turn, then stopped', queue!.rejected >= 2 && queue!.rejected <= 5, queue!.rejected);
   check('no call placed', createCount === before, createCount - before);
   check('queue entry cancelled with DELETE', queue!.deletes === 1, queue!.deletes);
+  check('no FaceTime room left behind', !(await roomExists(`ft-${g.sid}-1`)));
+  await g.close();
+}
+
+/** placed: the entry shows call_id when polled. lostReply: the turn's create places the call but gets a 500, and every retry a 409. */
+async function liveTurnPlacedReplyLost(how: 'placed' | 'lostReply'): Promise<void> {
+  out('scenario', { name: `live: Chert placed the call from the queue but the reply was lost (${how}), the agent adopts the entry's call_id (reviewer step 2 a)` });
+  const { createCount: before, queue: oldQueue } = await fakeLast();
+  await post('/fake-chert/_next', { lineBusy: true });
+  const g = await openGame();
+  g.send('call.request', { friendId: 'friend-1' });
+  check('create queued by Chert', !!(await newQueue(oldQueue?.id)));
+  await post('/fake-chert/_queue', how === 'placed' ? { state: 'placed', placeCall: true } : { state: 'ready', loseReply: true });
+  await sleep(how === 'placed' ? 4_000 : 8_000);
+  const { call } = await fakeLast();
+  check('the call from the entry\'s call_id is adopted, no failure shown', !g.has('call.status', 'failed'), g.msgs.filter((m) => m.type === 'call.status'));
+  check('no second call placed', (await fakeLast()).createCount === before + 1, (await fakeLast()).createCount - before);
+  g.send('call.end');
+  check('ends', await waitFor(() => g.has('call.status', 'ended'), 15_000));
+  await sleep(1_000);
+  check('the adopted call is ended with POST /end', (await fakeLast()).call!.id === call!.id && (await fakeLast()).call!.endPosts === 1, (await fakeLast()).call!.endPosts);
   check('no FaceTime room left behind', !(await roomExists(`ft-${g.sid}-1`)));
   await g.close();
 }
@@ -473,6 +495,8 @@ if (health.mode === 'mock-call') {
   await liveQueueExpired();
   await liveTurnRejectedOnce();
   await liveTurnRejectedAlways();
+  await liveTurnPlacedReplyLost('placed');
+  await liveTurnPlacedReplyLost('lostReply');
   await liveEndDuringCreate();
   await liveStatusEnd();
   await liveFailedEnd();

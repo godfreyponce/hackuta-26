@@ -25,12 +25,24 @@ let lastCall: FakeCall | null = null;
 let createCount = 0;
 /** Chert's real busy-line reply (live 3): a queue entry, no call id, until a repeat POST with the same key finds it ready. */
 /** Call 5: real Chert answered the turn's repeat create with 409 invalid_state. `rejects` such answers come before one succeeds. */
-type FakeQueue = { id: string; key: string; body: string; state: string; gets: number; deletes: number; rejects: number; rejected: number; turnUntil: string | null };
+type FakeQueue = { id: string; key: string; body: string; state: string; gets: number; deletes: number; rejects: number; rejected: number; turnUntil: string | null; callId: string | null; loseReply: boolean };
 const queues = new Map<string, FakeQueue>();
 let lastQueue: FakeQueue | null = null;
-const queueBody = (q: FakeQueue) => ({ data: { queued: q.state === 'waiting', queue: { id: q.id, kind: 'call', state: q.state, position: q.state === 'waiting' ? 1 : null, expires_at: null, turn_until: q.turnUntil, call_id: null } } });
+const queueBody = (q: FakeQueue) => ({ data: { queued: q.state === 'waiting', queue: { id: q.id, kind: 'call', state: q.state, position: q.state === 'waiting' ? 1 : null, expires_at: null, turn_until: q.turnUntil, call_id: q.callId } } });
 /** oddShape: events come back in an unknown shape. endStatus: every POST /end answers with this status. lineBusy: queue the create. */
 let nextCreate: { queued?: boolean; lineBusy?: boolean; delayMs?: number; oddShape?: boolean; endStatus?: number } = {};
+/**
+ * Reviewer step 2 (a): Chert placed the call from the queue, but our create never got the reply. The entry carries
+ * call_id, and the call's key is not the queue key, so a repeat create hits the placed entry and gets a 409.
+ */
+function placeFromQueue(q: FakeQueue): void {
+  const c: FakeCall = { id: randomBytes(4).toString('hex'), key: `${q.key}#placed`, body: JSON.parse(q.body) as Record<string, unknown>, status: 'dialing', events: [], endPosts: 0, pollsAfterEnd: 0, agentTracksAtCreate: [], oddShape: false, endStatus: 0 };
+  calls.set(c.id, c);
+  lastCall = c;
+  createCount++;
+  Object.assign(q, { state: 'placed', callId: c.id });
+  log('fake_chert_placed_from_queue', { id: c.id, queue: q.id });
+}
 const rooms = new RoomServiceClient(LIVEKIT_URL.replace(/^wss:/, 'https:'), LIVEKIT_API_KEY, LIVEKIT_API_SECRET);
 
 async function fakeChert(method: string, path: string, req: IncomingMessage, json: (code: number, b: unknown) => void): Promise<void> {
@@ -38,8 +50,9 @@ async function fakeChert(method: string, path: string, req: IncomingMessage, jso
   if (method === 'POST' && path === '/_next') { nextCreate = JSON.parse((await body(req)).toString()); return json(200, {}); }
   if (method === 'GET' && path === '/_last') return json(200, { call: lastCall, createCount, queue: lastQueue });
   if (method === 'POST' && path === '/_queue') {
-    const { state, rejects = 0, turnMs } = JSON.parse((await body(req)).toString()) as { state: string; rejects?: number; turnMs?: number };
-    if (lastQueue) Object.assign(lastQueue, { state, rejects, turnUntil: turnMs ? new Date(Date.now() + turnMs).toISOString() : null });
+    const { state, rejects = 0, turnMs, placeCall = false, loseReply = false } = JSON.parse((await body(req)).toString()) as { state: string; rejects?: number; turnMs?: number; placeCall?: boolean; loseReply?: boolean };
+    if (lastQueue) Object.assign(lastQueue, { state, rejects, loseReply, turnUntil: turnMs ? new Date(Date.now() + turnMs).toISOString() : null });
+    if (lastQueue && placeCall) placeFromQueue(lastQueue);
     return json(200, {});
   }
   if (parts[0] === 'calls' && parts[1] === 'queue') {
@@ -69,10 +82,11 @@ async function fakeChert(method: string, path: string, req: IncomingMessage, jso
       waiting.rejects--; waiting.rejected++;
       return json(409, { error: { code: 'invalid_state', message: 'The operation is not valid in the current state' } });
     }
+    if (waiting?.loseReply) { placeFromQueue(waiting); return json(500, { error: { code: 'fake_reply_lost' } }); }
     if (waiting) waiting.state = 'placed';
     else if (nextCreate.lineBusy) {
       nextCreate = {};
-      const q: FakeQueue = { id: randomBytes(4).toString('hex'), key, body: raw, state: 'waiting', gets: 0, deletes: 0, rejects: 0, rejected: 0, turnUntil: null };
+      const q: FakeQueue = { id: randomBytes(4).toString('hex'), key, body: raw, state: 'waiting', gets: 0, deletes: 0, rejects: 0, rejected: 0, turnUntil: null, callId: null, loseReply: false };
       queues.set(q.id, q);
       lastQueue = q;
       log('fake_chert_queued', { id: q.id });
