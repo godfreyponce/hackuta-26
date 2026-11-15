@@ -5,6 +5,8 @@ import { buildHall, HALL, type HallRig } from './hall';
 import { Fx } from './fx';
 import { EnemyManager, type Attack, type Enemy, type HitInfo, type HitResult, type KillHow, type Outcome } from './enemies';
 import { WeaponManager, type HandView, type WeaponEnt } from './weapons';
+import { stabProfile } from './stab';
+import { ThrustReader } from './thrust';
 import { Gauntlet } from './hands';
 import { Trails } from './trails';
 import { loadBodyTemplate, type BodyTemplate } from './skinnedBody';
@@ -43,6 +45,7 @@ const AUTO_ARM = typeof location !== 'undefined' && new URLSearchParams(location
 const _sv1 = new THREE.Vector3();
 const _UP = new THREE.Vector3(0, 1, 0);
 const _gv1 = new THREE.Vector3(), _gv2 = new THREE.Vector3(), _gv3 = new THREE.Vector3(), _gv4 = new THREE.Vector3(), _gv5 = new THREE.Vector3(), _gv6 = new THREE.Vector3();
+const _gv7 = new THREE.Vector3(), _gv8 = new THREE.Vector3();
 const _gm = new THREE.Matrix4();
 const _gq = new THREE.Quaternion();
 const _sv2 = new THREE.Vector3();
@@ -145,6 +148,8 @@ export class Engine {
   /** a webcam release the flicker filter swallowed (so the next re-grip isn't read as "HANDS FULL") */
   private ignoredRelAt: Record<Hand, number> = { left: -9, right: -9 };
   private wasLive: Record<Hand, boolean> = { left: false, right: false };
+  /** webcam thrusts, per hand (thrust.ts) */
+  readonly thrusts: Record<Hand, ThrustReader> = { left: new ThrustReader(), right: new ThrustReader() };
   private unnockT = 0;
   private unarmedT = 0;
   private refuseT: Record<string, number> = {};
@@ -322,6 +327,11 @@ export class Engine {
         const vCap = 1 + 1.4 * Math.max(this.input.vCmd, this.input.thrustV);
         return { vCap: driven ? vCap : Math.min(vCap, 3), driven };
       },
+      // webcam: a thrust read from the hand's motion along the blade drives the stab (thrust.ts)
+      thrustOf: (hand) => (this.tracked ? this.thrusts[hand].stab : null),
+      // how much of a push along a lodged blade goes into him (the rest drives him back): a body player can't step
+      // in after his man, so more of his push goes in
+      pushIn: () => (this.tracked ? 0.9 : 0.75),
       onArrowsSpent: () => this.cb.toast({ kind: 'info', title: 'ARROWS SPENT', sub: 'Telemachus brings more between waves' }, 1400),
       speedScale: () => (this.input?.kind === 'keyboard_mouse' ? 0.65 : 1),
       onTake: (w, side) => this.onTake(w, side),
@@ -686,6 +696,7 @@ export class Engine {
     this.difficulty = difficulty;
     this.enemies.clear();
     this.weapons.resetForMatch();
+    this.fx.clearBlood();
     this.scoring.reset();
     this.forgedKills.clear();
     this.health = 100;
@@ -1061,9 +1072,20 @@ export class Engine {
         if (hs.visible) { this.backAt[side] = this.realT; this.glideFor[side] = this.realT - this.lostAt[side] > 0.4 ? 0.3 : 0; }
         else this.lostAt[side] = this.realT;
       }
+      // webcam thrust: read from the hand's low-lag velocity along the blade (thrust.ts); its lunge goes onto the hand
+      const thr = this.thrusts[side];
+      if (this.tracked) {
+        const w = this.weapons.heldBy(side);
+        const fwd = _gv7.set(hs.forward.x, hs.forward.y, hs.forward.z).applyAxisAngle(_UP, this.yaw).normalize();
+        const vel = _gv8.set(hs.vel.x, hs.vel.y, hs.vel.z).applyAxisAngle(_UP, this.yaw);
+        const depthAxis = _gv1.set(0, 0, 1).applyAxisAngle(_UP, this.yaw);
+        const armed = hs.visible && !!w && !!stabProfile(w) && this.realT - this.backAt[side] >= this.glideFor[side];
+        thr.update(this.realT, realDt, vel, fwd, depthAxis, armed, !!w && this.weapons.stabs.isLodged(w));
+      } else if (thr.ext || thr.on) thr.reset();
       if (hs.visible) {
         const tgt = this.handTarget[side].set(hs.pos.x, hs.pos.y, hs.pos.z).applyAxisAngle(new THREE.Vector3(0, 1, 0), this.yaw).add(this.eye);
         tgt.add(this.recoilOff[side]);
+        if (thr.ext > 1e-4) tgt.addScaledVector(_gv7.set(hs.forward.x, hs.forward.y, hs.forward.z).applyAxisAngle(_UP, this.yaw).normalize(), thr.ext);
         this.recoilOff[side].multiplyScalar(Math.exp(-realDt / 0.15));
         const prev = hv.pos.clone();
         // webcam reacquire: the hand glides in from where it rested (no teleport, and the jump is no punch)

@@ -3,6 +3,7 @@
 import * as THREE from 'three';
 import { flameTexture, glowTexture, smokeTexture } from './textures';
 import { rand } from './math';
+import { BloodDrops, BloodFloor, bloodBlend } from './blood';
 
 const VERT = /* glsl */ `
   attribute float aSize;
@@ -318,7 +319,11 @@ export class Fx {
   readonly add: Particles;   // additive: fire, sparks, embers, gold
   readonly flame: Particles; // additive flame sprites
   readonly smoke: Particles; // normal: smoke, dust
-  readonly gore: Particles;  // normal: blood droplets
+  readonly gore: Particles;  // normal: fine blood mist
+  /** blood in flight: wet streaks along their velocity (readable at play distance in the dim hall) */
+  readonly drops = new BloodDrops();
+  /** blood on the floor: splats where drops land, pools under the dead */
+  readonly floorBlood = new BloodFloor();
   private emberAcc = 0;
   private flameAcc = 0;
   private tmp = new THREE.Vector3();
@@ -334,9 +339,12 @@ export class Fx {
     this.flame = new Particles(220, flameTexture(), THREE.AdditiveBlending);
     this.smoke = new Particles(260, smokeTexture(), THREE.NormalBlending);
     this.smoke.points.renderOrder = 4;
-    this.gore = new Particles(500, glowTexture(), THREE.NormalBlending);
+    this.gore = new Particles(500, smokeTexture(), THREE.NormalBlending);
     this.gore.points.renderOrder = 4;
-    this.group.add(this.smoke.points, this.gore.points, this.flame.points, this.add.points, this.streaks.mesh, this.flash.group);
+    bloodBlend(this.gore.points.material as THREE.Material);
+    this.group.add(this.smoke.points, this.gore.points, this.flame.points, this.add.points, this.streaks.mesh, this.flash.group, this.drops.mesh, this.floorBlood.group);
+    // a drop that lands leaves its mark (a little wider than the drop: it spreads)
+    this.drops.onFloor = (x, z, w) => this.floorBlood.splat(x, z, Math.min(0.2, w * rand(4, 7)));
   }
 
   /**
@@ -411,6 +419,8 @@ export class Fx {
     this.flame.update(ambientDt);
     this.smoke.update(dt);
     this.gore.update(dt);
+    this.drops.update(dt);
+    this.floorBlood.update(dt);
   }
 
   sparks(pos: THREE.Vector3, dir: THREE.Vector3 | null, n = 14, color = '#ffd28a') {
@@ -425,26 +435,44 @@ export class Fx {
   }
 
   hitPuff(pos: THREE.Vector3, dir: THREE.Vector3, dmg = 20) {
-    // flesh hit: dark crimson spray scaled by damage + cloth dust
-    const n = Math.min(26, 6 + Math.round(dmg / 3));
-    this.gore.emit(n, { pos, vel: this.tmpV.copy(dir).multiplyScalar(1.8), spread: 1.4, life: [0.35, 0.7], size: [0.025, 0.06], color: '#7a1410', color2: '#2a0806', alpha: 0.95, gravity: 9, drag: 1.2 });
-    this.smoke.emit(4, { pos, vel: this.tmpV.copy(dir).multiplyScalar(1.0), spread: 0.6, life: [0.3, 0.5], size: [0.1, 0.18], grow: 2, color: '#3a1d17', alpha: 0.35, drag: 3 });
+    // flesh hit: a burst of blood off the wound (thrown on along the blade's travel and up out of the wound), a red
+    // mist that reads from across the hall, and a puff of cloth fibre
+    const n = Math.min(34, 10 + Math.round(dmg / 2));
+    const v = this.tmpV.copy(dir).normalize().multiplyScalar(1.9).add(this.tmpV2.set(0, 0.9, 0));
+    this.drops.emit(pos, { vel: v, spread: 1.3, n, size: [0.01, 0.026], life: [0.5, 1.0], shade: 0.25 });
+    this.mist(pos, dir, 0.6 + Math.min(1, dmg / 40));
+    this.smoke.emit(3, { pos, vel: this.tmpV.copy(dir).multiplyScalar(1.0), spread: 0.6, life: [0.3, 0.5], size: [0.1, 0.18], grow: 2, color: '#3a1d17', alpha: 0.3, drag: 3 });
+  }
+
+  /** a quick cloud of fine blood droplets: makes a hit read at a distance, gone in half a second */
+  mist(pos: THREE.Vector3, dir: THREE.Vector3, k = 1) {
+    this.gore.emit(Math.round(5 * k + 2), { pos, vel: this.tmpV.copy(dir).normalize().multiplyScalar(0.7), spread: 0.45, posJitter: 0.03, life: [0.25, 0.5], size: [0.08, 0.15], grow: 2.4, color: '#7d0a07', color2: '#3a0504', alpha: 0.55, gravity: 1.5, drag: 3.5 });
   }
 
   /** severed limb / stump: stylized arterial spray */
   blood(pos: THREE.Vector3, dir: THREE.Vector3, n = 10) {
-    this.gore.emit(n, { pos, vel: this.tmpV.copy(dir).multiplyScalar(2.2).add(this.tmpV2.set(0, 1.2, 0)), spread: 1.1, life: [0.4, 0.9], size: [0.02, 0.055], color: '#8a1712', color2: '#2a0806', alpha: 0.95, gravity: 9.8, drag: 0.8 });
+    const v = this.tmpV.copy(dir).normalize().multiplyScalar(2.2).add(this.tmpV2.set(0, 1.2, 0));
+    this.drops.emit(pos, { vel: v, spread: 1.1, n: Math.round(n * 1.3), size: [0.011, 0.028], life: [0.6, 1.2], shade: 0.15, drag: 0.5 });
+    if (n >= 8) this.mist(pos, dir, n / 14);
   }
 
   /** a directed jet of blood (stab entry / exit, pull-out, an artery) */
   spurt(pos: THREE.Vector3, dir: THREE.Vector3, n = 12, speed = 2.6, spread = 0.45) {
-    this.gore.emit(n, { pos, vel: this.tmpV.copy(dir).normalize().multiplyScalar(speed), spread, posJitter: 0.01, life: [0.4, 0.9], size: [0.016, 0.045], color: '#8f1611', color2: '#2a0806', alpha: 0.95, gravity: 9.8, drag: 0.5 });
+    const v = this.tmpV.copy(dir).normalize().multiplyScalar(speed);
+    this.drops.emit(pos, { vel: v, spread, n: Math.round(n * 1.25), size: [0.009, 0.024], life: [0.6, 1.2], shade: 0.1, drag: 0.4 });
+    if (n >= 10) this.mist(pos, dir, n / 16);
   }
 
   /** heavy drops falling off a blade or a wound */
   drip(pos: THREE.Vector3, n = 1) {
-    this.gore.emit(n, { pos, vel: this.tmpV.set(0, -0.25, 0), spread: 0.06, posJitter: 0.008, life: [0.45, 0.8], size: [0.012, 0.024], color: '#6e0f0b', color2: '#300806', alpha: 1, gravity: 9.8, drag: 0.15 });
+    this.drops.emit(pos, { vel: this.tmpV.set(0, -0.3, 0), spread: 0.05, n, size: [0.011, 0.02], life: [1.2, 1.8], posJitter: 0.006, shade: 0.45, drag: 0.1 });
   }
+
+  /** a pool of blood spreading under a body (a floor point; `size` = its final width, m) */
+  pool(pos: THREE.Vector3, size = 0.9, growS = 6) { this.floorBlood.pool(pos.x, pos.z, size, growS); }
+
+  /** a new match: the hall floor is scrubbed */
+  clearBlood() { this.floorBlood.clear(); this.drops.clear(); }
 
   explosion(pos: THREE.Vector3) {
     this.flame.emit(40, { pos, spread: 4.5, life: [0.35, 0.8], size: [0.8, 1.6], grow: 1.6, color: '#fff0c0', color2: '#c03a10', alpha: 0.9, drag: 4, gravity: -1.5 });

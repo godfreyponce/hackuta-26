@@ -10,6 +10,7 @@ import { audio } from './audio';
 import { PREFAB_BUILDERS, buildArrow, buildAspis, buildBlade, buildBowStave, buildSpear } from './weaponGeo';
 import { bakeWeapon, dressWeapon, prewarmWeaponSkins } from './weaponSkins';
 import { StabSystem, stabProfile } from './stab';
+import type { ThrustStab } from './thrust';
 import { ballisticDir, basisQuat, clamp, rand, rotateToward } from './math';
 
 export type WClass = WeaponClass | 'bow' | 'arrow';
@@ -78,6 +79,10 @@ export interface WeaponHooks {
   drivenHand?(): Hand | null;
   /** keyboard/mouse cut cap for a held blade: max strike speed from the cursor, and whether this blade is driven */
   cutCap?(hand: Hand): { vCap: number; driven: boolean } | null;
+  /** webcam: the thrust this hand is driving right now (its line and how hard), or null (thrust.ts) */
+  thrustOf?(hand: Hand): ThrustStab | null;
+  /** share of a push along a lodged blade that goes into him (the rest drives him back) */
+  pushIn?(): number;
   onChamber(w: WeaponEnt, at: THREE.Vector3): void;
   hitstop(ms: number): void;
   shake(v: number): void;
@@ -285,6 +290,7 @@ export class WeaponManager {
       shake: (v) => this.hooks.shake(v),
       freeWeapon: (w, v) => this.freeLodged(w, v),
       speedScale: () => this.hooks.speedScale(),
+      pushIn: () => this.hooks.pushIn?.() ?? 0.75,
     });
     this.group.add(this.arrows.mesh);
     prewarmWeaponSkins();
@@ -987,7 +993,9 @@ export class WeaponManager {
         // slow cuts are never silent: anything above a drift registers (≤1.5 m/s is a touch: tink, no damage)
         _sa.copy(a); _sb.subVectors(b, a);
         _sb.addScaledVector(_sb, w.spec.sharp ? 0.12 / Math.max(1e-3, _sb.length()) : 0).add(a);
-        if (sp > 0.8 && w.cls !== 'bow' && !this.stabs.isLodged(w)) this.tryHit(w, a, b, peak, 'melee', w.tip.clone().sub(w.prevTip).normalize(), realDt);
+        // (a webcam thrust is hit-tested however slowly the tracked hand is moving: the point is being driven)
+        const driving = !!w.hand && !!this.hooks.thrustOf?.(w.hand);
+        if ((sp > 0.8 || driving) && w.cls !== 'bow' && !this.stabs.isLodged(w)) this.tryHit(w, a, b, peak, 'melee', w.tip.clone().sub(w.prevTip).normalize(), realDt);
         else if (sp > 2.2 && w.cls === 'bow') this.tryHit(w, a, b, peak, 'melee', w.tip.clone().sub(w.prevTip).normalize(), realDt);
         w.segPrevA.copy(_sa); w.segPrevB.copy(_sb); w.segPrevT = this.realT;
       } else if (w.state === 'free') {
@@ -1106,7 +1114,12 @@ export class WeaponManager {
     // B&S stab: a held point driven along its own blade, the point leading. A thrust isn't forgiven its reach — the
     // point itself must be at his skin (wait a step for it; a thrust that stops short is a miss)
     let stabLike = false;
-    if (w.state === 'held' && source === 'melee' && stabProfile(w) && axis.dot(dir) > 0.8 && !(cap && !cap.driven)) {
+    // webcam: a thrust read from the tracked hand (thrust.ts) — the blade lined up with the line it's driven along is
+    // the point leading, whatever this one step's wobble says
+    const thr = w.state === 'held' && w.hand && source === 'melee' ? this.hooks.thrustOf?.(w.hand) ?? null : null;
+    // (a tracked hand's single step is mostly jitter: on its own it only counts as the point leading when it's fast)
+    const pointLeads = (axis.dot(dir) > 0.8 && (cap !== null || speed >= 2.5)) || (!!thr && axis.dot(thr.dir) > 0.8);
+    if (w.state === 'held' && source === 'melee' && stabProfile(w) && pointLeads && !(cap && !cap.driven)) {
       const ab = _st1.subVectors(b, a);
       const frac = _st2.subVectors(hit.point, a).dot(ab) / Math.max(1e-6, ab.lengthSq());
       if (frac >= 0.7) {
@@ -1161,10 +1174,18 @@ export class WeaponManager {
         if (d1.lengthSq() > 1e-6 && d2.lengthSq() > 1e-6) strokeTurn = THREE.MathUtils.radToDeg(d1.angleTo(d2));
       }
     }
+    // a webcam stab goes in along the thrust's line, as hard as the thrust (the armour still judges it)
+    let hitDir = dir;
+    if (stabLike && thr) {
+      const v = Math.min(thr.v, 16);
+      relSpeed = Math.max(relSpeed, v);
+      contactSpeed = Math.max(contactSpeed ?? 0, v);
+      hitDir = thr.dir;
+    }
     const info: HitInfo = {
-      amount: 0, zone, part: hit.part, point: hit.point, dir: dir.clone(), speed: relSpeed, sharp: w.spec.sharp,
+      amount: 0, zone, part: hit.part, point: hit.point, dir: hitDir.clone(), speed: relSpeed, sharp: w.spec.sharp,
       source, impulse: relSpeed * w.spec.massKg * (w.cls === 'blunt' || w.cls === 'shield' ? 14 : 7) + 40, weaponEntId: w.id,
-      bladeAxis: w.cls === 'arrow' ? dir.clone() : axis.clone(), massKg: w.spec.massKg * (w.state === 'held' ? HELD_MULT : 1), classDamage: w.spec.damage,
+      bladeAxis: w.cls === 'arrow' ? hitDir.clone() : axis.clone(), massKg: w.spec.massKg * (w.state === 'held' ? HELD_MULT : 1), classDamage: w.spec.damage,
       bladeA: a.clone(), bladeB: longB.clone(),
       bladePrevA: w.state === 'held' && this.realT - w.segPrevT < 0.05 ? w.segPrevA.clone() : undefined,
       bladePrevB: w.state === 'held' && this.realT - w.segPrevT < 0.05 ? w.segPrevB.clone() : undefined,
@@ -1194,6 +1215,13 @@ export class WeaponManager {
     if (w.forged) {
       w.durability--;
       if (w.durability <= 0 && w.state !== 'gone') { this.breakWeapon(w); return; }
+    }
+    // the edge that bit him comes away bloody, from the point back past where it cut (a stab coats the blade itself,
+    // as deep as it went in)
+    if (w.state === 'held' && w.spec.sharp && !info.stab && !info.graze && res.damage > 0 && contactFrac !== undefined) {
+      const tipY = w.segB.y / 0.98;
+      const span = w.segA.distanceTo(w.segB);
+      this.stabs.blood.bloody(w.id, w.obj, tipY, Math.min(tipY * 0.8, (1 - contactFrac) * span + 0.1));
     }
     // the point got in: it stays in him (corpses can be run through too)
     if (info.stab && w.state === 'held' && (res.penetrated || hit.enemy.dead)) this.stabs.tryLodge(w, hit.enemy, hit.part, info, res);

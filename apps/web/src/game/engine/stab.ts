@@ -38,6 +38,8 @@ export interface StabHooks {
   /** the weapon was left in a man who has now pulled it out (or his body is gone): it falls free */
   freeWeapon(w: WeaponEnt, vel: THREE.Vector3): void;
   speedScale(): number;
+  /** share of a push along the blade that goes into him (the rest drives him back); 0.75 if not given */
+  pushIn?(): number;
 }
 
 interface Lodge {
@@ -71,6 +73,9 @@ interface Lodge {
   leftAt: number;
   dripAcc: number;
   squelchT: number;
+  /** a cloak hanging behind him: how far along the blade the point comes out of it (m), and whether it has */
+  clothThick?: number;
+  clothOut?: boolean;
   /** re-grab: the blade eases from where it sits in him into your hand */
   blend: number;
   blendP: THREE.Vector3;
@@ -91,6 +96,11 @@ const _b = new THREE.Vector3();
 const _pc = new THREE.Vector3();
 const _pq = new THREE.Quaternion();
 const _s = new THREE.Vector3();
+
+/** how far a wound's blood soaks out: a full stain on the trunk, a smaller one on a limb or the head */
+export function stainSize(part: number, trunk: number) {
+  return part === P.Torso || part === P.Pelvis ? trunk : trunk * 0.55;
+}
 
 /** Ray vs capsule (a–b, radius r): distance along the ray to the first surface hit, or null. */
 function rayCapsule(o: THREE.Vector3, d: THREE.Vector3, a: THREE.Vector3, b: THREE.Vector3, r: number, far: number): number | null {
@@ -194,9 +204,11 @@ export class StabSystem {
     }
     let depth0 = _o.subVectors(tip, entry).dot(u);
     if (depth0 < -0.14) return false; // the point never got there
-    // the far side of him along the blade (for running him through)
+    // the far side of him along the blade (for running him through): his body, not a cloak hanging off his back
     const far = entry.clone().addScaledVector(u, 0.9);
-    const back = this.enemies.surfaceRay(e, part, far, u.clone().negate(), 0.88);
+    const back = this.enemies.surfaceRay(e, part, far, u.clone().negate(), 0.88, true);
+    // …which the point still has to come out through to be seen
+    const cloth = this.enemies.clothRay(e, far, u.clone().negate(), 0.88);
     let thick = back ? 0.9 - back.point.distanceTo(far) : 0;
     let exitN = back?.normal ?? null;
     let exitBone = back?.bone ?? null;
@@ -230,14 +242,16 @@ export class StabSystem {
     };
     (L as Lodge & { exitN?: THREE.Vector3 | null; exitBone?: THREE.Object3D | null }).exitN = exitN;
     (L as Lodge & { exitBone?: THREE.Object3D | null }).exitBone = exitBone;
+    if (cloth && 0.9 - cloth.dist > L.thick + 0.03) L.clothThick = 0.9 - cloth.dist;
     this.lodges.push(L);
     e.lodged++;
     // nothing of the lodged blade collides any more (it's inside him)
     w.collider.setCollisionGroups(GROUPS.none);
-    // the wound: a slit along the blade's width
-    // the wound: a slit (the blade held flat), the blood running down from it
-    this.enemies.woundDecals.add(e, part, bone, entry, normal!, Y, w.cls === 'spear' ? 0.12 : 0.11, 'entry', this.enemies.t, 6);
-    this.fx.spurt(entry, _n.copy(normal!).multiplyScalar(0.7).addScaledVector(u, -0.5), 16, 2.4, 0.55);
+    // the wound: a slit (the blade held flat), the blood soaking out round it and running down
+    this.enemies.woundDecals.add(e, part, bone, entry, normal!, Y, w.cls === 'spear' ? 0.13 : 0.12, 'entry', this.enemies.t, 6, stainSize(part, 0.26));
+    // the blood that comes out round the blade as it goes in: back toward you and down the front of him
+    this.fx.spurt(entry, _n.copy(normal!).multiplyScalar(0.7).addScaledVector(u, -0.5), 22, 2.4, 0.55);
+    this.fx.spurt(entry, _n.copy(normal!).multiplyScalar(0.5).add(_o.set(0, -0.6, 0)), 10, 1.2, 0.3);
     if (!e.dead) this.enemies.impaleStart(e, w.id, part, L.vital);
     else if (!res?.penetrated) audio.stabIn(0.6, res?.armor ?? 'gap', audio.pan(entry), part === P.Torso); // a corpse
     combatLog({ kind: 'stab', id: e.id, part, vital: L.vital, depth: +depth0.toFixed(3), thick: +L.thick.toFixed(3), speed: +info.speed.toFixed(2), armor: res?.armor, dead: e.dead, rayMs: +rayMs.toFixed(1) });
@@ -333,6 +347,7 @@ export class StabSystem {
   update(dt: number, realDt: number) {
     this.t += dt;
     const ss = this.hooks.speedScale();
+    const pushIn = this.hooks.pushIn?.() ?? 0.75;
     for (const L of [...this.lodges]) {
       const { w, e } = L;
       if (w.state === 'gone' || !this.enemies.list.includes(e)) { this.end(L, 'drop'); continue; }
@@ -357,7 +372,7 @@ export class StabSystem {
         // a corpse on the blade: the joint holds him; the blade slides through him as you push / pull
         if (!L.joint) this.makeJoint(L);
         if (!L.joint) { this.end(L, 'drop'); continue; }
-        L.depth = Math.min(L.depth + da * (da > 0 ? 0.75 : 0.92), L.prof.maxDepth);
+        L.depth = Math.min(L.depth + da * (da > 0 ? pushIn : 0.92), L.prof.maxDepth);
         L.joint.setAnchor1({ x: L.lat.x, y: L.prof.tipY - L.depth, z: L.lat.z });
         e.ragdoll!.bodies[L.part]!.wakeUp();
         // ripped sideways hard enough, the corpse comes off the blade
@@ -367,7 +382,7 @@ export class StabSystem {
         // a living man held on the blade. The depth follows your hand along the blade (a push drives him back a
         // little — 75% goes in — a pull draws the blade out); his body is moved so the wound sits on the blade at
         // that depth, whatever his own staggering does
-        const want = Math.min(L.prof.maxDepth, L.depth + da * (da > 0 ? 0.75 : 0.92));
+        const want = Math.min(L.prof.maxDepth, L.depth + da * (da > 0 ? pushIn : 0.92));
         const target = _a.copy(_tip).addScaledVector(_u, -want);
         const off = _n.subVectors(target, entryW);
         // sideways speed of the blade through him: fast enough, it rips out instead of dragging him
@@ -419,12 +434,23 @@ export class StabSystem {
       const ex = L as Lodge & { exitN?: THREE.Vector3 | null; exitBone?: THREE.Object3D | null };
       const exitW = entryW.clone().addScaledVector(_u, L.thick);
       this.enemies.skinOf(e); // bones in step with the pose before the wound is pinned to one
-      this.enemies.woundDecals.add(e, L.part, ex.exitBone ?? null, exitW, ex.exitN ?? _u, Y, 0.13, 'exit', this.enemies.t, 6);
-      this.fx.spurt(exitW, _u, 22, 3.0, 0.5);
+      this.enemies.woundDecals.add(e, L.part, ex.exitBone ?? null, exitW, ex.exitN ?? _u, Y, 0.14, 'exit', this.enemies.t, 6, stainSize(L.part, 0.28));
+      // out of his back: a gout along the blade, and a fan of it that clears his sides (you see it from the front)
+      this.fx.spurt(exitW, _u, 30, 3.0, 0.5);
+      this.fx.spurt(exitW, _n.copy(_u).multiplyScalar(0.4).add(_o.set(0, 1, 0)), 18, 2.6, 1.3);
       audio.boneCrunch(5, audio.pan(exitW));
       audio.fleshCut(0.7, false, audio.pan(exitW));
       this.hooks.shake(0.15);
       combatLog({ kind: 'runThrough', id: e.id, depth: +L.depth.toFixed(3), thick: +L.thick.toFixed(3) });
+      // the cloak on his back soaks it up where the point presses into it
+      if (L.clothThick) this.enemies.woundDecals.add(e, L.part, null, entryW.clone().addScaledVector(_u, L.clothThick), _u, Y, 0.26, 'stain', this.enemies.t, 0);
+    }
+    // on through the cloak on his back: a bloody tear in it where the point comes out
+    if (L.exited && L.clothThick && !L.clothOut && L.depth > L.clothThick + 0.015) {
+      L.clothOut = true;
+      const at = entryW.clone().addScaledVector(_u, L.clothThick);
+      this.enemies.woundDecals.add(e, L.part, null, at, _u, Y, 0.12, 'exit', this.enemies.t, 0, 0.22);
+      this.fx.spurt(at, _n.copy(_u).add(_o.set(0, 0.5, 0)), 14, 2.2, 0.8);
     }
     this.blood.bloody(w.id, w.obj, L.prof.tipY, Math.min(L.prof.maxDepth, Math.max(0.02, L.deepest)));
     // the wound runs down the blade, the point drips once it's out of his back
@@ -460,7 +486,7 @@ export class StabSystem {
           // ripped sideways: the edge opens a gash along the way it tore
           const tear = new THREE.Vector3().subVectors(_C.set(w.body.translation().x, w.body.translation().y, w.body.translation().z), L.prevC);
           if (tear.lengthSq() < 1e-6) tear.set(1, 0, 0);
-          this.enemies.woundDecals.add(e, L.part, null, entryW, nrm, tear, 0.13, 'gash', this.enemies.t, 5);
+          this.enemies.woundDecals.add(e, L.part, null, entryW, nrm, tear, 0.14, 'gash', this.enemies.t, 5, stainSize(L.part, 0.24));
         }
         for (const wd of e.wounds) if (this.enemies.t - wd.bornT < 30) wd.bleedUntil = Math.max(wd.bleedUntil, this.enemies.t + 5);
       }
