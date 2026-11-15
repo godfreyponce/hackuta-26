@@ -46,40 +46,10 @@ async function toUpright(rgba, width, height, rotation) {
 const agent = defineAgent({
   entry: async ctx => {
     await ctx.connect(undefined, AutoSubscribe.SUBSCRIBE_ALL);
-    const caller = await ctx.waitForParticipant();
-    log('caller_joined', { identity: caller.identity });
-
     // Newest caller frame, kept as received; converted to RGBA only when something needs pixels.
     let latest = null;
     let seen = { object: null, box: null, at: 0 };
     let stopped = false;
-
-    const watchVideo = async track => {
-      log('caller_video_subscribed', { sid: track.sid });
-      let count = 0, windowStart = Date.now(), lastSnapshot = 0, firstLogged = 0;
-      for await (const { frame, timestampUs, rotation } of new VideoStream(track)) {
-        if (stopped) break;
-        const now = Date.now();
-        latest = { frame, rotation, recvMs: now };
-        count++;
-        if (firstLogged < 3) { firstLogged++; log('caller_frame', { w: frame.width, h: frame.height, type: frame.type, rotation, timestampUs: String(timestampUs) }); }
-        if (now - windowStart >= 5000) {
-          log('caller_fps', { fps: +(count * 1000 / (now - windowStart)).toFixed(1), w: frame.width, h: frame.height, rotation });
-          count = 0; windowStart = now;
-        }
-        // One snapshot a second, named by receive time, for measuring delay against an on-screen clock.
-        if (now - lastSnapshot >= 1000) {
-          lastSnapshot = now;
-          const rgba = frame.convert(VideoBufferType.RGBA);
-          void (await toUpright(rgba.data, rgba.width, rgba.height, rotation)).jpeg({ quality: 85 }).toFile(`${RUN_DIR}frames/${now}.jpg`).catch(() => {});
-        }
-      }
-    };
-    const onTrack = (track, _pub, participant) => {
-      if (participant.identity === caller.identity && track.kind === TrackKind.KIND_VIDEO) void watchVideo(track);
-    };
-    ctx.room.on(RoomEvent.TrackSubscribed, onTrack);
-    for (const pub of caller.trackPublications.values()) if (pub.track && pub.kind === TrackKind.KIND_VIDEO) void watchVideo(pub.track);
 
     // Outgoing video: the cropped object (or the full caller view) with the agent's clock stamped on it.
     const source = new VideoSource(OUT_W, OUT_H);
@@ -128,6 +98,36 @@ const agent = defineAgent({
     await ctx.room.localParticipant.publishTrack(track, { source: TrackSource.SOURCE_CAMERA });
     const timer = setInterval(() => { void render(); push(); }, 1000 / OUT_FPS);
     const renderStats = setInterval(() => { log('out_fps', { rendered_per_s: +(rendered / 5).toFixed(1) }); rendered = 0; }, 5000);
+
+    const caller = await ctx.waitForParticipant();
+    log('caller_joined', { identity: caller.identity });
+
+    const watchVideo = async track => {
+      log('caller_video_subscribed', { sid: track.sid });
+      let count = 0, windowStart = Date.now(), lastSnapshot = 0, firstLogged = 0;
+      for await (const { frame, timestampUs, rotation } of new VideoStream(track)) {
+        if (stopped) break;
+        const now = Date.now();
+        latest = { frame, rotation, recvMs: now };
+        count++;
+        if (firstLogged < 3) { firstLogged++; log('caller_frame', { w: frame.width, h: frame.height, type: frame.type, rotation, timestampUs: String(timestampUs) }); }
+        if (now - windowStart >= 5000) {
+          log('caller_fps', { fps: +(count * 1000 / (now - windowStart)).toFixed(1), w: frame.width, h: frame.height, rotation });
+          count = 0; windowStart = now;
+        }
+        // One snapshot a second, named by receive time, for measuring delay against an on-screen clock.
+        if (now - lastSnapshot >= 1000) {
+          lastSnapshot = now;
+          const rgba = frame.convert(VideoBufferType.RGBA);
+          void (await toUpright(rgba.data, rgba.width, rgba.height, rotation)).jpeg({ quality: 85 }).toFile(`${RUN_DIR}frames/${now}.jpg`).catch(() => {});
+        }
+      }
+    };
+    const onTrack = (track, _pub, participant) => {
+      if (participant.identity === caller.identity && track.kind === TrackKind.KIND_VIDEO) void watchVideo(track);
+    };
+    ctx.room.on(RoomEvent.TrackSubscribed, onTrack);
+    for (const pub of caller.trackPublications.values()) if (pub.track && pub.kind === TrackKind.KIND_VIDEO) void watchVideo(pub.track);
 
     const session = new voice.AgentSession({ llm: new google.beta.realtime.RealtimeModel({ voice: 'Puck' }) });
 
