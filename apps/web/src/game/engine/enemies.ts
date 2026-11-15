@@ -155,6 +155,8 @@ export interface Enemy {
   /** a pulled-out stab bleeds (hp/s) until */
   woundBleedUntil: number;
   woundBleedRate: number;
+  /** the pool of blood still to spread under his body once it has come to rest (final width, m; 0 = done) */
+  poolSize?: number;
 }
 
 export interface HitInfo {
@@ -277,6 +279,8 @@ const SEVER: Partial<Record<number, number>> = {
   [P.ULegL]: 14.0, [P.ULegR]: 14.0, [P.LLegL]: 11.0, [P.LLegR]: 11.0,
 };
 const NECK_R = 0.06;      // neck radius at scale 1
+/** worn layers that hang loose off him (a blade that runs him through has to come out through these too) */
+const LOOSE_CLOTH = ['cloak', 'pelt'] as const;
 const BLADE_HALF = 0.05;  // xiphos half-width + a hair (the test is on the blade's centre line)
 const _n1 = new THREE.Vector3();
 const _n2 = new THREE.Vector3();
@@ -446,6 +450,7 @@ export class EnemyManager {
           this.list.splice(i, 1);
         }
         this.bleed(e, dt);
+        this.spreadPool(e);
         continue;
       }
       e.stateT += dt;
@@ -477,6 +482,25 @@ export class EnemyManager {
     for (const e of this.list) if (e.dead) rags++;
     if (rags > MAX_RAGDOLLS) this.evictOldestRagdoll();
     this.updateArrows(dt, head);
+  }
+
+  /** once his body has come to rest on the floor (or after 2.5 s), the pool spreads out under it over ~6 s */
+  private spreadPool(e: Enemy) {
+    if (!e.poolSize || this.t - e.diedAt < 0.5) return;
+    const tb = e.ragdoll?.bodies[P.Torso];
+    const t = tb?.translation();
+    if (tb && t) {
+      const lv = tb.linvel();
+      if (Math.hypot(lv.x, lv.y, lv.z) > 0.4 && t.y > 0.45 && this.t - e.diedAt < 2.5) return;
+      this.fx.pool(_v.set(t.x, 0, t.z), e.poolSize * e.look.scale, 6);
+      // a beheaded man empties from the neck as well
+      if (e.severed.has(P.Head)) {
+        const r = tb.rotation();
+        const n = _v2.set(0, 0.3 * e.look.scale, 0).applyQuaternion(_q.set(r.x, r.y, r.z, r.w)).add(_v.set(t.x, t.y, t.z));
+        this.fx.pool(_v.set(n.x, 0, n.z), 0.75 * e.look.scale, 4);
+      }
+    } else this.fx.pool(_v.set(e.pose[P.Torso].c.x, 0, e.pose[P.Torso].c.z), e.poolSize, 6);
+    e.poolSize = 0;
   }
 
   private bleed(e: Enemy, dt: number) {
@@ -1400,8 +1424,10 @@ export class EnemyManager {
     this.renderer.flash[e.slot] = Math.min(1, 0.5 + dmg / 60);
     if (!res.glanced) {
       this.fx.hitPuff(info.point, info.dir, dmg);
-      // a committed cut leaves a gash on him (stabs leave their own holes)
-      if (info.sharp && !thrust && !info.graze && !info.noCut && info.source === 'melee' && tier >= 2) this.addGash(e, info);
+      // every edge that bit leaves its gash on him (held or thrown; held stabs leave their own holes); a point that
+      // went in and didn't stay (an arrow, a thrown spear, a stab that couldn't lodge) leaves a puncture
+      if (info.sharp && !thrust && (!info.noCut || info.graze) && (info.source === 'melee' || info.source === 'thrown') && tier >= 1) this.addGash(e, info);
+      else if (info.sharp && thrust && !info.stab && !info.graze && info.source !== 'bomb') this.addGash(e, info, true);
       // the missing sound: a blade going in (through bronze it also rings the plate)
       if (info.sharp && info.source !== 'bomb') {
         const I = Math.min(1, Math.max(0, ((info.contactSpeed ?? info.speed) - 1.5) / 10.5));
@@ -1678,6 +1704,8 @@ export class EnemyManager {
     e.diedAt = this.t;
     e.state = 'dead';
     e.impale = null;
+    // he bleeds out where he falls: a beheading, a run-through or an opened throat leaves the widest pool
+    e.poolSize = info.source === 'bomb' ? 0.7 : how.decapitated || how.impaled === 'through' || throatDeath ? 1.25 : how.impaled || how.severed !== null ? 1.05 : 0.85;
     (info as HitInfo & { airborne?: boolean }).airborne = wasDown && pelvisY >= 0.8;
     // a clean beheading is swift - no freeze, the blade carries on through; other deaths bite briefly
     this.hooks.hitstop(how.decapitated ? 0 : how.impaled ? 60 : info.source === 'bomb' ? 120 : 110);
@@ -1698,15 +1726,25 @@ export class EnemyManager {
   }
 
   /** a gash on his skin where the edge went in, running the way the edge travelled */
-  private addGash(e: Enemy, info: HitInfo) {
+  private addGash(e: Enemy, info: HitInfo, puncture = false) {
     const p = e.pose[info.part];
     segSegDist2(info.point, info.point, p.a, p.b, _a1, _a2);
     const n = _a3.subVectors(info.point, _a2);
     if (n.lengthSq() < 1e-6) return;
     n.normalize();
-    const hit = this.surfaceRay(e, info.part, info.point.clone().addScaledVector(n, 0.15), n.clone().negate(), 0.32);
+    // a held edge sweeping across him first touches his flank, but it drags across the side of him facing you as it
+    // goes through: the cut opens there (where you can see it), at the height it bit
+    if (!puncture && info.source === 'melee') {
+      const toYou = _v.subVectors(this.hooks.playerHead(), _a2).setY(0);
+      if (toYou.lengthSq() > 1e-6) n.multiplyScalar(0.35).addScaledVector(toYou.normalize(), 0.65).normalize();
+    }
+    const hit = this.surfaceRay(e, info.part, _a2.clone().addScaledVector(n, 0.4), n.clone().negate(), 0.45);
     if (!hit) return;
-    this.woundDecals.add(e, info.part, hit.bone, hit.point, hit.normal, info.dir, 0.1 + Math.min(0.07, info.speed * 0.005), 'gash', this.t, 2.5);
+    const trunk = info.part === P.Torso || info.part === P.Pelvis;
+    if (puncture) { this.woundDecals.add(e, info.part, hit.bone, hit.point, hit.normal, UP, 0.08, 'entry', this.t, 3, trunk ? 0.18 : 0.1); return; }
+    // (a graze — the same sweep brushing a second part of him — leaves a lighter line, without the soak)
+    const size = (0.1 + Math.min(0.07, info.speed * 0.005)) * (info.graze ? 0.65 : 1);
+    this.woundDecals.add(e, info.part, hit.bone, hit.point, hit.normal, info.dir, size, 'gash', this.t, info.graze ? 1 : 2.5, info.graze ? 0 : size * (trunk ? 1.7 : 1.05));
   }
 
   /** his voice, at most one cry per ~half second per man (the audio engine also limits the crowd) */
@@ -1735,11 +1773,17 @@ export class EnemyManager {
 
   /** The outermost surface of a wooer along a ray — his worn layers (chiton, cuirass, cloak…) or the realistic skin of
    *  that part — so a wound decal sits where it can be seen. */
-  surfaceRay(e: Enemy, part: number, origin: THREE.Vector3, dir: THREE.Vector3, far: number): { point: THREE.Vector3; normal: THREE.Vector3; bone: THREE.Object3D | null } | null {
+  surfaceRay(e: Enemy, part: number, origin: THREE.Vector3, dir: THREE.Vector3, far: number, bodyOnly = false): { point: THREE.Vector3; normal: THREE.Vector3; bone: THREE.Object3D | null } | null {
     const s = this.skinOf(e)?.surfaceRay(part, origin, dir, far) ?? null;
-    const l = this.renderer.surfaceRay(e.slot, origin, dir, far);
+    // (bodyOnly: his body and what's fitted to it — not the cloak or pelt hanging loose off his shoulders)
+    const l = this.renderer.surfaceRay(e.slot, origin, dir, far, undefined, bodyOnly ? LOOSE_CLOTH : undefined);
     if (s && (!l || s.point.distanceTo(origin) <= l.dist)) return s;
     return l ? { point: l.point, normal: l.normal, bone: null } : null;
+  }
+
+  /** Where a ray meets the loose cloth hanging off him (cloak, pelt), if it does. */
+  clothRay(e: Enemy, origin: THREE.Vector3, dir: THREE.Vector3, far: number) {
+    return this.renderer.surfaceRay(e.slot, origin, dir, far, LOOSE_CLOTH);
   }
 
   /** Where the point went in decides how long he lives with it. */

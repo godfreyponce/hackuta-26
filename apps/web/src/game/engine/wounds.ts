@@ -3,8 +3,10 @@
 // follow the skin alive and on the ragdoll. One instanced draw call per wound kind.
 import * as THREE from 'three';
 import type { PartPose } from './humanoid';
+import { bloodBlend } from './blood';
 
-export type WoundKind = 'entry' | 'exit' | 'gash';
+/** entry/exit: stab holes · gash: an edge's cut · stain: the blood soaking out around a wound and running down */
+export type WoundKind = 'entry' | 'exit' | 'gash' | 'stain';
 export interface Wound {
   part: number;
   /** bone of the realistic body the wound rides on (null → the capsule part's frame) */
@@ -31,21 +33,22 @@ const _b = new THREE.Vector3();
 const _s = new THREE.Vector3();
 const _q = new THREE.Quaternion();
 const _qi = new THREE.Quaternion();
+const _UP = new THREE.Vector3(0, 1, 0);
 
 /** procedural decal textures (no image files): dark wet hole, ragged blood around it */
 function woundTexture(kind: WoundKind): THREE.CanvasTexture {
   const S = 128;
   const c = document.createElement('canvas'); c.width = c.height = S;
   const x = c.getContext('2d')!;
-  let seed = kind === 'entry' ? 11 : kind === 'exit' ? 23 : 37;
+  let seed = kind === 'entry' ? 11 : kind === 'exit' ? 23 : kind === 'gash' ? 37 : 53;
   const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
   x.translate(S / 2, S / 2);
-  // blood stain: overlapping soft blotches
+  // blood stain: overlapping soft blotches (a fresh, saturated red: the grade keeps blood red, the light is dim)
   const blot = (r: number, a: number, n: number, spreadX: number, spreadY: number) => {
     for (let i = 0; i < n; i++) {
       const px = (rnd() - 0.5) * spreadX, py = (rnd() - 0.5) * spreadY, rr = r * (0.5 + rnd() * 0.8);
       const g = x.createRadialGradient(px, py, 0, px, py, rr);
-      g.addColorStop(0, `rgba(96,8,6,${a})`); g.addColorStop(0.6, `rgba(70,5,4,${a * 0.7})`); g.addColorStop(1, 'rgba(60,4,3,0)');
+      g.addColorStop(0, `rgba(168,14,9,${a})`); g.addColorStop(0.6, `rgba(140,10,7,${a * 0.8})`); g.addColorStop(1, 'rgba(110,6,4,0)');
       x.fillStyle = g; x.beginPath(); x.arc(px, py, rr, 0, Math.PI * 2); x.fill();
     }
   };
@@ -54,33 +57,41 @@ function woundTexture(kind: WoundKind): THREE.CanvasTexture {
     for (let i = 0; i < n; i++) {
       const px = (rnd() - 0.5) * w0, L = len * (0.5 + rnd() * 0.7), wd = 2.5 + rnd() * 3;
       const g = x.createLinearGradient(0, y0, 0, y0 + L);
-      g.addColorStop(0, 'rgba(92,7,5,0.95)'); g.addColorStop(0.8, 'rgba(70,5,4,0.85)'); g.addColorStop(1, 'rgba(60,4,3,0)');
+      g.addColorStop(0, 'rgba(160,12,8,0.97)'); g.addColorStop(0.8, 'rgba(130,9,6,0.9)'); g.addColorStop(1, 'rgba(110,6,4,0)');
       x.fillStyle = g; x.beginPath(); x.ellipse(px, y0 + L / 2, wd, L / 2, 0, 0, Math.PI * 2); x.fill();
-      x.beginPath(); x.arc(px, y0 + L - 2, wd * 1.15, 0, Math.PI * 2); x.fillStyle = 'rgba(80,6,4,0.7)'; x.fill();
+      x.beginPath(); x.arc(px, y0 + L - 2, wd * 1.15, 0, Math.PI * 2); x.fillStyle = 'rgba(140,10,6,0.8)'; x.fill();
     }
   };
-  if (kind === 'entry') {
-    blot(22, 0.9, 10, 50, 26);
-    runnels(4, 34, 4, 52);
-    // the slit the blade cut (the blade held flat): dark, wet, a lip of torn skin
-    x.fillStyle = 'rgba(125,22,16,0.97)';
-    x.beginPath(); x.ellipse(0, 0, 33, 9, 0, 0, Math.PI * 2); x.fill();
-    x.fillStyle = 'rgba(16,2,2,1)';
-    x.beginPath(); x.ellipse(0, 0, 27, 4.5, 0, 0, Math.PI * 2); x.fill();
+  if (kind === 'stain') {
+    // soaked into the cloth / skin round the wound, running down in streams
+    blot(30, 0.85, 14, 60, 44);
+    blot(18, 0.9, 6, 30, 20);
+    runnels(7, 56, 6, 58);
+  } else if (kind === 'entry') {
+    blot(22, 0.95, 10, 50, 26);
+    runnels(5, 38, 4, 56);
+    // the slit the blade cut (the blade held flat): dark, wet, a lip of torn, bright flesh
+    x.fillStyle = 'rgba(190,34,22,1)';
+    x.beginPath(); x.ellipse(0, 0, 35, 11, 0, 0, Math.PI * 2); x.fill();
+    x.fillStyle = 'rgba(40,3,2,1)';
+    x.beginPath(); x.ellipse(0, 0, 28, 5, 0, 0, Math.PI * 2); x.fill();
   } else if (kind === 'exit') {
-    blot(30, 0.92, 12, 64, 50);
-    runnels(5, 44, 10, 50);
+    blot(30, 0.95, 12, 64, 50);
+    runnels(6, 48, 10, 54);
     // ragged burst hole
-    x.fillStyle = 'rgba(110,16,12,0.95)';
+    x.fillStyle = 'rgba(185,30,20,1)';
     x.beginPath();
     for (let i = 0; i <= 18; i++) { const a = (i / 18) * Math.PI * 2, r = (i % 2 ? 13 : 22) * (0.7 + rnd() * 0.5); x.lineTo(Math.cos(a) * r * 0.6, Math.sin(a) * r); }
     x.fill();
-    x.fillStyle = 'rgba(16,2,2,1)';
+    x.fillStyle = 'rgba(40,3,2,1)';
     x.beginPath(); x.ellipse(0, 0, 5, 20, 0, 0, Math.PI * 2); x.fill();
   } else {
-    blot(14, 0.8, 14, 20, 110);
-    x.fillStyle = 'rgba(20,2,2,1)';
-    x.beginPath(); x.ellipse(0, 0, 3, 54, 0, 0, Math.PI * 2); x.fill();
+    // a cut: a long, open red line, bleeding along its length
+    blot(14, 0.9, 16, 22, 112);
+    x.fillStyle = 'rgba(190,34,22,1)';
+    x.beginPath(); x.ellipse(0, 0, 6, 57, 0, 0, Math.PI * 2); x.fill();
+    x.fillStyle = 'rgba(45,4,3,1)';
+    x.beginPath(); x.ellipse(0, 0, 2.6, 52, 0, 0, Math.PI * 2); x.fill();
   }
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
@@ -96,19 +107,29 @@ export class WoundDecals {
   constructor() {
     const geo = new THREE.PlaneGeometry(1, 1);
     const make = (kind: WoundKind) => {
-      const mat = new THREE.MeshStandardMaterial({
-        map: woundTexture(kind), transparent: true, depthWrite: false, roughness: 0.62, metalness: 0, envMapIntensity: 0.15,
-        polygonOffset: true, polygonOffsetFactor: -10, polygonOffsetUnits: -20, side: THREE.DoubleSide,
-      });
+      const map = woundTexture(kind);
+      // wet (a sheen that catches the fire) and faintly self-lit, so a wound reads on a man standing in shadow
+      const mat = bloodBlend(new THREE.MeshStandardMaterial({
+        map, transparent: true, depthWrite: false, roughness: 0.3, metalness: 0, envMapIntensity: 0.5,
+        emissive: new THREE.Color(1, 1, 1), emissiveMap: map, emissiveIntensity: 0.1,
+        polygonOffset: true, polygonOffsetFactor: kind === 'stain' ? -8 : -10, polygonOffsetUnits: kind === 'stain' ? -16 : -20, side: THREE.DoubleSide,
+      }));
+      // a decal is a flat card on a round body: seen edge-on (his side, from your side) it would stand off him, so it
+      // fades out at grazing angles — the wide stains firmly, the small wound marks only when nearly edge-on
+      const [f0, f1] = kind === 'stain' ? [0.22, 0.55] : [0.05, 0.25];
+      mat.onBeforeCompile = (sh) => {
+        sh.fragmentShader = sh.fragmentShader.replace('#include <normal_fragment_maps>',
+          `#include <normal_fragment_maps>\n  diffuseColor.a *= smoothstep(${f0.toFixed(2)}, ${f1.toFixed(2)}, abs(dot(normal, normalize(vViewPosition))));`);
+      };
       const m = new THREE.InstancedMesh(geo, mat, this.cap);
       m.frustumCulled = false;
       m.count = 0;
-      m.renderOrder = 2;
+      m.renderOrder = kind === 'stain' ? 1 : 2;
       m.name = `wounds-${kind}`;
       this.group.add(m);
       return m;
     };
-    this.meshes = { entry: make('entry'), exit: make('exit'), gash: make('gash') };
+    this.meshes = { stain: make('stain'), entry: make('entry'), exit: make('exit'), gash: make('gash') };
   }
 
   /**
@@ -116,7 +137,14 @@ export class WoundDecals {
    * the surface. With a bone, the wound is stored in the bone's frame (its matrixWorld must be current).
    */
   add(owner: WoundOwner, part: number, bone: THREE.Object3D | null, point: THREE.Vector3, normal: THREE.Vector3,
-    tangent: THREE.Vector3, size: number, kind: WoundKind, now: number, bleed = 4) {
+    tangent: THREE.Vector3, size: number, kind: WoundKind, now: number, bleed = 4, stain = 0) {
+    this.push(owner, part, bone, point, normal, tangent, size, kind, now, bleed);
+    // the blood soaking out round it and running down (spreads over a few seconds; doesn't bleed by itself)
+    if (stain > 0) this.push(owner, part, bone, point, normal, _UP, stain, 'stain', now, 0);
+  }
+
+  private push(owner: WoundOwner, part: number, bone: THREE.Object3D | null, point: THREE.Vector3, normal: THREE.Vector3,
+    tangent: THREE.Vector3, size: number, kind: WoundKind, now: number, bleed: number) {
     const n = _n.copy(normal).normalize();
     const t = _t.copy(tangent).addScaledVector(n, -tangent.dot(n));
     if (t.lengthSq() < 1e-6) t.set(0, 1, 0).addScaledVector(n, -n.y);
@@ -137,8 +165,8 @@ export class WoundDecals {
       nl = n.clone().applyQuaternion(_qi);
       tl = t.clone().applyQuaternion(_qi);
     }
-    owner.wounds.push({ part, bone, local, nLocal: nl, tLocal: tl, size, kind, bornT: now, bleedUntil: now + bleed, spin: (Math.random() - 0.5) * 0.25 });
-    if (owner.wounds.length > 10) owner.wounds.shift();
+    owner.wounds.push({ part, bone, local, nLocal: nl, tLocal: tl, size, kind, bornT: now, bleedUntil: now + bleed, spin: (Math.random() - 0.5) * (kind === 'stain' ? 0.5 : 0.25) });
+    if (owner.wounds.length > 20) owner.wounds.shift();
   }
 
   /** World position / normal of a wound (for bleeding). */
@@ -156,7 +184,7 @@ export class WoundDecals {
   }
 
   render(owners: Iterable<WoundOwner>, now: number) {
-    const count: Record<WoundKind, number> = { entry: 0, exit: 0, gash: 0 };
+    const count: Record<WoundKind, number> = { entry: 0, exit: 0, gash: 0, stain: 0 };
     for (const o of owners) {
       for (const w of o.wounds) {
         if (o.severed.has(w.part)) continue; // the limb's skin went with the gib
@@ -174,15 +202,18 @@ export class WoundDecals {
           _n.copy(w.nLocal).applyQuaternion(pp.q);
           _t.copy(w.tLocal).applyQuaternion(pp.q);
         }
-        // a fresh wound opens over ~80 ms
-        const grow = Math.min(1, 0.35 + (now - w.bornT) / 0.08);
-        _b.addScaledVector(_n, 0.007);
+        // a fresh wound opens over ~80 ms; its stain soaks outward over ~2.5 s (sitting a little low: it runs down)
+        const age = now - w.bornT;
+        const grow = w.kind === 'stain' ? 0.45 + 0.55 * (1 - Math.pow(1 - Math.min(1, age / 2.5), 2)) : Math.min(1, 0.35 + age / 0.08);
+        _b.addScaledVector(_n, w.kind === 'stain' ? 0.006 : 0.007);
+        if (w.kind === 'stain') _b.addScaledVector(_t, -0.14 * w.size * grow);
         const xAx = _s.crossVectors(_t, _n).normalize();
         _m.makeBasis(xAx, _t, _n);
         _q.setFromRotationMatrix(_m);
         if (w.spin) _q.multiply(_qi.setFromAxisAngle(_p.set(0, 0, 1), w.spin));
         const sz = w.size * grow;
-        _m2.compose(_b, _q, _p.set(sz * (w.kind === 'gash' ? 0.5 : 1), sz, 1));
+        // (a stain runs down more than it spreads across: narrow, so it stays on the curve of him)
+        _m2.compose(_b, _q, _p.set(sz * (w.kind === 'gash' ? 0.5 : w.kind === 'stain' ? 0.62 : 1), sz, 1));
         mesh.setMatrixAt(i, _m2);
         count[w.kind] = i + 1;
       }
@@ -217,10 +248,11 @@ export class BladeBlood {
     const coat: Coat = { parts: [], mats: [], uCut: [], uAlpha, cover: 0, t: 0 };
     for (const src of sources) {
       const uCut = { value: 1e3 };
-      const mat = new THREE.MeshStandardMaterial({
-        color: '#5c0704', roughness: 0.22, metalness: 0.15, transparent: true, depthWrite: false,
+      const mat = bloodBlend(new THREE.MeshStandardMaterial({
+        color: '#8a0b06', roughness: 0.2, metalness: 0.1, transparent: true, depthWrite: false,
+        emissive: '#3a0302', emissiveIntensity: 0.35,
         polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4,
-      });
+      }));
       mat.onBeforeCompile = (sh) => {
         sh.uniforms.uCut = uCut; sh.uniforms.uAlpha = uAlpha;
         sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vBloodP;')
@@ -268,7 +300,7 @@ export class BladeBlood {
       // fresh → glistening; dries darker and duller; fades after 40 s
       c.uAlpha.value = c.t < 30 ? 0.95 : Math.max(0, 0.95 - (c.t - 30) / 10);
       const dry = Math.min(1, c.t / 14);
-      for (const m of c.mats) { m.roughness = 0.22 + 0.5 * dry; m.color.setRGB(0.36 - 0.18 * dry, 0.03 - 0.015 * dry, 0.016); }
+      for (const m of c.mats) { m.roughness = 0.2 + 0.5 * dry; m.color.setRGB(0.52 - 0.3 * dry, 0.018 - 0.008 * dry, 0.012 - 0.004 * dry); m.emissiveIntensity = 0.35 * (1 - 0.7 * dry); }
       if (c.uAlpha.value <= 0) { for (const p of c.parts) p.mesh.visible = false; c.cover = 0; }
       void id;
     }

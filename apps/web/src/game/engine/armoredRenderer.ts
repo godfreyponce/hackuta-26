@@ -175,12 +175,13 @@ export class ArmoredRenderer {
    * First surface of this warrior's worn layers (chiton, cuirass, belt, skirt, cloak, greaves… and the capsule body
    * when there's no realistic one) along a ray — where a wound decal has to sit to be seen over the clothing.
    */
-  surfaceRay(slot: number, origin: THREE.Vector3, dir: THREE.Vector3, far: number): { point: THREE.Vector3; normal: THREE.Vector3; dist: number } | null {
+  surfaceRay(slot: number, origin: THREE.Vector3, dir: THREE.Vector3, far: number, only?: readonly string[], skip?: readonly string[]): { point: THREE.Vector3; normal: THREE.Vector3; dist: number } | null {
     const rc = this.rayCaster ??= new THREE.Raycaster();
     rc.set(origin, dir.clone().normalize()); rc.near = 0; rc.far = far;
     const probe = this.rayProbe ??= new THREE.Mesh();
     let best: { point: THREE.Vector3; normal: THREE.Vector3; dist: number } | null = null;
-    for (const key of WORN) {
+    for (const key of only ?? WORN) {
+      if (skip?.includes(key)) continue;
       const l = this.L[key];
       if (!l) continue;
       for (let k = 0; k < l.perSlot; k++) {
