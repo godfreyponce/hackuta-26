@@ -134,6 +134,7 @@ export function createKeyboardMouseController(): KeyboardMouseController {
   let reach = 0.7;
   let lunge = 0;
   let thrust = 0;
+  let bodyYaw = 0;
   const mode: KbMode = { bow: false, activeHand: 'right' };
   const keys = new Set<string>();
   let lmb = false;
@@ -381,6 +382,10 @@ export function createKeyboardMouseController(): KeyboardMouseController {
     crouch = damp(crouch, keys.has('KeyS') ? 1 : 0, 10, dt);
     state.body.lean = lean;
     state.body.crouch = crouch;
+    // edge turning: hold the cursor at the left/right edge to turn toward a flank attacker (≤ ±55°)
+    const ex = Math.abs(cursor.x);
+    if (ex > 0.8) bodyYaw = clamp(bodyYaw + Math.sign(cursor.x) * THREE.MathUtils.degToRad(80) * Math.min(1, ((ex - 0.8) / 0.15) ** 2) * dt, -0.96, 0.96);
+    state.body.yaw = bodyYaw;
 
     if (drawing) draw = Math.min(1, draw + dt / 0.85);
     state.bowDraw = drawing ? 1 - (1 - draw) * (1 - draw) : 0;

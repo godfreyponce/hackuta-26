@@ -683,7 +683,8 @@ export class Engine {
   private updatePlayer(state: PlayerInputState | null, realDt: number) {
     const lean = state?.body.lean ?? 0;
     const crouch = state?.body.crouch ?? 0;
-    this.yaw = damp(this.yaw, -(state?.body.yaw ?? 0) * 0.25, 6, realDt);
+    // webcam: a quarter of the body's turn; keyboard/mouse: the edge-turn yaw directly
+    this.yaw = damp(this.yaw, -(state?.body.yaw ?? 0) * (isKeyboardMouse(this.input) ? 1 : 0.25), 6, realDt);
     this.eye.set(lean * 0.6, HALL.eye.y - crouch * 0.5, 0);
     const sign = Math.abs(lean) > 0.5 ? Math.sign(lean) : 0;
     if (sign !== 0 && sign !== this.leanSign) this.leanCrossT = this.realT;
