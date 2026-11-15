@@ -41,18 +41,22 @@ describe('IMAGE retries (review #6: budget spent in side order)', () => {
     expect(h.tr.stats.roiRetrySkips ?? 0).toBeGreaterThan(0);
   });
 
-  it('gives both sides a retry when the frame interval allows it (20 fps dim-light camera)', () => {
+  it('a slow (20 fps dim-light) camera does not grow the budget: one retry a frame, the sides take turns', () => {
+    // the game renders on the same thread — a longer camera interval is no licence for the tracker to take more
     const h = makeHarness({ pose: 9, vid: 5, img: 7, full: 8 });
     h.setScript({ vid: { left: null, right: null }, img: { left: L, right: R } });
-    // a first window at 20 fps teaches the tracker the delivered rate
     for (let i = 0; i < 25; i++) h.frame(50);
     expect(h.tr.stats.cameraFps).toBeCloseTo(20, 0);
-    let both = 0;
+    // (h.calls holds the last frame's model calls only)
+    const tries = { left: 0, right: 0 };
     for (let i = 0; i < 10; i++) {
-      const f = h.frame(50);
-      if ((f.hands ?? []).length === 2) both++;
+      h.frame(50);
+      const img = h.calls.filter((c) => c.startsWith('img:'));
+      expect(img.length).toBe(1); // one retry a frame — the second doesn't fit a 30 fps slice
+      for (const c of img) tries[c === 'img:left' ? 'left' : 'right']++;
     }
-    expect(both).toBe(10);
+    expect(tries.left).toBe(5);
+    expect(tries.right).toBe(5);
   });
 
   it('a frame rate slowed by detection itself does not grow the budget (no feedback loop)', () => {
@@ -74,12 +78,13 @@ describe('IMAGE retries (review #6: budget spent in side order)', () => {
     expect(h.tr.stats.handsAlternate).toBe(false);
   });
 
-  it('budget scales with the interval: no retries at all when a 60 fps camera leaves no room', () => {
+  it('a 60 fps camera still gets a retry every frame (the budget is a fixed 30 fps slice)', () => {
     const h = makeHarness({ pose: 9, vid: 5, img: 7, full: 8 });
     h.T.settingsFps = 60;
     h.setScript({ vid: { left: null, right: null }, img: { left: L, right: R } });
-    for (let i = 0; i < 10; i++) h.frame(1000 / 60);
-    expect(h.calls.filter((c) => c.startsWith('img:'))).toEqual([]);
+    let retries = 0;
+    for (let i = 0; i < 10; i++) { h.frame(1000 / 60); retries += h.calls.filter((c) => c.startsWith('img:')).length; }
+    expect(retries).toBe(10);
   });
 });
 
@@ -251,16 +256,21 @@ describe('lighting hint (stats.hint)', () => {
     expect(h.tr.stats.hint).toBeNull();
   });
 
-  it('brightens the hand crops in a dark room (only then), at most 3×', () => {
+  it('brightens the hand crops in a dark room (only then), smoothly, at most 3×', () => {
+    const gain = (f: string | undefined) => (!f || f === 'none' ? 1 : +f.slice('brightness('.length, -1));
     const h = makeHarness();
     h.setScript({ vid: { left: L, right: R } });
-    for (let i = 0; i < 40; i++) h.frame(); // brightness 0.45: untouched
+    for (let i = 0; i < 200; i++) h.frame(); // brightness 0.45: untouched
     expect(new Set(h.filters)).toEqual(new Set(['none']));
-    h.T.sampleLuma = () => 0.2;
-    for (let i = 0; i < 40; i++) h.frame();
-    expect(h.filters.at(-1)).toBe('brightness(2.00)');
+    h.T.sampleLuma = () => 0.249; // just under the threshold: no step
+    for (let i = 0; i < 200; i++) h.frame();
+    expect(gain(h.filters.at(-1))).toBeLessThan(1.05);
+    h.T.sampleLuma = () => 0.2; // partway into the ramp
+    for (let i = 0; i < 300; i++) h.frame();
+    expect(gain(h.filters.at(-1))).toBeGreaterThan(1.4);
+    expect(gain(h.filters.at(-1))).toBeLessThan(1.9);
     h.T.sampleLuma = () => 0.05;
-    for (let i = 0; i < 40; i++) h.frame();
+    for (let i = 0; i < 300; i++) h.frame();
     expect(h.filters.at(-1)).toBe('brightness(3.00)');
     // the filter is reset after each crop, so masks and later draws are not brightened
     expect((h.T.crop.left?.ctx as { filter: string }).filter).toBe('none');

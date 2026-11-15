@@ -16,6 +16,7 @@ function HealthBlock({ quiver }: { quiver: number }) {
   const health = useApp((s) => s.hud.health);
   const posture = useApp((s) => s.hud.posture);
   const blocking = useApp((s) => s.hud.blocking);
+  const bow = useApp((s) => s.bowMode || s.hud.bowDraw > 0);
   const [ghost, setGhost] = useState(health);
   const [active, setActive] = useState(false);
   // every blow taken restarts a short shake + red flash on the bar (two alternating animations, so back-to-back hits replay)
@@ -37,7 +38,7 @@ function HealthBlock({ quiver }: { quiver: number }) {
         <span className="vitals-name">Odysseus</span>
         {blocking && <span className="guard-tag">Guard</span>}
         <span className="spacer" />
-        {quiver > 0 && <span className="quiver-tag" title="Arrows"><ArrowGlyph />{quiver}</span>}
+        {(quiver > 0 || bow) && <span className={`quiver-tag ${quiver === 0 ? 'empty' : ''}`}><ArrowGlyph />{quiver}</span>}
         <span className="hp-num num">{Math.round(health)}</span>
       </div>
       <div className="health" role="meter" aria-label="Health" aria-valuenow={Math.round(health)} aria-valuemin={0} aria-valuemax={100}>
@@ -96,12 +97,12 @@ function HandGlyph({ state }: { state: HandState }) {
 }
 
 interface HandInfo { held: string | null; seen: boolean; read: boolean; fist: boolean }
-interface HandsSnap { left: HandInfo; right: HandInfo; quiver: number; driven: Hand | null; unarmedLong: boolean; unseenLong: boolean; hover: boolean }
+interface HandsSnap { left: HandInfo; right: HandInfo; quiver: number; driven: Hand | null; unarmedLong: boolean; unseenLong: boolean; hover: boolean; dark: boolean }
 const NO_HAND: HandInfo = { held: null, seen: true, read: true, fist: false };
 
 /** What each hand holds and (webcam) whether the tracker sees it / reads a fist — polled at 5 Hz, re-renders on change. */
 function useHands(body: boolean): HandsSnap {
-  const [snap, setSnap] = useState<HandsSnap>({ left: NO_HAND, right: NO_HAND, quiver: 0, driven: null, unarmedLong: false, unseenLong: false, hover: false });
+  const [snap, setSnap] = useState<HandsSnap>({ left: NO_HAND, right: NO_HAND, quiver: 0, driven: null, unarmedLong: false, unseenLong: false, hover: false, dark: false });
   useEffect(() => {
     let unarmedAt = 0, unseenAt = 0, key = '';
     // fallback fist read (only if the controller exposes no gesture flags): C's default hysteresis
@@ -141,6 +142,8 @@ function useHands(body: boolean): HandsSnap {
         driven: left.held && right.held ? e.drivenHand ?? null : null,
         unarmedLong: unarmed && now - unarmedAt > 1200,
         unseenLong: unseen && now - unseenAt > 1500,
+        // Part C's lighting verdict: the camera is starved for light (slow frames or a dark image) — hands go first
+        dark: body && (runtime.input as unknown as { getStats?: () => { hint?: string | null } } | null)?.getStats?.()?.hint === 'lighting',
         hover: playing && !!e.overlay().hover,
       };
       const k = JSON.stringify(next);
@@ -225,7 +228,7 @@ function BossBar() {
       <div className="boss-hp">
         <b style={{ width: `${Math.max(boss.hp, trail) * 100}%` }} />
         <i style={{ width: `${boss.hp * 100}%` }} />
-        {shield > 0 && <s className="boss-shield" style={{ width: `${shield * 100}%` }} />}
+        {shield > 0 && <span className="boss-shield" style={{ width: `${shield * 100}%` }} />}
       </div>
       <div className="boss-sub">
         {shield > 0 ? <span className="boss-shield-tag">Gilded shield · {Math.round(shield * 100)}%</span> : <span />}
@@ -359,6 +362,7 @@ function Prompts({ hands }: { hands: HandsSnap }) {
       : <div className="prompt big">Make the phone sign by your ear to call {friend}</div>;
   }
   // webcam: say when the tracker is struggling — the in-game hands only ghost, which is easy to miss mid-fight
+  if (body && hands.dark) return <div className="prompt warn" role="status">Too dark for your hands — turn on a light in front of you</div>;
   if (body && tracking === 'degraded') return <div className="prompt warn" role="status">Tracking is weak — face a light and keep both hands in view</div>;
   if (body && hands.unseenLong && tracking !== 'lost' && tracking !== 'calibrating') return <div className="prompt warn" role="status">We can’t see your hands — hold them up in front of you</div>;
   if (hands.unarmedLong && !bow && !(kb && hands.hover)) {
@@ -587,7 +591,7 @@ export function Hud() {
   const resume = () => { useApp.setState({ paused: false }); runtime.engine?.setPaused(false); };
 
   return (
-    <div className={`hud ${cine ? 'cine' : ''}`}>
+    <div className={`hud ${cine ? 'cine' : ''} ${body ? 'body' : ''}`}>
       <LowHealthVignette />
       <CombatOverlay />
       <div className="dock-bl">

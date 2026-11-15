@@ -159,7 +159,7 @@ export function Calibration() {
                   {replay ? <><b>Replaying a recorded webcam session</b><span>No live camera — the recording moves your hands.</span></> : <><b>Starting the camera…</b><span>Allow camera access when Chrome asks.</span></>}
                 </div>
               )}
-              {hasVideo && status !== 'ok' && <div className="cam-hint">Fit your head and hips inside the outline</div>}
+              {hasVideo && status !== 'ok' && <div className="cam-hint">Fit your head and hips inside the outline — leave room above your head for your hands</div>}
               {status === 'ok' && <div className="cam-ok"><span className="chip ok"><span className="dot" />Calibrated</span></div>}
             </div>
             <StanceChecklist compact />

@@ -116,7 +116,7 @@ export function startPlayLog() {
     for (const x of cl.splice(0, cl.length)) if (x.kind !== 'hit') push('combat', x);
     const stats = c?.getStats?.() as (ReturnType<NonNullable<NonNullable<typeof c>['getStats']>> & {
       msPose?: number; msHands?: number; roiRetries?: number; handHitRate?: Partial<Record<'left' | 'right', number>>;
-      roiRetrySkips?: number; cameraFps?: number; brightness?: number; hint?: string | null;
+      roiRetrySkips?: number; cameraFps?: number; brightness?: number; hint?: string | null; handsAlternate?: boolean; handRoi?: boolean;
     }) | undefined;
     const E = w.__engine;
     // webcam hand summary: [visible %, handFresh %, max grip, latched %] per side
@@ -139,6 +139,7 @@ export function startPlayLog() {
       delegate: stats?.delegate, trackErr: stats?.error ?? undefined,
       msPose: stats?.msPose !== undefined ? +stats.msPose.toFixed(1) : undefined, msHands: stats?.msHands !== undefined ? +stats.msHands.toFixed(1) : undefined,
       roiRetries: stats?.roiRetries, roiSkips: stats?.roiRetrySkips || undefined, hitRate: stats?.handHitRate, hands,
+      alt: stats?.handsAlternate || undefined, roi: stats?.handRoi,
       // camera as delivered (dim light drops it), image brightness 0..1, Part C's player hint ('lighting')
       cam: stats?.cameraFps ? Math.round(stats.cameraFps) : undefined,
       lum: stats?.brightness !== undefined ? +stats.brightness.toFixed(2) : undefined, hint: stats?.hint ?? undefined,

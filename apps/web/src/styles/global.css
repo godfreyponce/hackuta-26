@@ -236,17 +236,20 @@ button, input, select { font: inherit; color: inherit; }
 /* a blow taken: the block jolts and the bar flashes (two copies of the animation so consecutive hits both replay) */
 .vitals.hit-0 { animation: vhit0 0.32s ease-out; }
 .vitals.hit-1 { animation: vhit1 0.32s ease-out; }
-.vitals.hit-0 .health, .vitals.hit-1 .health { animation: barflash 0.45s ease-out; }
+.vitals.hit-0 .health { animation: barflash0 0.45s ease-out; }
+.vitals.hit-1 .health { animation: barflash1 0.45s ease-out; }
 @keyframes vhit0 { 0% { transform: translateX(0); } 20% { transform: translateX(-5px); } 45% { transform: translateX(4px); } 70% { transform: translateX(-2px); } 100% { transform: none; } }
 @keyframes vhit1 { 0% { transform: translateX(0); } 20% { transform: translateX(-5px); } 45% { transform: translateX(4px); } 70% { transform: translateX(-2px); } 100% { transform: none; } }
-@keyframes barflash { 0% { box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55), 0 0 18px 4px rgba(224, 64, 47, 0.75); border-color: #ff7a5a; } 100% { box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55), 0 2px 10px rgba(0, 0, 0, 0.6); } }
+@keyframes barflash0 { 0% { box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55), 0 0 18px 4px rgba(224, 64, 47, 0.75); border-color: #ff7a5a; } 100% { box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55), 0 2px 10px rgba(0, 0, 0, 0.6); } }
+@keyframes barflash1 { 0% { box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55), 0 0 18px 4px rgba(224, 64, 47, 0.75); border-color: #ff7a5a; } 100% { box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55), 0 2px 10px rgba(0, 0, 0, 0.6); } }
+.quiver-tag.empty { color: var(--alarm, #C23B2E); }
 /* badly hurt: blood-red edges breathing slowly (≈ 50 bpm, low contrast — never a strobe) */
 .hurt-vignette {
   position: absolute; inset: 0; pointer-events: none; opacity: var(--hurt, 0.5);
   background: radial-gradient(ellipse 75% 70% at 50% 50%, rgba(120, 10, 6, 0) 62%, rgba(120, 14, 8, 0.26) 84%, rgba(96, 8, 4, 0.62) 100%);
-  animation: heartbeat 1.2s ease-in-out infinite;
 }
-@keyframes heartbeat { 0%, 100% { filter: brightness(0.85); } 14% { filter: brightness(1.25); } 28% { filter: brightness(0.95); } 42% { filter: brightness(1.12); } }
+.hurt-vignette::before { content: ''; position: absolute; inset: 0; background: inherit; animation: heartbeat 1.2s ease-in-out infinite; }
+@keyframes heartbeat { 0%, 100% { opacity: 0.2; } 14% { opacity: 1; } 28% { opacity: 0.4; } 42% { opacity: 0.8; } }
 .hud.cine .hurt-vignette { opacity: 0; }
 
 /* ── what each hand holds: one chip per hand; on webcam a hand glyph says what the camera reads ── */
@@ -381,7 +384,12 @@ button, input, select { font: inherit; color: inherit; }
 .screen ~ .hud .toast::before { display: none; }
 /* toasts over the menus (lobby, setup…): a plate in the top bar's empty middle — at the bottom it covered "Start the fight" */
 .screen ~ .hud .toasts { top: 12px; bottom: auto; width: min(640px, calc(100vw - 2 * 330px)); }
-@media (max-width: 1100px) { .screen ~ .hud .toasts { top: auto; bottom: 18px; width: min(640px, 92vw); } }
+@media (max-width: 1100px) { .screen ~ .hud .toasts { top: 6px; bottom: auto; width: min(640px, 92vw); } }
+@media (max-height: 780px) {
+  .screen ~ .hud .toasts { top: 6px; }
+  .screen ~ .hud .toast { padding: 6px 18px 7px; }
+  .screen ~ .hud .toast .s { display: none; }
+}
 .screen ~ .hud .toast { background: rgba(14, 11, 9, 0.94); border: 1px solid rgba(196, 154, 74, 0.6); border-radius: 12px; padding: 10px 22px 12px; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6); }
 .screen ~ .hud .toast .t { font-size: clamp(16px, 1.6vw, 22px); }
 .toast.info .s, .toast.warn .s { font-family: var(--font-display); font-style: normal; font-weight: 600; font-size: clamp(14px, 1.2vw, 17px); letter-spacing: 0.04em; }
@@ -569,3 +577,8 @@ input[type='range']:focus-visible, summary:focus-visible { outline: none; box-sh
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
 }
+/* webcam players stand ~2 m from the screen: subtitles and prompts stay large (the stack's height savings come from
+   the inline speaker name and the 56ch measure, not from smaller type) */
+.hud.body .subtitle { font-size: clamp(20px, 1.9vw, 26px); }
+.hud.body .prompt { font-size: 17px; }
+.hud.body .prompt.big { font-size: clamp(19px, 1.6vw, 24px); }

@@ -36,7 +36,8 @@ export function FrameGuide({ className = '', labels = true }: { className?: stri
       <g fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" className="fg-corners">
         <path d={c(6, 5, 1, 1)} /><path d={c(154, 5, -1, 1)} /><path d={c(6, 85, 1, -1)} /><path d={c(154, 85, -1, -1)} />
       </g>
-      <g fill="none" stroke="currentColor" strokeWidth="1.1" strokeDasharray="2.4 2" strokeLinejoin="round" className="fg-figure">
+      {/* scaled 0.75× about the hip line: filling this outline puts you ~2 m back with room above your head for raised hands */}
+      <g fill="none" stroke="currentColor" strokeWidth="1.1" strokeDasharray="2.4 2" strokeLinejoin="round" className="fg-figure" transform="translate(80 66) scale(0.75) translate(-80 -66)">
         <circle cx="80" cy="19" r="7" />
         <path d="M74 27.5 Q80 30 86 27.5 M62 35 Q80 28 98 35 L95 66 H65 Z M62 35 L55 58 M98 35 L105 58 M68 66 L66 88 M92 66 L94 88" />
       </g>

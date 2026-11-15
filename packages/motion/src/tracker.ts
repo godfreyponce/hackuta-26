@@ -165,6 +165,8 @@ export class Tracker {
   private settingsFps = 0;
   /** Camera frame period (ms) measured while detection kept up; 0 = not yet. */
   private camPeriod = 0;
+  /** smoothed frame brightness for the crop boost (one window's sample is too jumpy) */
+  private lumaSmooth: number | undefined = undefined;
   private slowWindows = 0;
   private lowLightWindows = 0;
   private okLightWindows = 0;
@@ -291,6 +293,8 @@ export class Tracker {
     this.lastVideoTime = -1;
     this.presented = this.presentedAtWindow = -1;
     this.camPeriod = this.msCore = 0;
+    this.stats.brightness = undefined;
+    this.lumaSmooth = undefined;
     for (const h of HANDS) Object.assign(this.roi[h], newRoi());
   }
 
@@ -596,9 +600,12 @@ export class Tracker {
    * 0.4, at most cropBoostMax ×; 1 when the image is bright enough (≥ cropBoostBelowLuma) or the boost is off.
    */
   private cropGain(): number {
-    const b = this.stats.brightness;
-    if (b === undefined || !(config.cropBoostMax > 1) || b >= config.cropBoostBelowLuma) return 1;
-    return clamp(0.4 / Math.max(b, 0.02), 1, config.cropBoostMax);
+    const b = this.lumaSmooth;
+    if (b === undefined || !(config.cropBoostMax > 1)) return 1;
+    // lift toward 0.4 luma, ramped in over 8 luma points below cropBoostBelowLuma: no step at the threshold
+    const full = 0.4 / Math.max(b, 0.02);
+    const ramp = clamp((config.cropBoostBelowLuma - b) / 0.08, 0, 1);
+    return clamp(1 + (full - 1) * ramp, 1, config.cropBoostMax);
   }
 
   /** This frame's crop for one side (also kept in roi[side].rect), or null when none is worth running. */
@@ -631,7 +638,9 @@ export class Tracker {
     const img = this.handImg;
     if (!img) return;
     if (missed.length > 1 && this.frameNo % 2 === 1) missed.reverse();
-    const budget = config.handRoiRetryShare * this.frameIntervalMs();
+    // a fixed slice of a 30 fps frame: the game renders on the same thread, so a slow (dim) camera mustn't let the
+    // tracker take more, and a 60 fps camera mustn't starve the retries (pose + 2 crops alone take ~19 ms)
+    const budget = config.handRoiRetryShare * (1000 / 30);
     for (const side of missed) {
       const st = this.roi[side];
       const crop = this.crop[side];
@@ -833,7 +842,7 @@ export class Tracker {
     // The retry budget's frame period follows the camera (a dim 20 fps camera leaves 50 ms a frame) — but only
     // while detection keeps up: when it doesn't, fewer frames get through than the camera sends (and a browser
     // that doesn't report presentedFrames can't tell), and a budget grown from that would slow it further.
-    if (cam > 0 && !this.processingBound(cam)) this.camPeriod = 1000 / clamp(cam, 5, 120);
+    if (cam > 0 && !this.processingBound(cam) && this.stats.fps >= 0.9 * cam) this.camPeriod = 1000 / clamp(cam, 5, 120);
     this.fpsCount = 0;
     this.fpsWindowStart = now;
     const rate = this.stats.handHitRate ?? (this.stats.handHitRate = { left: 0, right: 0 });
@@ -889,14 +898,17 @@ export class Tracker {
    */
   private updateLighting(now: number): void {
     const luma = this.sampleLuma(this.video);
-    if (luma !== null) this.stats.brightness = luma;
+    if (luma !== null) {
+      this.stats.brightness = luma;
+      this.lumaSmooth = this.lumaSmooth === undefined ? luma : this.lumaSmooth + (luma - this.lumaSmooth) * 0.35;
+    }
     if (now - this.startedAt < LIGHT_WARMUP_MS) return;
     const cam = this.stats.cameraFps ?? 0;
     // A camera that can't go faster anyway (a 15 fps model) is no lighting problem. Without presentedFrames the
     // delivered rate is only known while detection keeps up.
     const couldBeFaster = !this.settingsFps || this.settingsFps >= config.lowLightFps;
     const known = this.presented >= 0 || !this.processingBound(cam || 30);
-    const slow = cam > 0 && cam < config.lowLightFps && couldBeFaster && known;
+    const slow = cam > 0 && cam < Math.min(config.lowLightFps, 0.8 * (this.settingsFps || 30)) && couldBeFaster && known;
     const dark = luma !== null && luma < config.lowLightLuma;
     if (slow || dark) {
       this.lowLightWindows++;
