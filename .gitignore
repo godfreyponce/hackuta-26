@@ -17,3 +17,6 @@ coverage/
 # recordings & generated temp assets
 /tmp/
 *.webm
+
+# iCloud sync-conflict copies ("file 2.ts") — never commit them
+* 2.*
