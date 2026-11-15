@@ -78,6 +78,12 @@ export const DEFAULT_CONFIG = {
   bowMinDraw: 0.2,
   /** Left arm may drop this long before a nocked arrow is cancelled. */
   bowCancelMs: 400,
+
+  // ── calibration (C.6) ──
+  calibTimeoutMs: 30000,
+  calibHipVisibility: 0.6,
+  /** A hand's raw curl must span at least this during the fist/open step to replace the default range. */
+  calibMinGripRange: 0.25,
 };
 
 export type MotionConfig = { -readonly [K in keyof typeof DEFAULT_CONFIG]: number };

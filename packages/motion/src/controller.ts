@@ -1,11 +1,11 @@
-import type { InputController, PlayerInputState } from '@ithaca/shared';
+import type { CalibrationResult, InputController, PlayerInputState } from '@ithaca/shared';
 import { config } from './config';
 import { Engine } from './engine';
 import type { DetectorFlags } from './gestures';
 import type { Body } from './mapping';
-import { loadProfile } from './profile';
+import { clearSavedProfile, cloneProfile, DEFAULT_PROFILE, loadProfile, saveProfile, type Profile } from './profile';
 import { Tracker } from './tracker';
-import type { PendingGesture, RawFrame, RawHand, TrackerStats } from './types';
+import type { CalibrationStep, PendingGesture, RawFrame, RawHand, TrackerStats } from './types';
 
 export interface MotionControllerOptions {
   /** URL prefix where the .task models and wasm/ live. Default "/models". */
@@ -34,10 +34,17 @@ export interface MotionController extends InputController, MotionDebug {
   readonly kind: 'motion';
   /** In-flight hold gesture for a radial progress ring (C.5), or null. */
   getPendingGesture(): PendingGesture | null;
+  calibrate(): Promise<CalibrationResult>;
+  /** C.6: step/progress/message updates while calibrate() runs (A draws the UI). */
+  onCalibrationStep(cb: (s: CalibrationStep) => void): () => void;
+  getProfile(): Readonly<Profile>;
+  /** Forget the saved calibration and go back to defaults. */
+  resetCalibration(): void;
 }
 
 export function createMotionController(opts: MotionControllerOptions = {}): MotionController {
   const engine = new Engine(loadProfile());
+  engine.onProfileChange = saveProfile;
   const tracker = new Tracker({
     modelBaseUrl: opts.modelBaseUrl ?? '/models',
     poseModel: opts.poseModel ?? 'full',
@@ -75,5 +82,13 @@ export function createMotionController(opts: MotionControllerOptions = {}): Moti
     getDebugBody: () => engine.body,
     getPendingGesture: () => engine.getPendingGesture(),
     getDebugGestures: () => engine.detectorFlags(),
+    calibrate: () => engine.calibrate(),
+    onCalibrationStep: (cb) => engine.onCalibrationStep(cb),
+    getProfile: () => engine.profile,
+    resetCalibration() {
+      clearSavedProfile();
+      engine.profile = cloneProfile(DEFAULT_PROFILE);
+      engine.mapper.resetAutoNeutral();
+    },
   };
 }

@@ -1,6 +1,7 @@
 // Engine: turns RawFrames into PlayerInputState + InputEvents. Pure (no DOM, no MediaPipe),
 // so the live controller, the replay controller and unit tests all share it.
-import type { InputEvent, PlayerInputState } from '@ithaca/shared';
+import type { CalibrationResult, InputEvent, PlayerInputState } from '@ithaca/shared';
+import { Calibrator } from './calibration';
 import { config } from './config';
 import { Gestures, type DetectorFlags } from './gestures';
 import { GripTracker } from './grip';
@@ -8,7 +9,7 @@ import { HANDS, Mapper, type Body } from './mapping';
 import { copy3 } from './math';
 import { neutralState } from './neutral';
 import { cloneProfile, DEFAULT_PROFILE, type Profile } from './profile';
-import type { PendingGesture, RawFrame } from './types';
+import type { CalibrationStep, PendingGesture, RawFrame } from './types';
 
 export type Listener = (e: InputEvent) => void;
 
@@ -55,7 +56,17 @@ export class Engine {
     };
   }
 
-  private readonly emitFn = (e: InputEvent): void => this.emit(e);
+  private calibrator: Calibrator | null = null;
+  private calibTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly calibListeners = new Set<(s: CalibrationStep) => void>();
+  /** Called with the new profile after a successful calibration (controller persists it). */
+  onProfileChange: (p: Profile) => void = () => {};
+
+  /** Gameplay events are muted while calibrating (guard pose ≠ block, fist ≠ grab). */
+  private readonly emitFn = (e: InputEvent): void => {
+    if (this.calibrator && e.type !== 'tracking_lost' && e.type !== 'tracking_ok') return;
+    this.emit(e);
+  };
 
   emit(e: InputEvent): void {
     for (const cb of this.listeners) {
@@ -79,6 +90,7 @@ export class Engine {
   }
 
   end(): void {
+    this.calibrator?.cancel();
     this.state.tracking = 'off';
     this.state.hands.left.visible = this.state.hands.right.visible = false;
   }
@@ -90,6 +102,11 @@ export class Engine {
     const body = this.mapper.update(frame.poseImage, frame.poseWorld, frame.hands, frame.t, this.aspect, this.profile, this.state);
     this.grip.update(body, frame.hands === null, this.profile, this.state, this.emitFn);
     this.gestures.update(body, this.grip, this.state, this.emitFn);
+    if (this.calibrator) {
+      const pi = frame.poseImage;
+      const hipVis = pi ? Math.min(pi[23]?.visibility ?? 0, pi[24]?.visibility ?? 0) : 0;
+      this.calibrator.update(body, hipVis);
+    }
     this.state.t = frame.t;
   }
 
@@ -148,6 +165,54 @@ export class Engine {
       : this.cpuFallback || this.avgVisibility < config.degradedVisibility
         ? 'degraded'
         : 'ok';
+  }
+
+  /** C.6: runs the 4-step calibration on incoming frames. Resolves ok:false on timeout or stop(). */
+  calibrate(): Promise<CalibrationResult> {
+    if (this.calibrator) return this.calibrator.promise;
+    const prevTracking = this.state.tracking;
+    // Close out anything the game thinks is held, then run with gameplay events muted.
+    for (const h of HANDS) if (this.grip.isGripping(h)) this.emit({ type: 'release', hand: h, vel: { x: 0, y: 0, z: 0 } });
+    if (this.gestures.isBlocking) this.emit({ type: 'block_end' });
+    this.grip.reset();
+    this.gestures.reset();
+    this.state.tracking = 'calibrating';
+    const cal = new Calibrator(
+      this.profile,
+      (s) => {
+        for (const cb of this.calibListeners) cb(s);
+      },
+      (profile) => {
+        if (this.calibTimer) clearTimeout(this.calibTimer);
+        this.calibTimer = null;
+        this.calibrator = null;
+        // Grabs during calibration were muted: start clean so no unpaired release reaches the game.
+        this.grip.reset();
+        this.gestures.reset();
+        if (this.state.tracking === 'calibrating') this.state.tracking = prevTracking === 'off' ? 'off' : 'lost';
+        if (profile) {
+          this.profile = profile;
+          this.mapper.resetAutoNeutral();
+          this.onProfileChange(profile);
+        }
+      },
+    );
+    this.calibrator = cal;
+    // Wall-clock safety net in case frames stop arriving (camera unplugged, never started).
+    this.calibTimer = setTimeout(() => cal.cancel(), config.calibTimeoutMs + 2000);
+    return cal.promise;
+  }
+
+  onCalibrationStep(cb: (s: CalibrationStep) => void): () => void {
+    this.calibListeners.add(cb);
+    if (this.calibrator) cb(this.calibrator.current);
+    return () => {
+      this.calibListeners.delete(cb);
+    };
+  }
+
+  get isCalibrating(): boolean {
+    return this.calibrator !== null;
   }
 
   /** In-flight hold gesture (call_sign / request_weapon / drink) for A's progress ring. */

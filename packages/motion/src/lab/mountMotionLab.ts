@@ -1,9 +1,11 @@
 // Motion Lab (spec C.7): webcam + skeleton overlay, stats, live state readout, event log.
 // Framework-free so it runs in the standalone dev page and inside A's React app (see MotionLab.tsx).
 import { HandLandmarker, PoseLandmarker } from '@mediapipe/tasks-vision';
-import type { InputController, InputEvent } from '@ithaca/shared';
+import type { CalibrationResult, InputController, InputEvent } from '@ithaca/shared';
 import { createMotionController, type MotionDebug } from '../controller';
-import type { PendingGesture, RawLandmark } from '../types';
+import { clearSavedProfile } from '../profile';
+import type { CalibrationStep, PendingGesture, RawLandmark } from '../types';
+import type { Profile } from '../profile';
 import { buildSliders, drawGameSpace } from './panels';
 import { LAB_CSS } from './styles';
 
@@ -11,7 +13,14 @@ export interface MotionLabOptions {
   modelBaseUrl?: string;
 }
 
-type LabController = InputController & Partial<MotionDebug> & { getPendingGesture?(): PendingGesture | null };
+type LabController = InputController &
+  Partial<MotionDebug> & {
+    getPendingGesture?(): PendingGesture | null;
+    onCalibrationStep?(cb: (s: CalibrationStep) => void): () => void;
+    getProfile?(): Readonly<Profile>;
+    resetCalibration?(): void;
+    calibrate?(): Promise<CalibrationResult>;
+  };
 
 const POSE_EDGES = PoseLandmarker.POSE_CONNECTIONS;
 const HAND_EDGES = HandLandmarker.HAND_CONNECTIONS;
@@ -29,10 +38,13 @@ export function mountMotionLab(root: HTMLElement, opts: MotionLabOptions = {}): 
       <span class="badge" data-k="res">–</span>
       <span class="badge" data-k="tracking">off</span>
       <span class="badge" data-k="vis">vis –</span>
+      <span class="badge" data-k="calibrated">uncalibrated</span>
     </header>
     <div class="toolbar">
       <button data-a="start" class="primary">Start camera</button>
       <button data-a="stop" disabled>Stop</button>
+      <button data-a="calibrate" disabled>Calibrate</button>
+      <button data-a="uncalibrate">Reset calibration</button>
       <label>Pose model
         <select data-a="model"><option value="full">full</option><option value="lite">lite</option></select>
       </label>
@@ -45,6 +57,7 @@ export function mountMotionLab(root: HTMLElement, opts: MotionLabOptions = {}): 
           <canvas class="overlay"></canvas>
         </div>
         <div class="ring" hidden><span></span></div>
+        <div class="calib" hidden><div data-k="calibMsg"></div><progress max="1" value="0"></progress></div>
         <div class="placeholder">Camera off. Press <b>Start camera</b>.</div>
       </section>
       <aside>
@@ -81,6 +94,32 @@ export function mountMotionLab(root: HTMLElement, opts: MotionLabOptions = {}): 
   const spaceCv = q<HTMLCanvasElement>('canvas.space');
   const ring = q<HTMLElement>('.ring');
   const flagsEl = badge('flags');
+  const btnCal = q<HTMLButtonElement>('[data-a="calibrate"]');
+  const calibBox = q<HTMLElement>('.calib');
+  const calibMsg = badge('calibMsg');
+  const calibBar = q<HTMLProgressElement>('.calib progress');
+  let calibUnsub: (() => void) | null = null;
+
+  async function runCalibration(): Promise<void> {
+    const c = controller;
+    if (!c?.calibrate) return;
+    btnCal.disabled = true;
+    calibBox.hidden = false;
+    calibUnsub?.();
+    calibUnsub = c.onCalibrationStep?.((s) => {
+      calibMsg.textContent = s.message;
+      calibBar.value = s.progress;
+    }) ?? null;
+    const t0c = performance.now();
+    const res = await c.calibrate();
+    logLine('calibration', `${res.ok ? 'ok' : 'FAILED'} in ${((performance.now() - t0c) / 1000).toFixed(1)}s · arm ${res.armLengthM.toFixed(2)} m · shoulders ${res.shoulderWidthM.toFixed(2)} m`);
+    calibUnsub?.();
+    calibUnsub = null;
+    setTimeout(() => {
+      calibBox.hidden = true;
+    }, 1200);
+    btnCal.disabled = !controller;
+  }
   buildSliders(q<HTMLElement>('.sliders'));
 
   let controller: LabController | null = null;
@@ -89,13 +128,16 @@ export function mountMotionLab(root: HTMLElement, opts: MotionLabOptions = {}): 
   let lastReadout = 0;
   const t0 = performance.now();
 
-  function logEvent(e: InputEvent): void {
+  function logLine(title: string, detail = ''): void {
     const li = document.createElement('li');
-    const { type, ...rest } = e;
-    const extra = Object.keys(rest).length ? ' ' + JSON.stringify(rest, round2) : '';
-    li.innerHTML = `<time>${((performance.now() - t0) / 1000).toFixed(1)}s</time> <b>${type}</b>${escapeHtml(extra)}`;
+    li.innerHTML = `<time>${((performance.now() - t0) / 1000).toFixed(1)}s</time> <b>${escapeHtml(title)}</b> ${escapeHtml(detail)}`;
     logEl.prepend(li);
     while (logEl.childElementCount > 80) logEl.lastElementChild?.remove();
+  }
+
+  function logEvent(e: InputEvent): void {
+    const { type, ...rest } = e;
+    logLine(type, Object.keys(rest).length ? JSON.stringify(rest, round2) : '');
   }
 
   async function start(): Promise<void> {
@@ -114,6 +156,7 @@ export function mountMotionLab(root: HTMLElement, opts: MotionLabOptions = {}): 
       await c.start();
       placeholder.hidden = true;
       btnStop.disabled = false;
+      btnCal.disabled = false;
     } catch (err) {
       errorEl.textContent = err instanceof Error ? err.message : String(err);
       stop();
@@ -130,6 +173,7 @@ export function mountMotionLab(root: HTMLElement, opts: MotionLabOptions = {}): 
     controller = null;
     placeholder.hidden = false;
     btnStop.disabled = true;
+    btnCal.disabled = true;
   }
 
   function drawOverlay(): void {
@@ -172,6 +216,9 @@ export function mountMotionLab(root: HTMLElement, opts: MotionLabOptions = {}): 
     const vis = frame?.poseImage ? avgVisibility(frame.poseImage) : null;
     badge('vis').textContent = vis === null ? 'vis –' : `vis ${vis.toFixed(2)}`;
     if (s?.error && !errorEl.textContent) errorEl.textContent = s.error;
+    const prof = controller?.getProfile?.();
+    badge('calibrated').textContent = prof?.calibrated ? `calibrated · arm ${prof.armLengthM.toFixed(2)} m` : 'uncalibrated';
+    badge('calibrated').dataset.level = prof?.calibrated ? 'ok' : prof ? 'warn' : '';
   }
 
   function loop(now: number): void {
@@ -198,6 +245,11 @@ export function mountMotionLab(root: HTMLElement, opts: MotionLabOptions = {}): 
 
   btnStart.addEventListener('click', () => void start());
   btnStop.addEventListener('click', stop);
+  btnCal.addEventListener('click', () => void runCalibration());
+  q<HTMLButtonElement>('[data-a="uncalibrate"]').addEventListener('click', () => {
+    if (controller?.resetCalibration) controller.resetCalibration();
+    else clearSavedProfile();
+  });
   q<HTMLButtonElement>('[data-a="clear"]').addEventListener('click', () => {
     logEl.innerHTML = '';
   });
