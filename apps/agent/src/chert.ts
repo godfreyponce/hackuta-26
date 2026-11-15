@@ -32,9 +32,14 @@ export class ChertError extends Error {
 
 /**
  * POST /calls. 201 = allocated; 202 = queued behind another call on our shared line (when_busy queue).
- * Network errors retry with the same key at 0.5/1/2 s, unless the session ended meanwhile; 4xx fails at once.
+ * Network errors retry with the same key at 0.5/1/2 s; 4xx fails at once. After the session ends, one more try with
+ * the same key, at once: Chert may have made the call already, and a replay is the only way to learn its id to end it.
  */
-export async function createCall(c: CreateCall, idempotencyKey: string, cancelled: () => boolean = () => false): Promise<{ id: string; queued: boolean }> {
+const RETRY_DELAYS_MS = [500, 1_000, 2_000];
+/** Longest a create can run once the session ends: a backoff wait, the try in flight, and the one extra try. */
+export const CREATE_AFTER_CANCEL_MAX_MS = Math.max(...RETRY_DELAYS_MS) + 2 * CHERT_TIMEOUT_MS;
+
+export async function createCall(c: CreateCall, idempotencyKey: string, cancelled: () => boolean = () => false): Promise<{ id: string; queued: boolean; status: string | undefined }> {
   const body = JSON.stringify({
     direction: 'outbound', mode: 'customer_managed', line_id: env.CHERT_LINE_ID,
     destination: c.destination, destination_type: 'phone',
@@ -42,22 +47,46 @@ export async function createCall(c: CreateCall, idempotencyKey: string, cancelle
     livekit_url: c.livekitUrl, participant_token: c.participantToken,
     remote_participant_identity: c.remoteIdentity,
   });
-  const delays = [500, 1_000, 2_000];
+  const delays = RETRY_DELAYS_MS;
+  let triedAfterCancel = false;
   for (let attempt = 0; ; attempt++) {
     try {
       const { status, body: res } = await req('/calls', { method: 'POST', headers: headers({ 'idempotency-key': idempotencyKey }), body });
-      const r = res as { data?: { id?: string }; error?: { code?: string } | string; code?: string };
-      if ((status === 201 || status === 202 || status === 200) && r.data?.id) return { id: r.data.id, queued: status === 202 };
+      const r = res as { data?: { id?: string; status?: string }; error?: { code?: string } | string; code?: string };
+      if ((status === 201 || status === 202 || status === 200) && r.data?.id) return { id: r.data.id, queued: status === 202, status: r.data.status };
       const code = (typeof r.error === 'object' ? r.error?.code : r.error) ?? r.code ?? 'unknown';
       if (status >= 400 && status < 500) throw new ChertError(status, code);
       throw new Error(`chert ${status} ${code}`);
     } catch (e) {
-      if (e instanceof ChertError || attempt >= delays.length || cancelled()) throw e;
-      warn('chert_create_retry', { attempt, error: errText(e) });
-      await new Promise((r) => setTimeout(r, delays[attempt]));
-      if (cancelled()) throw e;
+      if (e instanceof ChertError || attempt >= delays.length || triedAfterCancel) throw e;
+      warn('chert_create_retry', { attempt, cancelled: cancelled(), error: errText(e) });
+      if (cancelled()) triedAfterCancel = true;
+      else await new Promise((r) => setTimeout(r, delays[attempt]));
     }
   }
+}
+
+/**
+ * Real statuses seen in the dry run: allocating, dialing, active. The dry run never queued, so a queued call's status
+ * name is unseen: the status the 202 reply reported also counts as still queued.
+ */
+export const isQueuedStatus = (status: string, statusAt202?: string): boolean => /queue/i.test(status) || status === statusAt202;
+
+const ENDED = new Set(['ended', 'completed', 'cancelled', 'canceled']);
+const FAILED = new Set(['failed', 'declined']);
+
+/**
+ * Event names are partly guessed: the spec lists bridge_ready, ended, failed; the other end words follow the statuses
+ * chert/agent/outbound.mjs stops on. Whole names only (after an optional `call.`), so `remote_video_failed` is not an end.
+ */
+export function chertEventKind(type: string): 'ready' | 'ringing' | 'no_video' | 'ended' | 'failed' | 'other' {
+  const name = type.toLowerCase().replace(/^call\./, '');
+  if (name === 'bridge_ready' || name === 'started') return 'ready';
+  if (name === 'remote_video_unavailable') return 'no_video';
+  if (FAILED.has(name)) return 'failed';
+  if (ENDED.has(name)) return 'ended';
+  if (/ring|dial|alert/i.test(type)) return 'ringing';
+  return 'other';
 }
 
 export type ChertEvent = { id: string; type: string; reason?: string };

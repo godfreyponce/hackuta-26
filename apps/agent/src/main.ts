@@ -54,7 +54,7 @@ function startHealthServer(): void {
 
 let shuttingDown = false;
 async function shutdown(reason: string, code: number): Promise<void> {
-  if (shuttingDown) process.exit(code); // a second Ctrl-C quits at once
+  if (shuttingDown) return; // the hard stop below still holds
   shuttingDown = true;
   log('agent_shutdown', { reason, hardStopMs: END_MAX_MS + 1_000 });
   const t = setTimeout(() => process.exit(code), END_MAX_MS + 1_000); // hard stop if cleanup hangs
@@ -65,8 +65,10 @@ async function shutdown(reason: string, code: number): Promise<void> {
   process.exit(code);
 }
 
-process.on('SIGINT', () => void shutdown('SIGINT', 0));
-process.on('SIGTERM', () => void shutdown('SIGTERM', 0));
+// A second signal quits at once. A crash during cleanup does not: it would skip POST /end (review 2 #8).
+const onSignal = (sig: string) => { if (shuttingDown) process.exit(0); void shutdown(sig, 0); };
+process.on('SIGINT', () => onSignal('SIGINT'));
+process.on('SIGTERM', () => onSignal('SIGTERM'));
 process.on('uncaughtException', (e) => { warn('uncaught', { error: errText(e) }); void shutdown('crash', 1); });
 process.on('unhandledRejection', (e) => { warn('unhandled_rejection', { error: errText(e) }); });
 

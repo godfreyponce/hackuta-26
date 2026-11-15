@@ -31,3 +31,28 @@ test('a line queued during the greeting plays after it', async () => {
   assert.deepEqual(mixer.played, [1, 2]);
   narrator.stop();
 });
+
+test('nothing new is spoken after stop() (review 2 #5)', async () => {
+  const mixer = new FakeMixer();
+  const spoken: string[] = [];
+  const narrator = new Narrator(mixer as unknown as Mixer, (t) => spoken.push(t));
+  narrator.stop();
+  narrator.say('weapon line', PRIORITY.weapon, Int16Array.of(3));
+  await tick();
+  assert.deepEqual(spoken, []);
+  assert.deepEqual(mixer.played, []);
+});
+
+test('a line queued behind the farewell is dropped when stop() comes first', async () => {
+  const mixer = new FakeMixer();
+  const spoken: string[] = [];
+  const narrator = new Narrator(mixer as unknown as Mixer, (t) => spoken.push(t));
+  const farewell = narrator.sayNow('farewell', PRIORITY.greeting, Int16Array.of(1));
+  await tick();
+  narrator.say('weapon line', PRIORITY.weapon, Int16Array.of(3));
+  narrator.stop();
+  mixer.endCurrent();
+  await farewell;
+  await tick();
+  assert.deepEqual(spoken, ['farewell']);
+});

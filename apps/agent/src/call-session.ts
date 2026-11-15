@@ -4,7 +4,7 @@ import {
   TrackSource, VideoSource, VideoStream, type RemoteParticipant, type RemoteTrack, type RemoteTrackPublication,
 } from '@livekit/rtc-node';
 import { AccessToken, RoomServiceClient } from 'livekit-server-sdk';
-import { ChertError, CHERT_TIMEOUT_MS, createCall, endCall, getCallStatus, getEvents, type ChertEvent } from './chert.ts';
+import { ChertError, chertEventKind, CHERT_TIMEOUT_MS, CREATE_AFTER_CANCEL_MAX_MS, createCall, endCall, getCallStatus, getEvents, isQueuedStatus, type ChertEvent } from './chert.ts';
 import type { CallState, GameEvent, ServerToAgent, WeaponSpawn } from './contracts/protocol.ts';
 import { env } from './env.ts';
 import type { Hub } from './hub.ts';
@@ -13,6 +13,7 @@ import { clearActiveCall, noteActiveCall } from './recovery.ts';
 import { errText, log, maskPhone, warn } from './log.ts';
 import { Mixer } from './mixer.ts';
 import { Narrator, PRIORITY } from './narrator.ts';
+import { RelaySlots } from './relay-slots.ts';
 import { CallerScanner } from './scanner.ts';
 import { cropRgba, OUT_H, OUT_W, VideoRelay } from './video.ts';
 
@@ -21,12 +22,13 @@ const ANSWER_TIMEOUT_MS = 60_000;
 const MUST_GO_BEFORE_MS = 20_000;
 const FAREWELL_WAIT_MS = 3_000;
 const AUTO_SCAN_AFTER_PIN_MS = 5_000;
-const SETUP_WAIT_MS = 10_000; // guess: one LiveKit connect plus one Chert create (8 s timeout)
+const SETUP_WAIT_MS = 10_000; // guess: the LiveKit connects before POST /calls starts
 const CLEANUP_MARGIN_MS = 3_000; // guess: disconnects plus deleteRoom
 const WEB_GONE_GRACE_MS = 10_000; // guess: long enough for a page reload to rejoin
 const WEAPON_WAIT_MS = 20_000; // spec D.3: Part D guarantees a prefab fallback by 15 s
+const TRACKS_VISIBLE_WAIT_MS = 3_000; // guess: the server showed the second track about 200 ms late in the fake-Chert e2e
 /** Longest that end() can take; main's hard stop on signals must be longer. */
-export const END_MAX_MS = Math.max(SETUP_WAIT_MS, FAREWELL_WAIT_MS) + CHERT_TIMEOUT_MS + CLEANUP_MARGIN_MS;
+export const END_MAX_MS = Math.max(SETUP_WAIT_MS, CREATE_AFTER_CANCEL_MAX_MS, FAREWELL_WAIT_MS) + CHERT_TIMEOUT_MS + CLEANUP_MARGIN_MS;
 const AGENT_FT_IDENTITY = 'quartermaster';
 const AGENT_GAME_IDENTITY = 'quartermaster-relay';
 const ALLOWED_FT_TRACKS = new Set(['agent-video', 'quartermaster-audio']);
@@ -42,8 +44,6 @@ async function mint(identity: string, room: string, ttl: string): Promise<string
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-type Relay = { stream: { cancel(): Promise<void> }; source: { close(): Promise<void> }; published: Promise<string | undefined> };
 
 export class CallSession {
   readonly sid: string;
@@ -66,6 +66,7 @@ export class CallSession {
   private bridgeReadyAt = 0;
   private dialedAt = 0;
   private allocatedAt = 0; // when Chert took the call off the shared-line queue
+  private statusAt202: string | undefined;
   private timers: NodeJS.Timeout[] = [];
   private playerMic: RemoteTrack | null = null;
   private lastWeapon: WeaponSpawn | null = null;
@@ -74,7 +75,10 @@ export class CallSession {
   private autoScanUsed = false;
   private weaponTimer: NodeJS.Timeout | null = null;
   private ending: Promise<void> | null = null;
-  private relays = new Map<'friend-cam' | 'friend-audio', Relay>();
+  private cleanedUp = false;
+  private relays = new RelaySlots<'friend-cam' | 'friend-audio'>(async (sid) => {
+    if (!this.ending) await this.game.localParticipant?.unpublishTrack(sid);
+  });
 
   /** bootId keeps Idempotency-Keys unique when the agent restarts and the same session calls again. */
   constructor(msg: StartMsg, attempt: number, bootId: string, private hub: Hub, private onDone: () => void) {
@@ -94,7 +98,8 @@ export class CallSession {
   }
 
   async run(): Promise<void> {
-    this.setup = this.setUp();
+    // If a connect outlives end()'s setup wait, cleanup has already run and missed that room: release it here.
+    this.setup = this.setUp().finally(() => (this.cleanedUp ? this.releaseRooms() : undefined));
     try {
       await this.setup;
     } catch (e) {
@@ -173,13 +178,13 @@ export class CallSession {
     this.ft.on(RoomEvent.TrackSubscribed, (track: RemoteTrack, pub: RemoteTrackPublication, p: RemoteParticipant) => {
       log('ft_track', { name: pub.name, from: p.identity });
       if (p.identity !== this.bridgeIdentity) return;
-      if (pub.name === 'facetime-remote-video') this.relayCallerVideo(track);
-      if (pub.name === 'facetime-remote-audio') this.relayCallerAudio(track);
+      if (pub.name === 'facetime-remote-video') this.relayCallerVideo(track, pub.sid!);
+      if (pub.name === 'facetime-remote-audio') this.relayCallerAudio(track, pub.sid!);
     });
     this.ft.on(RoomEvent.TrackUnsubscribed, (_t: RemoteTrack, pub: RemoteTrackPublication, p: RemoteParticipant) => {
       if (p.identity !== this.bridgeIdentity) return;
-      if (pub.name === 'facetime-remote-video') void this.dropRelay('friend-cam');
-      if (pub.name === 'facetime-remote-audio') void this.dropRelay('friend-audio');
+      if (pub.name === 'facetime-remote-video') void this.relays.drop('friend-cam', pub.sid!);
+      if (pub.name === 'facetime-remote-audio') void this.relays.drop('friend-audio', pub.sid!);
     });
     this.ft.on(RoomEvent.LocalTrackPublished, () => this.checkInvariants());
     this.ft.on(RoomEvent.Disconnected, (r) => { if (!this.ending) warn('ft_room_disconnected', { reason: r }); });
@@ -205,29 +210,18 @@ export class CallSession {
     if (extra.length) warn('INVARIANT_unexpected_ft_track', { names: extra.map((p) => p.name) });
   }
 
-  /** One relay per game-room track: a new bridge subscription replaces the old relay, never adds a second. */
-  private relay(name: 'friend-cam' | 'friend-audio', stream: Relay['stream'], source: Relay['source'], track: LocalVideoTrack | LocalAudioTrack, opts: TrackPublishOptions): void {
-    const previous = this.dropRelay(name);
-    const published = previous.then(() => this.game.localParticipant!.publishTrack(track, opts))
-      .then((p) => { log(`${name.replace('-', '_')}_published`); return p.sid; })
-      .catch((e) => { warn(`${name.replace('-', '_')}_publish_failed`, { error: errText(e) }); return undefined; });
-    this.relays.set(name, { stream, source, published });
+  /** A new bridge subscription replaces the old relay, never adds a second. */
+  private relay(name: 'friend-cam' | 'friend-audio', from: string, stream: { cancel(): Promise<void> }, source: { close(): Promise<void> }, track: LocalVideoTrack | LocalAudioTrack, opts: TrackPublishOptions): void {
+    const label = name.replace('-', '_');
+    this.relays.replace(name, from, { stream, source }, () => this.game.localParticipant!.publishTrack(track, opts)
+      .then((p) => { log(`${label}_published`); return p.sid; })
+      .catch((e) => { warn(`${label}_publish_failed`, { error: errText(e) }); return undefined; }));
   }
 
-  private async dropRelay(name: 'friend-cam' | 'friend-audio'): Promise<void> {
-    const r = this.relays.get(name);
-    if (!r) return;
-    this.relays.delete(name);
-    await r.stream.cancel().catch(() => {});
-    const sid = await r.published;
-    if (sid && !this.ending) await this.game.localParticipant?.unpublishTrack(sid).catch(() => {});
-    await r.source.close().catch(() => {});
-  }
-
-  private relayCallerVideo(track: RemoteTrack): void {
+  private relayCallerVideo(track: RemoteTrack, from: string): void {
     const source = new VideoSource(OUT_W, OUT_H);
     const stream = new VideoStream(track);
-    this.relay('friend-cam', stream, source, LocalVideoTrack.createVideoTrack('friend-cam', source),
+    this.relay('friend-cam', from, stream, source, LocalVideoTrack.createVideoTrack('friend-cam', source),
       new TrackPublishOptions({ source: TrackSource.SOURCE_CAMERA, simulcast: false }));
     void (async () => {
       let frames = 0;
@@ -241,10 +235,10 @@ export class CallSession {
     })();
   }
 
-  private relayCallerAudio(track: RemoteTrack): void {
+  private relayCallerAudio(track: RemoteTrack, from: string): void {
     const source = new AudioSource(48_000, 1, 100);
     const stream = new AudioStream(track, { sampleRate: 48_000, numChannels: 1 });
-    this.relay('friend-audio', stream, source, LocalAudioTrack.createAudioTrack('friend-audio', source),
+    this.relay('friend-audio', from, stream, source, LocalAudioTrack.createAudioTrack('friend-audio', source),
       new TrackPublishOptions({ source: TrackSource.SOURCE_MICROPHONE }));
     void (async () => {
       try { for await (const f of stream) await source.captureFrame(f); }
@@ -257,23 +251,37 @@ export class CallSession {
   private async dial(): Promise<void> {
     const names = new Set([...this.ft.localParticipant!.trackPublications.values()].map((p) => p.name));
     if (!names.has('agent-video') || !names.has('quartermaster-audio')) throw new Error('agent tracks not published before dialing');
+    await this.waitTracksVisible();
+    if (this.ending) return;
     const bridgeToken = await mint(this.bridgeIdentity, this.ftRoom, '30m');
     if (this.ending) return;
     this.dialedAt = Date.now();
-    const { id, queued } = await createCall({
+    const { id, queued, status } = await createCall({
       destination: this.friend.phoneE164, livekitUrl: env.LIVEKIT_URL,
       participantToken: bridgeToken, remoteIdentity: this.ft.localParticipant!.identity,
     }, `${this.keyBase}-create`, () => !!this.ending);
     this.callId = id;
+    if (queued) this.statusAt202 = status;
     log('chert_call_created', { callId: id, queued, ms: Date.now() - this.dialedAt });
     if (this.ending) {
       log('chert_call_created_after_end', { callId: id });
       await this.endChert();
       return;
     }
-    if (!queued) this.allocatedAt = Date.now();
     await noteActiveCall(id, `${this.keyBase}-end`).catch(() => {});
     void this.pollEvents();
+  }
+
+  /** Chert checks the room on the server, which can list a just-published track a moment after we have it. */
+  private async waitTracksVisible(): Promise<void> {
+    const until = Date.now() + TRACKS_VISIBLE_WAIT_MS;
+    for (;;) {
+      const me = (await this.roomService().listParticipants(this.ftRoom).catch(() => [])).find((p) => p.identity === AGENT_FT_IDENTITY);
+      const seen = new Set(me?.tracks.map((t) => t.name));
+      if (seen.has('agent-video') && seen.has('quartermaster-audio')) return;
+      if (Date.now() > until || this.ending) { warn('agent_tracks_not_visible_on_server', { seen: [...seen] }); return; }
+      await sleep(100);
+    }
   }
 
   /** POST /end once per call, whoever asks first. */
@@ -303,19 +311,21 @@ export class CallSession {
   /** While the call waits on the shared line, the no-answer clock has not started. */
   private async checkQueue(): Promise<void> {
     const status = await getCallStatus(this.callId!).catch((e) => { warn('chert_status_failed', { error: errText(e) }); return undefined; });
-    if (!status || status === 'queued') return;
+    if (!status || isQueuedStatus(status, this.statusAt202)) return;
     this.allocatedAt = Date.now();
     log('chert_call_allocated', { status, queuedMs: this.allocatedAt - this.dialedAt });
   }
 
+  /** Allocation is decided only by checkQueue: event names are partly guessed, and a queued event must not start the clock. */
   private onChertEvent(ev: ChertEvent): void {
-    const { type } = ev;
-    if (!this.allocatedAt && type !== 'queued') this.allocatedAt = Date.now();
-    if (type === 'bridge_ready' || type === 'call.started') this.onBridgeReady(type);
-    else if (/ring|dial|alert/i.test(type) && this.state === 'dialing') this.status('ringing');
-    else if (type === 'remote_video_unavailable') this.say('cantSee', PRIORITY.scan);
-    else if (type === 'ended' || type === 'call.ended') void this.end(ev.reason ?? 'remote_ended', 'ended', { quick: true });
-    else if (type === 'failed' || type === 'call.failed') void this.end(ev.reason ?? 'chert_failed', 'failed', { quick: true });
+    switch (chertEventKind(ev.type)) {
+      case 'ready': this.onBridgeReady(ev.type); break;
+      case 'ringing': if (this.state === 'dialing') this.status('ringing'); break;
+      case 'no_video': this.say('cantSee', PRIORITY.scan); break;
+      case 'ended': void this.end(ev.reason ?? 'remote_ended', 'ended', { quick: true }); break;
+      case 'failed': void this.end(ev.reason ?? 'chert_failed', 'failed', { quick: true }); break;
+      case 'other': break;
+    }
   }
 
   // ── call flow ────────────────────────────────────────────────
@@ -340,7 +350,7 @@ export class CallSession {
   }
 
   private onGameEvent(e: GameEvent): void {
-    if (!this.bridgeReadyAt) return;
+    if (!this.bridgeReadyAt || this.ending) return;
     switch (e.kind) {
       case 'match_start': this.say('matchStart', PRIORITY.flavor); break;
       case 'wave_start': this.say('waveStart', PRIORITY.flavor); break;
@@ -402,6 +412,7 @@ export class CallSession {
   }
 
   private onWeapon(w: WeaponSpawn): void {
+    if (this.ending) return;
     this.lastWeapon = w;
     const fromOurScan = this.awaitingWeapon;
     this.awaitingWeapon = false;
@@ -426,7 +437,8 @@ export class CallSession {
     this.scanner.cancel();
     try {
       // A connect or a create in flight would otherwise finish after cleanup and leave a room or a call behind.
-      await Promise.race([this.setup?.catch(() => {}), sleep(SETUP_WAIT_MS)]);
+      // Once POST /calls has started, wait for its whole retry run: a late reply is the only way to learn the call id.
+      await Promise.race([this.setup?.catch(() => {}), sleep(this.dialedAt ? CREATE_AFTER_CANCEL_MAX_MS : SETUP_WAIT_MS)]);
       if (this.bridgeReadyAt && !opts.quick) {
         const f = pick('farewell');
         await Promise.race([this.narrator.sayNow(f.text, PRIORITY.greeting, f.pcm), sleep(FAREWELL_WAIT_MS)]);
@@ -434,17 +446,19 @@ export class CallSession {
       if (this.callId) log('chert_end', { status: await this.endChert() });
     } finally {
       this.narrator.stop();
-      await Promise.allSettled([
-        ...[...this.relays.values()].flatMap((r) => [r.stream.cancel(), r.source.close()]),
-        this.mixer.close(), this.video.close(),
-      ]);
-      await Promise.allSettled([this.ft.disconnect(), this.game.disconnect()]);
-      await this.roomService().deleteRoom(this.ftRoom).catch((e) => warn('delete_room_failed', { error: errText(e) }));
+      await Promise.allSettled([...this.relays.closeAll(), this.mixer.close(), this.video.close()]);
+      this.cleanedUp = true;
+      await this.releaseRooms();
       if (this.callId) await clearActiveCall().catch(() => {});
       this.status(final, reason);
       log('call_cleaned_up', { ftRoom: this.ftRoom, elapsedMs: this.bridgeReadyAt ? Date.now() - this.bridgeReadyAt : 0 });
       this.onDone();
     }
+  }
+
+  private async releaseRooms(): Promise<void> {
+    await Promise.allSettled([this.ft.disconnect(), this.game.disconnect()]);
+    await this.roomService().deleteRoom(this.ftRoom).catch((e) => warn('delete_room_failed', { error: errText(e) }));
   }
 
   private roomService(): RoomServiceClient {

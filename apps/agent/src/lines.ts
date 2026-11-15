@@ -46,13 +46,14 @@ export async function prerenderLines(): Promise<void> {
   log('tts_cache_ready', { lines: cache.size, of: texts.length, ms: Date.now() - t0 });
 }
 
-/** The greeting must come from the cache (spec B.5), so keep retrying it in the background until it renders. */
+/** The greeting must come from the cache (spec B.5), so keep retrying every missing greeting line until all render. */
 export async function ensureGreeting(): Promise<void> {
-  const text = LINES.greeting[0];
-  for (let tries = 1; !cache.has(text); tries++) {
+  for (let tries = 1; !greetingReady(); tries++) {
     await new Promise((r) => setTimeout(r, 5_000));
-    try { cache.set(text, await renderCached(text)); log('greeting_rendered', { tries }); }
-    catch (e) { warn('greeting_render_failed', { tries, error: errText(e) }); }
+    for (const text of LINES.greeting.filter((t) => !cache.has(t))) {
+      try { cache.set(text, await renderCached(text)); log('greeting_rendered', { tries }); }
+      catch (e) { warn('greeting_render_failed', { tries, error: errText(e) }); }
+    }
   }
 }
 

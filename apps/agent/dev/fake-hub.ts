@@ -18,7 +18,7 @@ const webs = new Map<string, Set<WebSocket>>();
 const forgeCalls = new Map<string, number>();
 
 // ── fake Chert (for `pnpm dev:fake-chert`): the agent runs AGENT_MODE=live against /fake-chert. No real calls. ──
-type FakeCall = { id: string; key: string; body: Record<string, unknown>; status: string; events: Array<Record<string, unknown>>; endPosts: number; agentTracksAtCreate: string[] };
+type FakeCall = { id: string; key: string; body: Record<string, unknown>; status: string; events: Array<Record<string, unknown>>; endPosts: number; pollsAfterEnd: number; agentTracksAtCreate: string[] };
 const calls = new Map<string, FakeCall>();
 let lastCall: FakeCall | null = null;
 let createCount = 0;
@@ -47,7 +47,7 @@ async function fakeChert(method: string, path: string, req: IncomingMessage, jso
     const b = JSON.parse(raw) as Record<string, unknown>;
     const ftRoom = /"room":"([^"]+)"/.exec(Buffer.from(String(b.participant_token).split('.')[1] ?? '', 'base64url').toString())?.[1] ?? '';
     const agent = (await rooms.listParticipants(ftRoom).catch(() => [])).find((p) => p.identity === b.remote_participant_identity);
-    const c: FakeCall = { id: randomBytes(4).toString('hex'), key, body: b, status: queued ? 'queued' : 'allocating', events: [], endPosts: 0, agentTracksAtCreate: agent?.tracks.map((t) => t.name) ?? [] };
+    const c: FakeCall = { id: randomBytes(4).toString('hex'), key, body: b, status: queued ? 'queued' : 'allocating', events: queued ? [{ id: 'ev-0', type: 'call.queued' }] : [], endPosts: 0, pollsAfterEnd: 0, agentTracksAtCreate: agent?.tracks.map((t) => t.name) ?? [] };
     calls.set(c.id, c);
     lastCall = c;
     createCount++;
@@ -57,6 +57,7 @@ async function fakeChert(method: string, path: string, req: IncomingMessage, jso
   }
   const c = calls.get(parts[1] ?? '');
   if (parts[0] !== 'calls' || !c) return json(404, { error: { code: 'not_found' } });
+  if (method === 'GET' && c.endPosts) c.pollsAfterEnd++;
   if (method === 'GET' && parts.length === 2) return json(200, { data: { id: c.id, status: c.status } });
   if (method === 'GET' && parts[2] === 'events') return json(200, { data: c.events });
   if (method === 'POST' && parts[2] === 'end') { c.endPosts++; c.status = 'ended'; log('fake_chert_end', { id: c.id }); return json(202, {}); }
@@ -113,7 +114,7 @@ const server = createServer(async (req, res) => {
         toAgent(msg);
         log('weapon_spawn', { sid });
       }, 2_500);
-      return json(202, { detected: true, forgeId, objectName: 'frying pan', displayName: 'Pan of Telemachus', weaponClass: 'blunt', quip: 'A frying pan? Bold. I like it. Forging now.' });
+      return json(202, { forgeId, objectName: 'frying pan', displayName: 'Pan of Telemachus', weaponClass: 'blunt', quip: 'A frying pan? Bold. I like it. Forging now.' });
     }
     json(404, { error: 'not_found' });
   } catch (e) {

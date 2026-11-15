@@ -167,7 +167,7 @@ async function mockWebGone(): Promise<void> {
 
 // ── live-path scenarios against the fake Chert ──
 
-type FakeCall = { id: string; body: Record<string, unknown>; status: string; endPosts: number; agentTracksAtCreate: string[] };
+type FakeCall = { id: string; body: Record<string, unknown>; status: string; endPosts: number; pollsAfterEnd: number; agentTracksAtCreate: string[] };
 const fakeLast = async () => (await (await fetch(`${HUB}/fake-chert/_last`)).json()) as { call: FakeCall | null; createCount: number };
 const fakeEmit = (id: string, e: Record<string, unknown>) => post('/fake-chert/_emit', { id, ...e });
 
@@ -197,6 +197,8 @@ async function liveQueuedCall(): Promise<void> {
   await fakeEmit(c.id, { status: 'failed', type: 'failed', data: { reason: 'several_audio' } });
   check('failed with Chert reason (review #5)', await waitFor(() => g.msgs.some((m) => m.type === 'call.status' && m.state === 'failed' && m.reason === 'several_audio'), 5_000));
   check('POST /end sent after Chert failed (review #5)', (await fakeLast()).call!.endPosts === 1, (await fakeLast()).call!.endPosts);
+  await sleep(1_000);
+  check('no polling after the end', (await fakeLast()).call!.pollsAfterEnd === 0, (await fakeLast()).call!.pollsAfterEnd);
   await Promise.all([phone.close(), g.close()]);
 }
 
@@ -213,7 +215,7 @@ async function liveEndDuringCreate(): Promise<void> {
   await sleep(1_000);
   const c = (await fakeLast()).call!;
   check('late call ended with POST /end', c.endPosts === 1, c.endPosts);
-  check('no polling after the end', !g.has('call.status', 'connected'));
+  check('no polling after the end', c.pollsAfterEnd === 0, c.pollsAfterEnd);
   check('no FaceTime room left behind', !(await roomExists(`ft-${g.sid}-1`)));
   await g.close();
 }

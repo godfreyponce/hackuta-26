@@ -14,11 +14,13 @@ export class Narrator {
   private current: Item | null = null;
   private lastEnd = 0;
   private timer: NodeJS.Timeout | null = null;
+  private stopped = false;
 
   constructor(private mixer: Mixer, private onSpoken: (text: string, priority: number) => void) {}
 
   /** pcm = a cached render; without it the line streams from ElevenLabs. */
   say(text: string, priority: number, pcm?: Int16Array): void {
+    if (this.stopped) return;
     const item: Item = { text, priority, at: Date.now(), ...(pcm ? { pcm } : {}) };
     if (this.current && priority >= 90 && priority > this.current.priority) {
       log('narration_interrupt', { was: this.current.text });
@@ -42,13 +44,14 @@ export class Narrator {
   }
 
   stop(): void {
+    this.stopped = true;
     this.queue = [];
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
   }
 
   private pump(): void {
-    if (this.current || this.timer) return;
+    if (this.stopped || this.current || this.timer) return;
     const now = Date.now();
     this.queue = this.queue.filter((i) => i.priority >= 80 || now - i.at <= STALE_MS);
     const next = this.queue[0];
