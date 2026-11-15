@@ -4,14 +4,13 @@ import { writeFile, appendFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { AutoSubscribe, defineAgent, voice } from '@livekit/agents';
 import * as google from '@livekit/agents-plugin-google';
-import { GoogleGenAI, Type } from '@google/genai';
 import { LocalVideoTrack, RoomEvent, TrackKind, TrackSource, VideoBufferType, VideoFrame, VideoSource, VideoStream } from '@livekit/rtc-node';
 import sharp from 'sharp';
 import { runAgent } from './chert-rooms.mjs';
 import { greetOnBridgeReady } from './greet.mjs';
+import { describeObject } from './vision.mjs';
 
 const OUT_W = 640, OUT_H = 360, OUT_FPS = 15;
-const VISION_MODEL = process.env.VISION_MODEL || 'gemini-2.5-flash';
 // Guess from the 6:15 PM call: the free-tier key returned 429 after ~18 requests in 18 s. 4 s = 15 a minute.
 const VISION_MIN_GAP_MS = 4000;
 const RUN_DIR = fileURLToPath(new URL(`./runs/${new Date().toISOString().replace(/[:.]/g, '-')}/`, import.meta.url));
@@ -28,15 +27,7 @@ A vision system tells you what the caller holds up. When it does, name the objec
 Otherwise keep replies to one short sentence. Be clear that you are an AI.`;
 const greeting = 'Say in one short sentence that you are an AI camera test and ask the caller to hold up an object.';
 
-const genai = new GoogleGenAI({ apiKey: process.env.GOOGLE_API_KEY });
-const visionSchema = {
-  type: Type.OBJECT,
-  properties: {
-    object: { type: Type.STRING, nullable: true, description: 'Short name of the main object the person is holding up or showing, or null if none.' },
-    box_2d: { type: Type.ARRAY, items: { type: Type.INTEGER }, nullable: true, description: '[ymin, xmin, ymax, xmax] of that object, each 0-1000.' },
-  },
-  required: ['object', 'box_2d'],
-};
+const ARMORY = 'http://127.0.0.1:8787/sighting';
 
 async function toUpright(rgba, width, height, rotation) {
   const image = sharp(Buffer.from(rgba.buffer, rgba.byteOffset, rgba.byteLength), { raw: { width, height, channels: 4 } });
@@ -134,6 +125,7 @@ const agent = defineAgent({
     // Vision loop: newest frame to Gemini Flash, one request at a time.
     let lastSpoken = null;
     let lastSentMs = 0;
+    const forgedNames = [];
     const visionLoop = async () => {
       while (!stopped) {
         if (!latest) { await new Promise(r => setTimeout(r, 300)); continue; }
@@ -142,21 +134,21 @@ const agent = defineAgent({
         const snap = latest;
         try {
           const rgba = snap.frame.convert(VideoBufferType.RGBA);
-          const jpeg = await (await toUpright(rgba.data, rgba.width, rgba.height, snap.rotation)).resize({ width: 640, withoutEnlargement: true }).jpeg({ quality: 80 }).toBuffer();
+          const full = await (await toUpright(rgba.data, rgba.width, rgba.height, snap.rotation)).jpeg({ quality: 90 }).toBuffer();
+          const jpeg = await sharp(full).resize({ width: 640, withoutEnlargement: true }).jpeg({ quality: 80 }).toBuffer();
           const sent = Date.now();
-          const res = await genai.models.generateContent({
-            model: VISION_MODEL,
-            contents: [{ role: 'user', parts: [
-              { inlineData: { mimeType: 'image/jpeg', data: jpeg.toString('base64') } },
-              { text: 'What object is the person holding up or showing to the camera? Give its short name and bounding box.' },
-            ] }],
-            config: { responseMimeType: 'application/json', responseSchema: visionSchema, thinkingConfig: { thinkingLevel: 'MINIMAL' } },
-          });
+          const out = await describeObject(jpeg, forgedNames);
           const done = Date.now();
-          const out = JSON.parse(res.text || '{}');
-          log('vision', { object: out.object, box: out.box_2d, model_ms: done - sent, frame_age_ms: done - snap.recvMs });
+          log('vision', { object: out.object, box: out.box_2d, class: out.weapon_class, color: out.color, model_ms: done - sent, frame_age_ms: done - snap.recvMs });
           if (out.object) {
             seen = { object: out.object, box: Array.isArray(out.box_2d) && out.box_2d.length === 4 ? out.box_2d : null, at: done };
+            if (seen.box && !forgedNames.some(n => n.toLowerCase() === out.object.trim().toLowerCase())) {
+              forgedNames.push(out.object.trim());
+              void fetch(ARMORY, { method: 'POST', headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ call: ctx.job.id, frame: full.toString('base64'), ...out, box_2d: seen.box }) })
+                .then(async r => log('armory', { object: out.object, status: r.status, result: await r.text() }))
+                .catch(error => log('armory_error', { message: String(error?.message || error) }));
+            }
             if (out.object.toLowerCase() !== lastSpoken) {
               lastSpoken = out.object.toLowerCase();
               log('speak_object', { object: out.object });
