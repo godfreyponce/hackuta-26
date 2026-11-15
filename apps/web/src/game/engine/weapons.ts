@@ -8,7 +8,7 @@ import { P } from './humanoid';
 import type { Enemy, EnemyManager, HitInfo, HitResult } from './enemies';
 import type { Fx } from './fx';
 import { audio } from './audio';
-import { PREFAB_BUILDERS, buildArrow, buildBlade, buildBowStave, buildSpear } from './weaponGeo';
+import { PREFAB_BUILDERS, buildArrow, buildAspis, buildBlade, buildBowStave, buildSpear } from './weaponGeo';
 import { ballisticDir, basisQuat, clamp, rand, rotateToward } from './math';
 
 export type WClass = WeaponClass | 'bow' | 'arrow';
@@ -17,7 +17,7 @@ type WState = 'racked' | 'held' | 'free' | 'pinned' | 'stuck' | 'incoming' | 'go
 const DAMAGE_K = 4.5;
 const BOW_SPEC: WeaponClassSpec = { lengthM: 1.25, massKg: 1.0, damage: 0.8, sharp: false, throwMult: 1.3, grip: 'center', examples: [] };
 const ARROW_SPEC: WeaponClassSpec = { lengthM: 0.78, massKg: 0.15, damage: 2.0, sharp: true, throwMult: 1.6, grip: 'center', examples: [] };
-const DAGGER_SPEC: WeaponClassSpec = { ...WEAPON_CLASSES.sword, lengthM: 0.45, massKg: 1.0 };
+const DAGGER_SPEC: WeaponClassSpec = { ...WEAPON_CLASSES.sword, lengthM: 0.72, massKg: 1.1 };
 const HELD_MULT = 1.5; // melee feel: a held weapon's swing carries the arm's mass too
 const FIST = { massKg: 1.1, damage: 0.9 };
 
@@ -49,6 +49,8 @@ export interface WeaponEnt {
   restT: number;
   incoming: { from: THREE.Vector3; to: THREE.Vector3; ctrl: THREE.Vector3; t: number; dur: number; toHand: Hand | null; quatFrom: THREE.Quaternion } | null;
   returnToSender: boolean;
+  /** thrown/dropped by the player (dropped wooer weapons never deal damage while tumbling) */
+  byPlayer: boolean;
   hitCd: Map<number, number>;
   spinDir: number;
 }
@@ -62,6 +64,8 @@ export interface WeaponHooks {
   onHeal(amount: number): void;
   onForgedArrive(w: WeaponEnt, toHand: boolean): void;
   onParry(pos: THREE.Vector3): void;
+  onRecoil(hand: Hand, dir: THREE.Vector3, dist: number, dampMs: number): void;
+  onChamber(w: WeaponEnt, at: THREE.Vector3): void;
   hitstop(ms: number): void;
   shake(v: number): void;
   playerPos(): THREE.Vector3;
@@ -277,7 +281,7 @@ export class WeaponManager {
       state: 'racked', hand: null, rackPose: null, rackKind: null,
       segA, segB, radius, prevTip: new THREE.Vector3(), prevCenter: new THREE.Vector3(), tip: new THREE.Vector3(), center: new THREE.Vector3(),
       speed: 0, prevVel: new THREE.Vector3(), thrownAt: 0, throwOrigin: new THREE.Vector3(), staticHits: 0, throwKills: [],
-      alignFlight: false, pin: null, durability: 9999, kills: 0, restT: 0, incoming: null, returnToSender: false, hitCd: new Map(), spinDir: 1,
+      alignFlight: false, pin: null, durability: 9999, kills: 0, restT: 0, incoming: null, returnToSender: false, hitCd: new Map(), spinDir: 1, byPlayer: true,
     };
     if (obj) {
       obj.traverse((o) => { if ((o as THREE.Mesh).isMesh) { (o as THREE.Mesh).castShadow = false; } });
@@ -334,7 +338,7 @@ export class WeaponManager {
   }
   private spawnDagger(i: number) {
     const g = buildBlade(DAGGER_SPEC.lengthM);
-    const w = this.create('sword', DAGGER_SPEC, g, 'Bronze Dagger');
+    const w = this.create('sword', DAGGER_SPEC, g, 'Xiphos of Ithaca');
     w.rackKind = 'dagger';
     w.rackPose = this.daggerSlot(i);
     this.rack(w);
@@ -443,6 +447,7 @@ export class WeaponManager {
   }
 
   private attach(w: WeaponEnt, h: HandView) {
+    w.byPlayer = true;
     if (w.pin) { try { this.world.removeImpulseJoint(w.pin.joint, true); } catch { /* gone */ } w.pin = null; }
     w.state = 'held';
     w.hand = h.side;
@@ -719,7 +724,7 @@ export class WeaponManager {
         const lv = w.body.linvel();
         const sp = Math.hypot(lv.x, lv.y, lv.z);
         w.speed = sp;
-        if (sp > 2.0 && !w.pin) {
+        if (sp > 2.0 && !w.pin && w.byPlayer) {
           const dir = new THREE.Vector3(lv.x, lv.y, lv.z).multiplyScalar(1 / sp);
           this.tryHit(w, a, b, sp, w.cls === 'arrow' ? 'arrow' : 'thrown', dir, dt);
         }
@@ -761,10 +766,9 @@ export class WeaponManager {
       if (this.realT - last < 0.35) continue;
       hit.enemy.lastHit.set(cdKey, this.realT);
       const zone = this.enemies.zoneOf(hit.part);
-      const zm = zone === 'head' ? 3 : zone === 'torso' ? 1 : 0.6;
       const info: HitInfo = {
-        amount: sp * FIST.massKg * FIST.damage * zm * DAMAGE_K, zone, part: hit.part, point: hit.point, dir: h.vel.clone().normalize(),
-        speed: sp, sharp: false, source: 'fist', impulse: sp * 18, weaponEntId: null,
+        amount: 0, zone, part: hit.part, point: hit.point, dir: h.vel.clone().normalize(),
+        speed: sp, sharp: false, source: 'fist', impulse: sp * 18, weaponEntId: null, massKg: FIST.massKg, classDamage: FIST.damage,
       };
       const res = this.enemies.damage(hit.enemy, info);
       this.hooks.onHit(null, res, info);
@@ -776,36 +780,49 @@ export class WeaponManager {
   }
 
   private tryHit(w: WeaponEnt, a: THREE.Vector3, b: THREE.Vector3, speed: number, source: HitInfo['source'], dir: THREE.Vector3, dt: number) {
+    // gameplay blade is 0.12 m longer than the visual one (research: forgiving reach)
+    const axis = _v3.subVectors(b, a);
+    const len = axis.length();
+    if (len > 1e-4) axis.multiplyScalar(1 / len);
+    const longB = (w.spec.sharp && w.cls !== 'arrow') ? new THREE.Vector3().copy(b).addScaledVector(axis, 0.12) : b.clone();
     const sweepA = w.state === 'held' ? w.prevTip : w.prevCenter;
     const sweepB = w.state === 'held' ? w.tip : w.center;
     const hasSweep = sweepA.lengthSq() > 0 && sweepA.distanceTo(sweepB) < speed * dt * 3 + 0.5;
-    const hit = this.enemies.testSegment(a, b, w.radius, hasSweep ? sweepA : undefined, hasSweep ? sweepB : undefined);
+    const magnet = w.state === 'held' && speed > 3.5 ? 0.12 : 0;
+    // chamber: blade meets a wooer's sword during his wind-up → his attack is cancelled
+    if (w.state === 'held' && speed > 2) {
+      const clash = this.enemies.testSwords(a, longB, w.radius);
+      if (clash && this.enemies.chamber(clash.e, clash.point)) { this.hooks.onChamber(w, clash.point); return; }
+    }
+    const hit = this.enemies.testSegment(a, longB, w.radius, hasSweep ? sweepA : undefined, hasSweep ? sweepB : undefined, magnet);
     if (!hit) return;
-    const last = w.hitCd.get(hit.enemy.id) ?? -1;
-    if (this.realT - last < 0.3) return;
-    w.hitCd.set(hit.enemy.id, this.realT);
+    const key = hit.enemy.id * 16 + hit.part;
+    const last = w.hitCd.get(key) ?? -1;
+    if (this.realT - last < 0.25) return;
+    w.hitCd.set(key, this.realT);
     const zone = this.enemies.zoneOf(hit.part);
-    const zm = zone === 'head' ? 3 : zone === 'torso' ? 1 : 0.6;
-    const relSpeed = Math.min(speed, source === 'arrow' ? 70 : 32) * (w.state === 'held' ? 0.9 : 1);
-    const amount = relSpeed * w.spec.massKg * w.spec.damage * zm * DAMAGE_K * (w.state === 'held' ? HELD_MULT : 1);
+    const relSpeed = Math.min(speed, source === 'arrow' ? 70 : 32);
     const info: HitInfo = {
-      amount, zone, part: hit.part, point: hit.point, dir: dir.clone(), speed: relSpeed, sharp: w.spec.sharp,
+      amount: 0, zone, part: hit.part, point: hit.point, dir: dir.clone(), speed: relSpeed, sharp: w.spec.sharp,
       source, impulse: relSpeed * w.spec.massKg * (w.cls === 'blunt' || w.cls === 'shield' ? 14 : 7) + 40, weaponEntId: w.id,
+      bladeAxis: w.cls === 'arrow' ? dir.clone() : axis.clone(), massKg: w.spec.massKg * (w.state === 'held' ? HELD_MULT : 1), classDamage: w.spec.damage,
     };
     if (w.cls === 'bomb' && w.state === 'free') { this.detonate(w); return; }
     const res = this.enemies.damage(hit.enemy, info);
     this.hooks.onHit(w, res, info);
-    if (res.blocked) {
+    if (res.blocked || res.glanced) {
       if (w.state === 'free') {
         const lv = w.body.linvel();
         w.body.setLinvel({ x: -lv.x * 0.25, y: Math.abs(lv.y) * 0.3 + 1.2, z: -lv.z * 0.25 }, true);
         w.alignFlight = false;
         w.body.setAngvel({ x: rand(-8, 8), y: rand(-8, 8), z: rand(-8, 8) }, true);
+      } else if (w.hand) {
+        // your blow was turned: the sword kicks back (research: 0.15–0.2 m over ~150 ms)
+        this.hooks.onRecoil(w.hand, dir, res.parried ? 0.2 : 0.12, res.parried ? 0.4 : 0.15);
       }
-      this.hooks.shake(0.12);
+      this.hooks.shake(res.parried ? 0.15 : 0.08);
       return;
     }
-    audio.thunk(w.cls === 'blunt' ? 1.2 : 0.8);
     if (w.forged) {
       w.durability--;
       if (w.durability <= 0 && w.state !== 'gone') { this.breakWeapon(w); return; }
@@ -814,10 +831,10 @@ export class WeaponManager {
       w.throwKills.push(this.t);
       // PIN: sharp weapon killing at > 8 m/s joints itself to the hit part and keeps flying.
       const rag = hit.enemy.ragdoll;
-      if (w.spec.sharp && speed > 8 && rag && !w.pin) {
-        const part = rag.bodies[hit.part] ?? rag.bodies[P.Torso];
+      const part = rag ? (rag.bodies[hit.part] ?? rag.bodies[P.Torso]) : null;
+      if (w.spec.sharp && speed > 8 && rag && part && !w.pin && !res.severed) {
         const lv = w.body.linvel();
-        for (const bdy of rag.bodies) bdy.setLinvel({ x: lv.x * 0.55, y: lv.y * 0.55 + 0.6, z: lv.z * 0.55 }, true);
+        for (const bdy of rag.bodies) bdy?.setLinvel({ x: lv.x * 0.55, y: lv.y * 0.55 + 0.6, z: lv.z * 0.55 }, true);
         const wt = w.body.translation(), wr = w.body.rotation();
         const pt = part.translation(), pr = part.rotation();
         const wq = new THREE.Quaternion(wr.x, wr.y, wr.z, wr.w);
@@ -831,15 +848,34 @@ export class WeaponManager {
         const joint = this.world.createImpulseJoint(jd, w.body, part, true);
         joint.setContactsEnabled(false);
         w.pin = { joint, until: this.t + 0.5, enemy: hit.enemy };
-        // keep flying: restore pre-hit velocity
         w.body.setLinvel({ x: w.prevVel.x, y: w.prevVel.y, z: w.prevVel.z }, true);
       }
     } else if (w.state === 'free' && !res.killed) {
-      // non-lethal thrown hit: lose most energy
       const lv = w.body.linvel();
       w.body.setLinvel({ x: lv.x * -0.15, y: 1.0, z: lv.z * -0.15 }, true);
       w.alignFlight = false;
     }
+  }
+
+  /** A wooer's weapon or shield falls free (dropped on death or when his arm is cut off) — grab it. */
+  spawnDropped(kind: 'sword' | 'spear' | 'shield', pos: THREE.Vector3, quat: THREE.Quaternion, vel: THREE.Vector3) {
+    let w: WeaponEnt;
+    if (kind === 'sword') w = this.create('sword', { ...WEAPON_CLASSES.sword, lengthM: 0.7, massKg: 1.1 }, buildBlade(0.7), "Wooer's Xiphos");
+    else if (kind === 'spear') w = this.create('spear', WEAPON_CLASSES.spear, buildSpear(1.8), "Wooer's Spear");
+    else w = this.create('shield', WEAPON_CLASSES.shield, buildAspis(0.82), 'Wooer’s Aspis');
+    w.rackKind = null;
+    w.byPlayer = false;
+    this.setDynamic(w);
+    w.state = 'free';
+    w.thrownAt = this.t;
+    w.body.setTranslation({ x: pos.x, y: pos.y, z: pos.z }, true);
+    w.body.setRotation({ x: quat.x, y: quat.y, z: quat.z, w: quat.w }, true);
+    w.body.setLinvel({ x: vel.x, y: vel.y, z: vel.z }, true);
+    w.body.setAngvel({ x: rand(-3, 3), y: rand(-3, 3), z: rand(-3, 3) }, true);
+    // keep the floor tidy
+    const drops = this.list.filter((x) => x.rackKind === null && !x.forged && x.cls !== 'arrow' && x.cls !== 'bow' && x.state === 'free');
+    if (drops.length > 10) this.remove(drops[0]);
+    return w;
   }
 
   private onStaticContact(w: WeaponEnt) {
@@ -900,7 +936,7 @@ export class WeaponManager {
       if (d < 4) {
         const k = (1 - d / 4) * 90;
         const dir = _v.subVectors(pc, c).normalize();
-        e.ragdoll.bodies[P.Torso].applyImpulse({ x: dir.x * k, y: k * 1.1, z: dir.z * k }, true);
+        e.ragdoll.bodies[P.Torso]?.applyImpulse({ x: dir.x * k, y: k * 1.1, z: dir.z * k }, true);
       }
     }
     this.hooks.onExplode(w, killed);

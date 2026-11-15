@@ -182,27 +182,90 @@ export function faceTexture() {
   return canvasTex('face', 256, 128, (ctx, w, h) => {
     ctx.fillStyle = '#b98a68';
     ctx.fillRect(0, 0, w, h);
-    // face is centered at u=0.25 (sphere front, +Z after rotation)
-    const cx = w * 0.75, cy = h * 0.5;
-    ctx.fillStyle = '#1a120c';
-    ctx.fillRect(cx - 26, cy - 14, 14, 6);
-    ctx.fillRect(cx + 12, cy - 14, 14, 6);
-    ctx.fillStyle = '#efe6d6';
-    ctx.fillRect(cx - 24, cy - 6, 10, 6);
-    ctx.fillRect(cx + 14, cy - 6, 10, 6);
-    ctx.fillStyle = '#120c08';
-    ctx.fillRect(cx - 21, cy - 5, 5, 5);
-    ctx.fillRect(cx + 17, cy - 5, 5, 5);
-    // beard
-    ctx.fillStyle = '#24170f';
+    const cx = w * 0.75, cy = h * 0.46;
+    const g = ctx.createRadialGradient(cx, cy, 4, cx, cy + 6, 46);
+    g.addColorStop(0, 'rgba(0,0,0,0)');
+    g.addColorStop(1, 'rgba(40,20,10,0.35)');
+    ctx.fillStyle = g;
+    ctx.fillRect(cx - 60, cy - 50, 120, 110);
+    ctx.fillStyle = 'rgba(30,16,8,0.55)';
+    ctx.fillRect(cx - 24, cy - 8, 16, 7);
+    ctx.fillRect(cx + 8, cy - 8, 16, 7);
+    ctx.fillStyle = '#1b120c';
+    ctx.fillRect(cx - 25, cy - 14, 17, 4);
+    ctx.fillRect(cx + 8, cy - 14, 17, 4);
+    ctx.fillStyle = '#d9cbb4';
+    ctx.fillRect(cx - 20, cy - 6, 6, 3);
+    ctx.fillRect(cx + 13, cy - 6, 6, 3);
+    ctx.fillStyle = 'rgba(60,30,18,0.5)';
+    ctx.fillRect(cx - 3, cy - 4, 6, 16);
+    ctx.fillStyle = 'rgba(40,24,14,0.85)';
     ctx.beginPath();
-    ctx.ellipse(cx, cy + 34, 34, 22, 0, 0, Math.PI * 2);
+    ctx.moveTo(cx - 30, cy + 16);
+    ctx.quadraticCurveTo(cx - 28, cy + 44, cx, cy + 50);
+    ctx.quadraticCurveTo(cx + 28, cy + 44, cx + 30, cy + 16);
+    ctx.quadraticCurveTo(cx, cy + 30, cx - 30, cy + 16);
+    ctx.closePath();
     ctx.fill();
+    ctx.fillStyle = 'rgba(40,24,14,0.7)';
+    ctx.fillRect(cx - 12, cy + 15, 24, 4);
     ctx.fillStyle = '#5a2a20';
-    ctx.fillRect(cx - 9, cy + 18, 18, 4);
+    ctx.fillRect(cx - 7, cy + 23, 14, 2);
     // hair (back/top of head)
     ctx.fillStyle = '#1e140d';
     ctx.fillRect(0, 0, w, h * 0.22);
     ctx.fillRect(0, 0, w * 0.55, h);
+  });
+}
+
+/** Aspis blazon: field + offset rim + painted device (no gods: boar, scorpion, lion, serpent). */
+export function shieldTexture(device: 'boar' | 'scorpion' | 'serpent' | 'lion' = 'scorpion', field: 'bronze' | 'blue' | 'gilt' | 'worn' = 'bronze') {
+  return canvasTex(`aspis-${device}-${field}`, 256, 256, (ctx, w, h) => {
+    const F = { bronze: ['#b98a4c', '#5e4428'], blue: ['#2f5578', '#1a2e44'], gilt: ['#e2c06a', '#8a6a2a'], worn: ['#7a5c38', '#3e2e1e'] }[field];
+    const g = ctx.createRadialGradient(w * 0.42, h * 0.38, 10, w / 2, h / 2, w * 0.55);
+    g.addColorStop(0, F[0]); g.addColorStop(1, F[1]);
+    ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+    ctx.strokeStyle = field === 'gilt' ? '#5a3e14' : '#2a1a0e'; ctx.lineWidth = 12;
+    ctx.beginPath(); ctx.arc(w / 2, h / 2, w * 0.44, 0, Math.PI * 2); ctx.stroke();
+    ctx.strokeStyle = field === 'blue' ? '#c9b48a' : '#7a2622'; ctx.lineWidth = 6;
+    ctx.beginPath(); ctx.arc(w / 2, h / 2, w * 0.39, 0, Math.PI * 2); ctx.stroke();
+    const ink = field === 'blue' ? '#e6dcc6' : field === 'gilt' ? '#2a1a0a' : '#16110d';
+    ctx.fillStyle = ink; ctx.strokeStyle = ink;
+    ctx.save(); ctx.translate(w / 2, h / 2);
+    ctx.lineCap = 'round';
+    if (device === 'scorpion') {
+      ctx.beginPath(); ctx.ellipse(0, 10, 20, 34, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.lineWidth = 9;
+      ctx.beginPath(); ctx.moveTo(0, -20); ctx.quadraticCurveTo(10, -70, -18, -62); ctx.stroke();
+      for (const sd of [-1, 1]) {
+        ctx.beginPath(); ctx.moveTo(sd * 14, 30); ctx.quadraticCurveTo(sd * 48, 46, sd * 40, 72); ctx.stroke();
+        for (let k = 0; k < 3; k++) { ctx.beginPath(); ctx.moveTo(sd * 16, k * 12); ctx.lineTo(sd * 46, -8 + k * 16); ctx.stroke(); }
+      }
+    } else if (device === 'boar') {
+      ctx.beginPath(); ctx.ellipse(-4, 4, 58, 30, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(48, -12); ctx.lineTo(80, 2); ctx.lineTo(48, 20); ctx.fill();
+      ctx.fillRect(-42, 24, 11, 32); ctx.fillRect(26, 24, 11, 32);
+      for (let k = -44; k < 36; k += 10) { ctx.beginPath(); ctx.moveTo(k, -22); ctx.lineTo(k + 5, -40); ctx.lineTo(k + 10, -22); ctx.fill(); }
+      ctx.lineWidth = 5; ctx.strokeStyle = field === 'blue' ? '#2f5578' : F[0];
+      ctx.beginPath(); ctx.moveTo(66, 8); ctx.quadraticCurveTo(74, -8, 64, -14); ctx.stroke(); // tusk
+    } else if (device === 'lion') {
+      // striding lion, facing left (black-figure)
+      ctx.beginPath(); ctx.ellipse(14, 8, 52, 20, -0.05, 0, Math.PI * 2); ctx.fill();          // body
+      ctx.beginPath();                                                                          // jagged mane
+      for (let k = 0; k <= 16; k++) { const a = Math.PI * 0.35 + (k / 16) * Math.PI * 1.3; const r = k % 2 ? 34 : 26; ctx.lineTo(-38 + Math.cos(a) * r, -4 + Math.sin(a) * r); }
+      ctx.closePath(); ctx.fill();
+      ctx.beginPath(); ctx.ellipse(-62, -2, 16, 12, 0.2, 0, Math.PI * 2); ctx.fill();         // muzzle
+      ctx.lineWidth = 9;
+      for (const [x0, x1] of [[-14, -22], [4, 10], [40, 34], [56, 66]]) { ctx.beginPath(); ctx.moveTo(x0, 20); ctx.lineTo(x1, 56); ctx.stroke(); } // legs
+      ctx.lineWidth = 6; ctx.beginPath(); ctx.moveTo(64, 2); ctx.bezierCurveTo(96, -6, 96, -40, 80, -44); ctx.stroke(); // tail
+      ctx.beginPath(); ctx.arc(80, -46, 7, 0, Math.PI * 2); ctx.fill();
+    } else {
+      ctx.lineWidth = 16;
+      ctx.beginPath(); ctx.moveTo(-60, 60); ctx.bezierCurveTo(-60, -10, 60, 30, 40, -50); ctx.stroke();
+      ctx.beginPath(); ctx.arc(40, -54, 14, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+    noise(ctx, w, h, field === 'worn' ? 0.3 : 0.16, 2);
+    if (field === 'worn') for (let k = 0; k < 18; k++) { ctx.fillStyle = 'rgba(10,8,6,0.35)'; ctx.beginPath(); ctx.arc(Math.random() * w, Math.random() * h, 2 + Math.random() * 6, 0, Math.PI * 2); ctx.fill(); }
   });
 }

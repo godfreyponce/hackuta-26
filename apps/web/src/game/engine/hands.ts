@@ -24,7 +24,9 @@ export class Gauntlet {
     const leather = new THREE.MeshStandardMaterial({ color: '#2e1f14', roughness: 0.9, transparent: true });
     this.mats.push(mat, matEdge, leather);
 
-    const palm = new THREE.Mesh(new THREE.BoxGeometry(0.085, 0.095, 0.032), mat);
+    const glove = new THREE.MeshStandardMaterial({ color: '#3B2A1D', roughness: 0.82, transparent: true });
+    this.mats.push(glove);
+    const palm = new THREE.Mesh(new THREE.BoxGeometry(0.085, 0.095, 0.034), glove);
     palm.position.set(0, 0.02, 0);
     this.root.add(palm);
     const knuckle = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.02, 0.04), matEdge);
@@ -50,11 +52,11 @@ export class Gauntlet {
     for (let i = 0; i < 4; i++) {
       const base = new THREE.Group();
       base.position.set((i - 1.5) * 0.022, 0.07, 0);
-      const s1 = new THREE.Mesh(segGeo, i % 2 ? mat : matEdge);
+      const s1 = new THREE.Mesh(segGeo, glove);
       base.add(s1);
       const tip = new THREE.Group();
       tip.position.y = 0.042;
-      const s2 = new THREE.Mesh(segGeo, mat);
+      const s2 = new THREE.Mesh(segGeo, glove);
       s2.scale.set(0.92, 0.8, 0.92);
       tip.add(s2);
       base.add(tip);
@@ -64,10 +66,10 @@ export class Gauntlet {
     const tb = new THREE.Group();
     tb.position.set(-0.046 * sx, 0.0, -0.008);
     tb.rotation.z = 0.7 * sx;
-    tb.add(new THREE.Mesh(segGeo, matEdge));
+    tb.add(new THREE.Mesh(segGeo, glove));
     const tt = new THREE.Group();
     tt.position.y = 0.042;
-    tt.add(new THREE.Mesh(segGeo, mat));
+    tt.add(new THREE.Mesh(segGeo, glove));
     tb.add(tt);
     this.root.add(tb);
     this.thumb = { base: tb, tip: tt };

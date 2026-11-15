@@ -275,10 +275,20 @@ export function createKeyboardMouseController(): KeyboardMouseController {
     tr.velOver(60, tr.vel);
     s.vel.x = tr.vel.x; s.vel.y = tr.vel.y; s.vel.z = tr.vel.z;
     s.grip = tr.grip;
-    // Blade direction: shoulder → hand, tilted up into a guard.
-    const f = tmp.copy(tr.pos).sub(SHOULDER[h]).normalize();
+    // Blade direction (Half Sword–style mouse fencing): the point follows your aim so the tip
+    // reaches the wooers (~1.35 m); it trails fast motion so a swipe reads as a slash; in guard
+    // (RMB) it turns crosswise in front of the face to catch blows.
+    const f = tmp;
     if (mode.bow && h === 'left') f.copy(rayDir(aimDir));
-    else f.addScaledVector(WORLD_UP, 0.85).normalize();
+    else if (rmb) f.set(h === 'right' ? -0.92 : 0.92, 0.24, -0.32).normalize();
+    else {
+      rayDir(aimDir);
+      const sh = tmp2.copy(tr.pos).sub(SHOULDER[h]).normalize();
+      f.copy(aimDir).multiplyScalar(0.78).addScaledVector(sh, 0.22).addScaledVector(WORLD_UP, 0.16);
+      const lag = Math.min(1, tr.vel.length() / 6);
+      if (lag > 0.05) f.addScaledVector(tr.vel.clone().normalize(), -0.55 * lag);
+      f.normalize();
+    }
     s.forward.x = f.x; s.forward.y = f.y; s.forward.z = f.z;
     const u = h === 'right' ? tmp2.crossVectors(f, WORLD_UP) : tmp2.crossVectors(WORLD_UP, f);
     if (u.lengthSq() < 1e-4) u.set(h === 'right' ? 1 : -1, 0, 0);
@@ -309,8 +319,9 @@ export function createKeyboardMouseController(): KeyboardMouseController {
       R.target.copy(rest).lerp(tmp.set(0.05, -0.13, -0.14), state.bowDraw);
       L.grip = 1; R.grip = drawing ? 1 : 0.4;
     } else if (rmb) {
-      L.target.set(-0.13, -0.1, -0.36);
-      R.target.set(0.13, -0.1, -0.36);
+      // guard: sword raised crosswise in front of the face, through all three attack lanes
+      L.target.set(-0.16, -0.04, -0.46);
+      R.target.set(0.2, 0.0, -0.52);
     } else {
       const active = hands[mode.activeHand];
       // auto-lunge: a fast swing with a weapon extends the arm (mouse can't push forward)

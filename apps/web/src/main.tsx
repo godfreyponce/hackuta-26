@@ -17,7 +17,7 @@ const kind = (inputParam === 'motion' || inputParam === 'keyboard_mouse' || inpu
   : useApp.getState().inputKind;
 
 void bootNet();
-if (import.meta.env.DEV) {
+if (import.meta.env.DEV || params.get('debug') === '1') {
   (window as unknown as { __ithaca: () => unknown }).__ithaca = () => {
     const s = useApp.getState();
     return { screen: s.screen, hud: s.hud, call: s.call.state, scan: s.scan.state, toasts: s.toasts.map((t) => t.title), narration: s.narration.map((n) => n.text) };

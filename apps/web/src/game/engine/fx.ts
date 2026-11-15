@@ -162,10 +162,12 @@ export class Fx {
   readonly add: Particles;   // additive: fire, sparks, embers, gold
   readonly flame: Particles; // additive flame sprites
   readonly smoke: Particles; // normal: smoke, dust
+  readonly gore: Particles;  // normal: blood droplets
   private emberAcc = 0;
   private flameAcc = 0;
   private tmp = new THREE.Vector3();
   private tmpV = new THREE.Vector3();
+  private tmpV2 = new THREE.Vector3();
   hearth: THREE.Vector3 | null = null;
   braziers: THREE.Vector3[] = [];
 
@@ -174,13 +176,16 @@ export class Fx {
     this.flame = new Particles(220, flameTexture(), THREE.AdditiveBlending);
     this.smoke = new Particles(260, smokeTexture(), THREE.NormalBlending);
     this.smoke.points.renderOrder = 4;
-    this.group.add(this.smoke.points, this.flame.points, this.add.points);
+    this.gore = new Particles(500, glowTexture(), THREE.NormalBlending);
+    this.gore.points.renderOrder = 4;
+    this.group.add(this.smoke.points, this.gore.points, this.flame.points, this.add.points);
   }
 
   setViewportHeight(px: number) {
     this.add.setViewportHeight(px);
     this.flame.setViewportHeight(px);
     this.smoke.setViewportHeight(px);
+    this.gore.setViewportHeight(px);
   }
 
   update(dt: number, ambientDt: number) {
@@ -221,6 +226,7 @@ export class Fx {
     this.add.update(dt);
     this.flame.update(ambientDt);
     this.smoke.update(dt);
+    this.gore.update(dt);
   }
 
   sparks(pos: THREE.Vector3, dir: THREE.Vector3 | null, n = 14, color = '#ffd28a') {
@@ -234,10 +240,16 @@ export class Fx {
     this.smoke.emit(n, { pos, spread: 0.8, life: [0.6, 1.2], size: [0.25, 0.45], grow: 2.2, color: '#5d5246', alpha: 0.3, gravity: -0.2, drag: 2 });
   }
 
-  hitPuff(pos: THREE.Vector3, dir: THREE.Vector3) {
-    // stylized, bloodless impact: dark cloth/dust + ember flecks
-    this.smoke.emit(6, { pos, vel: this.tmpV.copy(dir).multiplyScalar(1.2), spread: 0.7, life: [0.3, 0.6], size: [0.12, 0.22], grow: 2, color: '#3a1d17', alpha: 0.45, drag: 3 });
-    this.add.emit(6, { pos, vel: this.tmpV.copy(dir).multiplyScalar(2), spread: 1.5, life: [0.15, 0.35], size: [0.015, 0.03], color: '#ffcf8a', color2: '#ff5a1a', gravity: 6 });
+  hitPuff(pos: THREE.Vector3, dir: THREE.Vector3, dmg = 20) {
+    // flesh hit: dark crimson spray scaled by damage + cloth dust
+    const n = Math.min(26, 6 + Math.round(dmg / 3));
+    this.gore.emit(n, { pos, vel: this.tmpV.copy(dir).multiplyScalar(1.8), spread: 1.4, life: [0.35, 0.7], size: [0.025, 0.06], color: '#7a1410', color2: '#2a0806', alpha: 0.95, gravity: 9, drag: 1.2 });
+    this.smoke.emit(4, { pos, vel: this.tmpV.copy(dir).multiplyScalar(1.0), spread: 0.6, life: [0.3, 0.5], size: [0.1, 0.18], grow: 2, color: '#3a1d17', alpha: 0.35, drag: 3 });
+  }
+
+  /** severed limb / stump: stylized arterial spray */
+  blood(pos: THREE.Vector3, dir: THREE.Vector3, n = 10) {
+    this.gore.emit(n, { pos, vel: this.tmpV.copy(dir).multiplyScalar(2.2).add(this.tmpV2.set(0, 1.2, 0)), spread: 1.1, life: [0.4, 0.9], size: [0.02, 0.055], color: '#8a1712', color2: '#2a0806', alpha: 0.95, gravity: 9.8, drag: 0.8 });
   }
 
   explosion(pos: THREE.Vector3) {

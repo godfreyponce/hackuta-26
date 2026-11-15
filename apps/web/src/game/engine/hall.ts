@@ -281,6 +281,10 @@ export function buildHall(world: InstanceType<typeof RAPIER.World> | null): Hall
   moon.position.set(3, 14, -10);
   moon.target.position.set(0, 0, -13);
   group.add(moon, moon.target);
+  const rimLight = new THREE.DirectionalLight('#5B7BA6', 0.45);
+  rimLight.position.set(0, 6, -26);
+  rimLight.target.position.set(0, 1.2, 0);
+  group.add(rimLight, rimLight.target);
 
   const hearthLight = new THREE.PointLight(LIGHT.hearth, 170, 0, 2);
   hearthLight.position.set(HALL.hearth.x, 1.6, HALL.hearth.z);

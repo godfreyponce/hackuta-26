@@ -76,7 +76,7 @@ export function buildBlade(length = 0.9): THREE.Group {
   const hilt = Math.max(0.1, length * 0.17);
   const bladeLen = length - hilt - 0.03;
   const width = length * 0.085;
-  const grip = mesh(new THREE.CylinderGeometry(0.016, 0.018, hilt, 8), MAT.leather(), 'grip');
+  const grip = mesh(new THREE.CylinderGeometry(0.016, 0.018, hilt, 8), new THREE.MeshStandardMaterial({ name: 'grip-cord', color: '#7A2420', roughness: 0.8 }), 'grip');
   grip.position.y = hilt / 2 - 0.04;
   g.add(grip);
   const pommel = mesh(new THREE.SphereGeometry(0.026, 8, 6), MAT.bronze(), 'pommel');

@@ -3,7 +3,7 @@ import type { GameEvent, GameEventKind, Hand, InputController, InputEvent, Playe
 import { RAPIER, initPhysics } from './physics';
 import { buildHall, HALL, type HallRig } from './hall';
 import { Fx } from './fx';
-import { EnemyManager, type Enemy, type HitInfo } from './enemies';
+import { EnemyManager, type Attack, type Enemy, type HitInfo, type HitResult, type Outcome } from './enemies';
 import { WeaponManager, type HandView, type WeaponEnt } from './weapons';
 import { Gauntlet } from './hands';
 import { Director, type WaveDef } from './director';
@@ -29,7 +29,7 @@ export interface EngineCallbacks {
   bowMode(on: boolean): void;
 }
 
-export interface PostState { sat: number; chroma: number; flash: number; letterbox: number; heal: number; exposure: number }
+export interface PostState { sat: number; chroma: number; flash: number; letterbox: number; heal: number; exposure: number; verdigris: number }
 
 const FIXED = 1 / 60;
 
@@ -47,7 +47,7 @@ export class Engine {
   mode: EngineMode = 'menu';
   paused = false;
   difficulty: 'easy' | 'normal' = 'normal';
-  post: PostState = { sat: 0.72, chroma: 0, flash: 0, letterbox: 0, heal: 0, exposure: 1 };
+  post: PostState = { sat: 0.72, chroma: 0, flash: 0, letterbox: 0, heal: 0, exposure: 1, verdigris: 0 };
 
   private input: InputController | null = null;
   private unsubInput: (() => void) | null = null;
@@ -79,6 +79,31 @@ export class Engine {
   private lastState: PlayerInputState | null = null;
   private trackingLost = false;
   private disposed = false;
+  private introUntil = 0;
+  private guardAt = -9;
+  private waveKills = 0;
+  shakeScale = 1;
+  // ── combat feel state ──
+  private bladeHist: { t: number; side: Hand; a: THREE.Vector3; b: THREE.Vector3; speed: number }[] = [];
+  private leanSign = 0;
+  private leanCrossT = -9;
+  private playerPosture = 0;
+  private postureT = -9;
+  private micro = { until: 0, scale: 1, kind: '' as '' | 'deflect' | 'dodge' };
+  private lastPerfectDodge = -9;
+  private counterUntil = 0;
+  private kickPitch = 0;
+  private kickVel = 0;
+  private recoilOff: Record<Hand, THREE.Vector3> = { left: new THREE.Vector3(), right: new THREE.Vector3() };
+  private dampUntil: Record<Hand, number> = { left: 0, right: 0 };
+  private lastFlashT = -9;
+  private drainT = -9;
+  private lastDecapSlow = -99;
+  private seenDecap = false;
+  private seenTips = new Set<string>();
+  /** HUD overlay feed (read every frame by CombatOverlay) */
+  damageArcs: { angle: number; t: number; heavy: boolean }[] = [];
+  ripples: { pos: THREE.Vector3; t: number; color: 'brass' | 'gold' | 'verdigris' }[] = [];
 
   private constructor(scene: THREE.Scene, camera: THREE.PerspectiveCamera, cb: EngineCallbacks) {
     this.scene = scene;
@@ -109,10 +134,21 @@ export class Engine {
     this.fx.braziers = [new THREE.Vector3(-1.5, 1.08, -1.4), ...HALL.doors.map((d) => new THREE.Vector3(d.x * 1.55, 1.2, HALL.zFar + 1.4))];
 
     this.enemies = new EnemyManager(this.world, this.fx, {
-      onKill: (e, info) => this.onKill(e, info),
-      onPlayerHit: (dmg, source, from) => this.hurt(dmg, source, from),
-      onDodge: () => { this.scoring.addPoints(25); this.cb.toast({ kind: 'info', title: 'DODGED', points: 25 }, 900); },
-      onBlock: (_s, pos) => { this.fx.sparks(pos, null, 12); audio.block(); this.addTrauma(0.15); },
+      onKill: (e, info, _rag, how) => this.onKill(e, info, how),
+      onPlayerHit: (dmg, source, from, heavy) => this.hurt(dmg, source, from, heavy),
+      resolveIncoming: (e, a) => this.resolveIncoming(e, a),
+      onOutcome: (e, a, o, at) => this.onOutcome(e, a, o, at),
+      onAttackStart: () => { audio.grunt(); },
+      onSever: (e, part, alive) => this.onSever(e, part, alive),
+      onDropWeapon: (kind, pos, q, vel) => { this.weapons.spawnDropped(kind, pos, q, vel); },
+      onArrowBlocked: (pos) => { this.fx.sparks(pos, null, 12); audio.block(); this.addTrauma(0.15); },
+      laneOffset: (dir, out) => {
+        // where the wooer's blade crosses in front of you (~0.7 m) — the place to put your sword
+        const o = dir === 'left' ? out.set(-0.32, -0.02, -0.7) : dir === 'right' ? out.set(0.32, -0.02, -0.7)
+          : dir === 'top' ? out.set(0, 0.2, -0.68) : out.set(0, -0.1, -0.78);
+        return o.applyAxisAngle(new THREE.Vector3(0, 1, 0), this.yaw);
+      },
+      speedScale: () => (this.input?.kind === 'keyboard_mouse' ? 0.65 : 1),
       playerHead: () => this.eye,
       blocking: () => this.blocking,
       shieldHeld: () => this.weapons.shieldHeld(),
@@ -124,7 +160,9 @@ export class Engine {
     this.scene.add(this.enemies.renderer.group);
 
     this.weapons = new WeaponManager(this.world, this.enemies, this.fx, {
-      onHit: (w, r, info) => this.onWeaponHit(w, r.killed, r.blocked, r.shieldBroke, info, r.enemy),
+      onHit: (w, r, info) => this.onWeaponHit(w, r, info),
+      onRecoil: (hand, dir, dist, dampMs) => this.recoil(hand, dir, dist, dampMs),
+      onChamber: (_w, at) => { this.hitstop(60); this.addTrauma(0.12); this.ripple(at, 'brass'); this.tutorial('chamber', 'CHAMBERED', 'Struck his blade mid-swing'); },
       onPinned: (w, enemy) => this.onPinned(w, enemy),
       onStatic: () => {},
       onBroken: (w) => {
@@ -175,8 +213,12 @@ export class Engine {
       },
       onBoss: () => {
         audio.gong(65, 8, 0.5);
+        audio.lyre([0, 3, 7, 10], 0.14, 147);
         this.addTrauma(0.3);
-        this.cb.toast({ kind: 'warn', title: 'ANTINOUS', sub: 'A table for a shield. Pin him — or burn it.' }, 3400);
+        // boss intro: 2.8 s letterbox name card, world at 0.5×
+        this.introUntil = this.realT + 2.8;
+        this.microSlow(0.5, 2.8, 'deflect');
+        this.cb.hud({ bossIntro: { name: 'ANTINOUS', epithet: 'son of Eupeithes, first of the wooers', at: Date.now() } });
         this.emit('boss_spawn', { wave: 3 });
       },
       onVictory: () => this.finish(true),
@@ -228,7 +270,7 @@ export class Engine {
         break;
       }
       case 'swing': audio.whoosh(e.speed); break;
-      case 'block_start': this.blocking = true; this.weapons.blocking = true; break;
+      case 'block_start': this.blocking = true; this.weapons.blocking = true; this.guardAt = this.realT; break;
       case 'block_end': this.blocking = false; this.weapons.blocking = false; break;
       case 'bow_nock':
         if (this.weapons.ensureBow(this.handViews.left)) this.weapons.nock();
@@ -260,6 +302,9 @@ export class Engine {
       const e = this.enemies.spawn('suitor', new THREE.Vector3(x, 0, z), { idle: true });
       if (e) e.yaw = yaw;
     }
+    // Odysseus himself, home at last — framed by the hearth on the title screen
+    const hero = this.enemies.spawn('hero', new THREE.Vector3(0.55, 0, -9.2), { idle: true });
+    if (hero) hero.yaw = -0.25;
     for (const g of Object.values(this.hands)) g.root.visible = false;
     audio.setIntensity(0);
   }
@@ -345,6 +390,7 @@ export class Engine {
   }
 
   private onWaveStart(w: WaveDef) {
+    this.waveKills = 0;
     audio.gong(82, 6, 0.42);
     audio.setIntensity(0.35 + w.n * 0.2);
     this.cb.hud({ wave: w.n, waveTitle: w.title, intermission: null });
@@ -352,21 +398,32 @@ export class Engine {
     this.emit('wave_start', { wave: w.n, enemiesLeft: w.spawns.length });
   }
 
-  private onWeaponHit(w: WeaponEnt | null, killed: boolean, blocked: boolean, shieldBroke: boolean, info: HitInfo, enemy: Enemy) {
-    if (blocked) {
-      if (shieldBroke) this.cb.toast({ kind: 'info', title: enemy.kind === 'boss' ? 'THE TABLE SPLINTERS!' : 'SHIELD BROKEN' }, 1400);
-      return;
-    }
-    if (!killed) this.addTrauma(info.source === 'melee' ? 0.08 : 0.05);
+  private onWeaponHit(w: WeaponEnt | null, r: HitResult, info: HitInfo) {
+    const enemy = r.enemy;
+    if (r.shieldBroke) this.cb.toast({ kind: 'info', title: enemy.kind === 'boss' ? 'HIS GILDED SHIELD BREAKS' : 'SHIELD BROKEN' }, 1400);
+    if (r.parried) { this.tutorial('parried', 'TURNED ASIDE', 'He blocked — strike where his guard is open'); return; }
+    if (r.glanced) { this.tutorial('glance', 'GLANCED OFF BRONZE', 'Cut the neck, arms or legs — or thrust'); return; }
+    if (r.blocked) return;
+    const tier = info.speed < 3.5 ? 0.1 : info.speed < 7 ? 0.25 : 0.4;
+    if (!r.killed) this.addTrauma(info.source === 'melee' ? tier : 0.05);
+    this.kick(info.source === 'melee' ? 0.6 + tier * 2 : 0.3);
     void w;
   }
 
-  private onKill(e: Enemy, info: HitInfo) {
+  private onSever(e: Enemy, part: number, alive: boolean) {
+    this.addTrauma(0.3);
+    this.kick(1.2);
+    if (alive && (part === P.UArmR || part === P.LArmR)) this.cb.toast({ kind: 'trickshot', title: 'DISARMED', sub: 'his sword arm is gone', points: 150 }, 1300);
+    else if (alive && (part === P.UArmL || part === P.LArmL)) this.cb.toast({ kind: 'info', title: 'SHIELD ARM SEVERED', points: 100 }, 1000);
+    if (alive) this.scoring.addPoints(part === P.UArmR || part === P.LArmR ? 150 : 100);
+  }
+
+  private onKill(e: Enemy, info: HitInfo, how: { decapitated: boolean; finisher: boolean; severed: number | null } = { decapitated: false, finisher: false, severed: null }) {
     const w = info.weaponEntId !== null ? this.weapons.list.find((x) => x.id === info.weaponEntId) ?? null : null;
     const now = this.simT;
     const multi = w ? w.throwKills.filter((t) => now - t < 1.5).length + (w.state === 'free' ? 1 : 0) : 0;
     const res = this.scoring.onKill({
-      t: now, realT: this.realT, zone: info.zone, distance: Math.hypot(e.pose[P.Torso].c.x - this.eye.x, e.pose[P.Torso].c.z - this.eye.z),
+      t: now, realT: this.realT, zone: how.decapitated ? 'head' : info.zone, distance: Math.hypot(e.pose[P.Torso].c.x - this.eye.x, e.pose[P.Torso].c.z - this.eye.z),
       airborne: !!(info as HitInfo & { airborne?: boolean }).airborne,
       ricochet: !!w && w.state === 'free' && w.staticHits >= 1,
       multiCount: info.source === 'bomb' ? 0 : multi,
@@ -378,8 +435,15 @@ export class Engine {
       this.forgedKills.set(w.forged.weaponId, (this.forgedKills.get(w.forged.weaponId) ?? 0) + 1);
       this.emit('item_kill', { weaponName: w.name, weaponId: w.forged.weaponId, score: this.scoring.score });
     }
-    this.announceTricks(res.tricks, res.points, res.slowmo, w?.name);
+    if (how.decapitated || how.finisher) {
+      const title = how.decapitated ? 'DECAPITATED' : 'EXECUTED';
+      this.cb.toast({ kind: 'trickshot', title: res.tricks.length ? `${title} + ${res.tricks.filter((t) => t !== 'headshot').map((t) => TRICK_TITLES[t]).join(' + ')}`.replace(/ \+ $/, '') : title, points: res.points }, 1500);
+      for (const t of res.tricks) this.emit('trickshot', { trickshot: t, score: this.scoring.score, combo: this.scoring.combo, weaponName: w?.name });
+      audio.stinger(true);
+      if (this.realT - this.lastDecapSlow > 10 || !this.seenDecap) { this.seenDecap = true; this.lastDecapSlow = this.realT; this.startSlowmo('headshot', 1.3, w?.name); }
+    } else this.announceTricks(res.tricks, res.points, res.slowmo, w?.name);
     this.killEventCount++;
+    this.waveKills++;
     if (res.tricks.length || this.killEventCount % 3 === 0) {
       this.emit('enemy_killed', { score: this.scoring.score, combo: res.combo, enemiesLeft: this.director.remaining, trickshot: res.tricks[0], killer: 'player' });
     }
@@ -422,14 +486,21 @@ export class Engine {
     }
   }
 
-  private hurt(dmg: number, source: 'melee' | 'arrow', from: THREE.Vector3) {
+  private hurt(dmg: number, source: 'melee' | 'arrow', from: THREE.Vector3, heavy = false) {
     if (this.mode !== 'match') return;
     const k = this.difficulty === 'easy' ? 0.6 : 1;
     this.health = Math.max(0, this.health - dmg * k);
     if (this.difficulty === 'easy') this.health = Math.max(1, this.health);
     this.lastHurtT = this.realT;
-    this.post.flash = Math.min(1, this.post.flash + (dmg > 5 ? 0.85 : 0.35));
-    this.addTrauma(dmg > 5 ? 0.35 : 0.12);
+    // flash ≤ 2/s (photosensitivity), directional arc, camera kick 2–3°, colour drain 300 ms
+    if (this.realT - this.lastFlashT > 0.5) { this.post.flash = Math.min(1, this.post.flash + (dmg > 5 ? 0.6 : 0.25)); this.lastFlashT = this.realT; }
+    const rel = new THREE.Vector3().subVectors(from, this.eye).applyAxisAngle(new THREE.Vector3(0, 1, 0), -this.yaw);
+    this.damageArcs.push({ angle: Math.atan2(rel.x, -rel.z), t: this.realT, heavy });
+    if (this.damageArcs.length > 6) this.damageArcs.shift();
+    this.drainT = this.realT;
+    this.kick(heavy ? 3 : dmg > 5 ? 2 : 0.8);
+    if (dmg > 5) this.hitstop(80);
+    this.addTrauma(dmg > 5 ? 0.6 : 0.15);
     audio.hurt();
     audio.setHealth(this.health);
     this.emit('player_hit', { health: Math.round(this.health) });
@@ -494,6 +565,7 @@ export class Engine {
       else { s.active = false; this.cb.slowmo(false); }
     }
     this.softSlow = damp(this.softSlow, this.trackingLost && this.mode === 'match' ? 0.2 : 1, 4, realDt);
+    if (this.realT < this.micro.until) target = Math.min(target, this.micro.scale);
     let scale = target * this.softSlow;
     if (this.hitstopT > 0) { this.hitstopT -= realDt; scale *= 0.05; }
     if (this.paused) scale = 0;
@@ -546,6 +618,10 @@ export class Engine {
     const crouch = state?.body.crouch ?? 0;
     this.yaw = damp(this.yaw, -(state?.body.yaw ?? 0) * 0.25, 6, realDt);
     this.eye.set(lean * 0.6, HALL.eye.y - crouch * 0.5, 0);
+    const sign = Math.abs(lean) > 0.5 ? Math.sign(lean) : 0;
+    if (sign !== 0 && sign !== this.leanSign) this.leanCrossT = this.realT;
+    this.leanSign = sign;
+    if (this.realT - this.postureT > 1) this.playerPosture = Math.max(0, this.playerPosture - realDt * 15);
     const playing = this.mode === 'match' || this.mode === 'ended';
     for (const side of ['left', 'right'] as const) {
       const hv = this.handViews[side];
@@ -556,8 +632,11 @@ export class Engine {
       hv.visible = hs.visible;
       if (hs.visible) {
         const tgt = this.handTarget[side].set(hs.pos.x, hs.pos.y, hs.pos.z).applyAxisAngle(new THREE.Vector3(0, 1, 0), this.yaw).add(this.eye);
+        tgt.add(this.recoilOff[side]);
+        this.recoilOff[side].multiplyScalar(Math.exp(-realDt / 0.15));
         const prev = hv.pos.clone();
-        hv.pos.lerp(tgt, 1 - Math.exp(-42 * realDt)); // ≈0.5/frame at 60 fps, hides jitter
+        const rate = this.realT < this.dampUntil[side] ? 10 : 42; // parried → input damped
+        hv.pos.lerp(tgt, 1 - Math.exp(-rate * realDt)); // ≈0.5/frame at 60 fps, hides jitter
         hv.vel.copy(hv.pos).sub(prev).multiplyScalar(1 / Math.max(1e-3, realDt));
         hv.forward.set(hs.forward.x, hs.forward.y, hs.forward.z).applyAxisAngle(new THREE.Vector3(0, 1, 0), this.yaw).normalize();
         hv.up.set(hs.up.x, hs.up.y, hs.up.z).applyAxisAngle(new THREE.Vector3(0, 1, 0), this.yaw).normalize();
@@ -567,12 +646,27 @@ export class Engine {
       g.update(hv.pos, hv.quat, hs.grip, hs.visible, !!this.weapons.heldBy(side), realDt);
     }
     this.hands.left.setHealth(this.health / 100);
+    // blade history for deflect timing (last 0.5 s)
+    for (const side of ['left', 'right'] as const) {
+      const w = this.weapons.heldBy(side);
+      if (!w || w.cls === 'bow' || w.cls === 'shield') continue;
+      const r = w.body.rotation();
+      const q = new THREE.Quaternion(r.x, r.y, r.z, r.w);
+      const t = w.body.translation();
+      const g = new THREE.Vector3(t.x, t.y, t.z);
+      const a = w.segA.clone().applyQuaternion(q).add(g);
+      const b = w.segB.clone().applyQuaternion(q).add(g).addScaledVector(new THREE.Vector3().subVectors(w.segB, w.segA).normalize().applyQuaternion(q), 0.1);
+      this.bladeHist.push({ t: this.realT, side, a, b, speed: w.speed });
+    }
+    while (this.bladeHist.length && this.realT - this.bladeHist[0].t > 0.5) this.bladeHist.shift();
     this.weapons.bowDraw = state?.bowDraw ?? 0;
   }
 
   private updateCamera(state: PlayerInputState | null, realDt: number) {
     const cam = this.camera;
-    if (this.mode === 'menu') {
+    if ((this.mode as string) === 'inspect') {
+      // dev: camera is driven externally (tests/screenshots)
+    } else if (this.mode === 'menu') {
       this.menuT += realDt;
       const u = (Math.sin(this.menuT * 0.035 - Math.PI / 2) + 1) / 2; // slow dolly in/out
       cam.position.set(Math.sin(this.menuT * 0.05) * 0.6, 2.25 - u * 0.35, 1.8 - u * 7.5);
@@ -585,13 +679,16 @@ export class Engine {
       this.fov = damp(this.fov, fovTarget, 6, realDt);
       // handheld sway ~0.3° @ 0.7 Hz + trauma² shake (≤ 2°)
       const sway = THREE.MathUtils.degToRad(0.3);
-      const sh = this.trauma * this.trauma;
+      const sh = this.trauma * this.trauma * this.shakeScale;
       const maxRot = THREE.MathUtils.degToRad(2);
       const t = this.realT;
       const pitch = -0.1 + Math.sin(t * 0.7 * Math.PI * 2) * sway * 0.6 + (Math.sin(t * 37) * 0.5 + Math.sin(t * 23) * 0.5) * maxRot * sh;
       const yaw = this.yaw + Math.sin(t * 0.43 * Math.PI * 2) * sway + Math.sin(t * 31 + 1) * maxRot * sh;
       const roll = Math.sin(t * 29 + 2) * maxRot * 0.5 * sh;
-      cam.rotation.set(pitch, yaw, roll, 'YXZ');
+      // camera kick: 60 ms out, ~180 ms back (critically damped spring)
+      this.kickPitch += this.kickVel * realDt;
+      this.kickVel += (-this.kickPitch * 220 - this.kickVel * 26) * realDt;
+      cam.rotation.set(pitch + this.kickPitch, yaw, roll, 'YXZ');
       cam.position.x += Math.sin(t * 41) * 0.015 * sh;
       cam.position.y += Math.sin(t * 43 + 1) * 0.015 * sh;
     }
@@ -603,12 +700,15 @@ export class Engine {
   private updatePost(realDt: number) {
     const p = this.post;
     const lowHealth = this.mode === 'match' && this.health < 35 ? (35 - this.health) / 35 : 0;
-    const satTarget = this.slow.active ? 0.22 : 0.72 - lowHealth * 0.3;
+    const drain = this.realT - this.drainT < 0.3 ? 0.3 : 0;
+    const dodgeTint = this.micro.kind === 'dodge' && this.realT < this.micro.until ? 0.4 : 0;
+    const satTarget = this.slow.active ? 0.22 : Math.max(0.15, 0.72 - lowHealth * 0.3 - drain - dodgeTint);
     p.sat = damp(p.sat, satTarget, 8, realDt);
-    p.chroma = damp(p.chroma, this.slow.active && this.slow.t < 0.5 ? 1 : 0, 10, realDt);
-    p.letterbox = damp(p.letterbox, this.slow.active ? 1 : 0, 9, realDt);
+    p.chroma = 0;
+    p.letterbox = damp(p.letterbox, this.slow.active || this.realT < this.introUntil ? 1 : 0, 9, realDt);
     p.flash = Math.max(0, p.flash - realDt * 2.2);
     p.heal = Math.max(0, p.heal - realDt * 1.5);
+    p.verdigris = Math.max(0, p.verdigris - realDt * 1.1);
   }
 
   private pushHud() {
@@ -617,9 +717,147 @@ export class Engine {
       health: Math.round(this.health), score: this.scoring.score, combo: this.scoring.combo, kills: this.scoring.kills,
       wave: this.director.wave, enemiesLeft: this.director.remaining, blocking: this.blocking || this.weapons.shieldHeld(),
       bowDraw: this.weapons.drawing ? this.weapons.bowDraw : 0, slowmo: this.slow.active,
-      boss: boss ? { name: 'ANTINOUS', hp: Math.max(0, boss.hp / boss.maxHp), shield: Math.max(0, boss.shieldHp / 170) } : null,
+      boss: boss ? { name: 'ANTINOUS', hp: Math.max(0, boss.hp / boss.maxHp), shield: Math.max(0, boss.shieldHp / 150), posture: boss.posture / 100 } : null,
+      tally: { total: this.director.def.spawns.length, killed: Math.min(this.waveKills, this.director.def.spawns.length) },
+      posture: this.playerPosture,
       matchTimeMs: Math.round((this.realT - this.matchStartReal) * 1000),
     });
+  }
+
+  // ── combat resolution ──────────────────────────────────────────────────
+  /** Decide what a wooer's blow does on arrival (research: deflect windows T−220…T+40 ms on mouse; perfect ≤150 ms). */
+  private resolveIncoming(_e: Enemy, a: Attack): Outcome {
+    const motion = this.input?.kind === 'motion';
+    const R = motion ? 0.3 : 0.27;
+    const win = motion ? 0.3 : 0.22;
+    const perfectWin = motion ? 0.26 : 0.15;
+    const now = this.realT;
+    // 1) blade in the path of the blow
+    if (!a.unblockable) {
+      let enteredAt = -1, entries = 0, prevIn = false, lastSpeed = 0;
+      for (const h of this.bladeHist) {
+        if (now - h.t > 0.4) continue;
+        const inPath = distPointSeg(a.lane, h.a, h.b) < R;
+        if (inPath && !prevIn) { entries++; if (now - h.t <= win) enteredAt = h.t; }
+        if (inPath && now - h.t <= win) { if (enteredAt < 0) enteredAt = h.t; lastSpeed = h.speed; }
+        prevIn = inPath;
+      }
+      if (enteredAt >= 0) {
+        if (this.blocking && now - this.guardAt <= perfectWin + 0.05) return 'perfect'; // guard raised just in time
+        if (now - enteredAt <= perfectWin && entries <= 2) return 'perfect';
+        return lastSpeed > 3 ? 'beat' : 'block';
+      }
+      if (this.weapons.shieldHeld()) return 'shield';
+      // explicit guard (RMB / guard pose): timed = perfect parry, held = clean block
+      if (this.blocking) return now - this.guardAt <= perfectWin + 0.05 ? 'perfect' : 'block';
+    }
+    // 2) dodge: lean past ~0.3 m (or crouch under a horizontal cut)
+    const st = this.lastState;
+    const lean = st?.body.lean ?? 0;
+    const crouch = st?.body.crouch ?? 0;
+    const into = (a.dir === 'left' && lean < -0.5) || (a.dir === 'right' && lean > 0.5);
+    const leaned = Math.abs(lean) > 0.5 && !into;
+    const ducked = crouch > 0.5 && (a.dir === 'left' || a.dir === 'right');
+    if (leaned || ducked) {
+      const perfect = now - this.leanCrossT <= (motion ? 0.3 : 0.25) && now - this.lastPerfectDodge > 3;
+      return perfect ? 'perfectDodge' : 'dodge';
+    }
+    return 'hit';
+  }
+
+  private onOutcome(e: Enemy, a: Attack, o: Outcome, at: THREE.Vector3) {
+    switch (o) {
+      case 'perfect':
+        this.fx.sparks(at, null, 34, '#fff1c4');
+        this.fx.gold(at, 14);
+        audio.metal(1.2, 2600); audio.lyre([12], 0, 880);
+        this.hitstop(100);
+        this.microSlow(0.3, 0.25, 'deflect');
+        this.ripple(at, 'gold');
+        this.kick(0.8);
+        this.scoring.addPoints(100);
+        this.tutorial('perfect', 'PERFECT DEFLECT', 'He staggers — strike now', 100);
+        break;
+      case 'beat':
+        this.fx.sparks(at, null, 14, '#ffd28a');
+        audio.metal(0.9, 2000);
+        this.hitstop(60); this.kick(0.5); this.ripple(at, 'brass');
+        this.addPlayerPosture(5);
+        this.tutorial('beat', 'DEFLECTED', 'Meet his blade just before it lands for a perfect deflect');
+        break;
+      case 'block':
+      case 'shield':
+        this.fx.sparks(at, null, 4, '#d8b070');
+        audio.block();
+        this.hitstop(40); this.kick(0.4);
+        this.addPlayerPosture(a.windup > 1 ? 35 : 20);
+        this.recoil('right', new THREE.Vector3().subVectors(this.eye, at).normalize().negate(), 0.08, 150);
+        break;
+      case 'guard':
+        this.addPlayerPosture(20);
+        break;
+      case 'perfectDodge':
+        this.lastPerfectDodge = this.realT;
+        this.microSlow(0.3, 0.6, 'dodge');
+        this.counterUntil = this.realT + 1.2;
+        this.post.verdigris = 1;
+        audio.whoosh(4); audio.slowIn();
+        this.scoring.addPoints(75);
+        this.tutorial('pdodge', 'PERFECT DODGE', 'Counter now — his guard is open', 75);
+        break;
+      case 'dodge':
+        audio.whoosh(5);
+        this.scoring.addPoints(25);
+        this.tutorial('dodge', 'DODGED', 'Lean the moment before it lands for slow-motion');
+        break;
+      case 'hit': break;
+    }
+    void e;
+  }
+
+  private addPlayerPosture(n: number) {
+    this.playerPosture = Math.min(100, this.playerPosture + n);
+    this.postureT = this.realT;
+    if (this.playerPosture >= 100) {
+      this.playerPosture = 40;
+      this.recoil('right', new THREE.Vector3(0.6, -0.4, 0.4), 0.4, 600);
+      audio.metal(1, 700);
+      this.cb.toast({ kind: 'warn', title: 'GUARD BROKEN' }, 1000);
+    }
+  }
+
+  private recoil(hand: Hand, dir: THREE.Vector3, dist: number, dampMs: number) {
+    this.recoilOff[hand].copy(dir).multiplyScalar(-dist);
+    this.recoilOff[hand].y = Math.abs(this.recoilOff[hand].y) * 0.5;
+    this.dampUntil[hand] = this.realT + dampMs / 1000;
+    audio.metal(0.6, 1100);
+  }
+
+  private kick(deg: number) { this.kickVel += THREE.MathUtils.degToRad(deg) * 16; }
+  private microSlow(scale: number, dur: number, kind: 'deflect' | 'dodge') { this.micro = { until: this.realT + dur, scale, kind }; }
+  private ripple(pos: THREE.Vector3, color: 'brass' | 'gold' | 'verdigris') {
+    this.ripples.push({ pos: pos.clone(), t: this.realT, color });
+    if (this.ripples.length > 6) this.ripples.shift();
+  }
+  /** Outcome words appear the first time only (research: label once, then let feel carry it). */
+  private tutorial(key: string, title: string, sub?: string, points?: number) {
+    if (this.seenTips.has(key)) { if (points) this.cb.toast({ kind: 'info', title: `+${points}` }, 500); return; }
+    this.seenTips.add(key);
+    this.cb.toast({ kind: 'info', title, sub, points }, 1600);
+  }
+
+  /** Snapshot for the HUD overlay (telegraph arcs, glints, damage arcs, posture). */
+  overlay() {
+    return {
+      telegraphs: this.enemies.telegraphs(),
+      damageArcs: this.damageArcs,
+      ripples: this.ripples,
+      realT: this.realT,
+      yaw: this.yaw,
+      playerPosture: this.playerPosture,
+      counter: this.realT < this.counterUntil,
+      enemies: this.enemies.list,
+    };
   }
 
   /** Camera FOV/aspect sync from the canvas. */
@@ -648,3 +886,10 @@ export class Engine {
 }
 
 export { rand, clamp };
+
+function distPointSeg(p: THREE.Vector3, a: THREE.Vector3, b: THREE.Vector3) {
+  const abx = b.x - a.x, aby = b.y - a.y, abz = b.z - a.z;
+  const t = Math.max(0, Math.min(1, ((p.x - a.x) * abx + (p.y - a.y) * aby + (p.z - a.z) * abz) / (abx * abx + aby * aby + abz * abz || 1)));
+  const dx = a.x + abx * t - p.x, dy = a.y + aby * t - p.y, dz = a.z + abz * t - p.z;
+  return Math.hypot(dx, dy, dz);
+}

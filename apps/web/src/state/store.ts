@@ -23,7 +23,10 @@ export interface Hud {
   health: number; wave: number; waveTitle: string; enemiesLeft: number;
   score: number; combo: number; kills: number;
   blocking: boolean; bowDraw: number; slowmo: boolean;
-  pinnedPrompt: boolean; boss: { name: string; hp: number; shield: number } | null;
+  pinnedPrompt: boolean; boss: { name: string; hp: number; shield: number; posture?: number } | null;
+  bossIntro: { name: string; epithet: string; at: number } | null;
+  tally: { total: number; killed: number };
+  posture: number;
   matchTimeMs: number; intermission: string | null;
 }
 
@@ -34,7 +37,7 @@ export const emptyTrickshots = emptyTrick;
 
 export const initialHud = (): Hud => ({
   health: 100, wave: 0, waveTitle: '', enemiesLeft: 0, score: 0, combo: 1, kills: 0,
-  blocking: false, bowDraw: 0, slowmo: false, pinnedPrompt: false, boss: null, matchTimeMs: 0, intermission: null,
+  blocking: false, bowDraw: 0, slowmo: false, pinnedPrompt: false, boss: null, bossIntro: null, tally: { total: 0, killed: 0 }, posture: 0, matchTimeMs: 0, intermission: null,
 });
 
 export interface AppState {

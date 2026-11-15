@@ -1,0 +1,261 @@
+// Instanced renderer for armored Greek warriors: a layered panoply over the capsule skeleton.
+// One InstancedMesh per piece type (≈18 draw calls for every warrior on screen).
+import * as THREE from 'three';
+import { P, PART_DIM, type PartPose } from './humanoid';
+import { faceTexture, shieldTexture } from './textures';
+import {
+  aspisFace, bracer, cloak, corinthianHelmet, corinthianSlit, crest, greave, linothorax, muscleCuirass, peltMantle, pilosCap, pteruges, stumpCap, xiphosProp,
+} from './armorGeo';
+import type { Stump } from './enemies';
+
+export type PropKind = 'none' | 'xiphos' | 'spear' | 'bow';
+export type ShieldKind = 'none' | 'round';
+
+export interface SlotLook {
+  scale: number;
+  skin: THREE.Color;
+  chiton: THREE.Color;
+  armor: 'muscle' | 'linothorax' | 'none';
+  armorTint: THREE.Color;
+  helmet: 'corinthian' | 'pilos' | 'none';
+  helmetTint: THREE.Color;
+  crest: 'none' | 'long' | 'trans';
+  crestColor: THREE.Color;
+  leather: THREE.Color;
+  greaves: boolean;
+  bracers: boolean;
+  cloak: THREE.Color | null;
+  prop: PropKind;
+  shield: ShieldKind;
+  shieldDevice: 'scorpion' | 'boar-blue' | 'lion-gilt' | 'boar-worn';
+  pelt: THREE.Color | null;
+  boss: boolean;
+}
+
+const ZERO = new THREE.Matrix4().makeScale(0, 0, 0);
+const FLASH = new THREE.Color(1, 0.8, 0.55);
+const LEG_SKIN_DARK = new THREE.Color('#3b2a1c');
+const FACE_SHADOW = new THREE.Color('#5a4434');
+const WHITE = new THREE.Color(1, 1, 1);
+const X = new THREE.Vector3(1, 0, 0);
+const Z = new THREE.Vector3(0, 0, 1);
+
+interface Layer { mesh: THREE.InstancedMesh; perSlot: number }
+
+export class ArmoredRenderer {
+  readonly group = new THREE.Group();
+  readonly capacity: number;
+  readonly flash: Float32Array;
+  private L: Record<string, Layer> = {};
+  private m = new THREE.Matrix4();
+  private sc = new THREE.Vector3();
+  private q = new THREE.Quaternion();
+  private v = new THREE.Vector3();
+  private c = new THREE.Color();
+  private tmpQ = new THREE.Quaternion().setFromAxisAngle(X, -1.25);
+  private c2v = new THREE.Vector3();
+
+  constructor(capacity: number) {
+    this.capacity = capacity;
+    this.flash = new Float32Array(capacity);
+    const metal = () => new THREE.MeshStandardMaterial({ color: '#ffffff', metalness: 0.88, roughness: 0.42, envMapIntensity: 1.1 });
+    const cloth = (side: THREE.Side = THREE.FrontSide) => new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.93, side });
+    const skin = new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.72 });
+
+    const capsule = new THREE.CapsuleGeometry(1, 2, 3, 8);
+    const headGeo = new THREE.SphereGeometry(1, 14, 10);
+    headGeo.scale(0.9, 1.05, 0.95);
+    headGeo.rotateY(Math.PI);
+    const chitonGeo = new THREE.CapsuleGeometry(0.165, 0.25, 3, 10);
+    chitonGeo.scale(1.15, 1, 0.78);
+    const skirtGeo = new THREE.CylinderGeometry(0.16, 0.22, 0.34, 12, 1, true);
+    skirtGeo.translate(0, -0.1, 0);
+    const beltGeo = new THREE.TorusGeometry(0.19, 0.022, 5, 16);
+    beltGeo.scale(1.12, 1, 0.86);
+    beltGeo.rotateX(Math.PI / 2);
+    beltGeo.translate(0, 0.07, 0);
+    const spearGeo = new THREE.CylinderGeometry(0.015, 0.015, 2.1, 5);
+    spearGeo.translate(0, -0.55, 0);
+    const tipGeo = new THREE.ConeGeometry(0.03, 0.2, 5);
+    tipGeo.rotateX(Math.PI);
+    tipGeo.translate(0, -1.7, 0);
+    const arc: THREE.Vector3[] = [];
+    for (let i = 0; i <= 10; i++) { const t = (i / 10) * 2 - 1; arc.push(new THREE.Vector3(0, t * 0.55, -0.12 * (1 - t * t))); }
+    const bowGeo = new THREE.TubeGeometry(new THREE.CatmullRomCurve3(arc), 16, 0.016, 5, false);
+
+    const shieldMat = (d: Parameters<typeof shieldTexture>[0], f: Parameters<typeof shieldTexture>[1], metal = 0.75) => {
+      const map = shieldTexture(d, f).clone();
+      map.center.set(0.5, 0.5);
+      map.rotation = Math.PI / 2; // cylinder-cap UVs are quarter-turned
+      map.needsUpdate = true;
+      return new THREE.MeshStandardMaterial({ map, metalness: metal, roughness: 0.45 });
+    };
+
+    const add = (key: string, geo: THREE.BufferGeometry, mat: THREE.Material, perSlot = 1, shadow = false, color = true) => {
+      const mesh = new THREE.InstancedMesh(geo, mat, capacity * perSlot);
+      mesh.frustumCulled = false;
+      mesh.castShadow = shadow;
+      mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      const white = new THREE.Color(1, 1, 1);
+      for (let i = 0; i < mesh.count; i++) { mesh.setMatrixAt(i, ZERO); if (color) mesh.setColorAt(i, white); }
+      this.group.add(mesh);
+      this.L[key] = { mesh, perSlot };
+    };
+    add('limbs', capsule, skin, 8, true);
+    add('head', headGeo, new THREE.MeshStandardMaterial({ map: faceTexture(), roughness: 0.75 }), 1, false, true);
+    add('chiton', chitonGeo, cloth(), 1, true);
+    add('skirt', skirtGeo, cloth(THREE.DoubleSide), 1, false);
+    add('muscle', muscleCuirass(), metal(), 1, true);
+    add('lino', linothorax(), cloth(), 1, true);
+    add('pteruges', pteruges(), cloth(), 1, false);
+    add('belt', beltGeo, metal(), 1, false);
+    add('corinthian', corinthianHelmet(), metal(), 1, true);
+    add('pilos', pilosCap(), metal(), 1, true);
+    add('slit', corinthianSlit(), new THREE.MeshBasicMaterial({ color: '#070504', side: THREE.DoubleSide }), 1, false, false);
+    const handGeo = new THREE.SphereGeometry(1, 8, 6);
+    handGeo.scale(0.045, 0.06, 0.035);
+    add('hands', handGeo, skin, 2, false);
+    add('crestLong', crest(false), cloth(THREE.DoubleSide), 1, false);
+    add('crestTrans', crest(true), cloth(THREE.DoubleSide), 1, false);
+    add('greave', greave(), metal(), 2, false);
+    add('bracer', bracer(), metal(), 2, false);
+    add('cloak', cloak(), cloth(THREE.DoubleSide), 1, false);
+    add('xiphos', xiphosProp(), new THREE.MeshStandardMaterial({ color: '#b08850', metalness: 0.95, roughness: 0.3 }), 1, false, false);
+    add('spear', spearGeo, new THREE.MeshStandardMaterial({ color: '#5a4026', roughness: 0.8 }), 1, false, false);
+    add('spearTip', tipGeo, new THREE.MeshStandardMaterial({ color: '#a07a45', metalness: 0.9, roughness: 0.35 }), 1, false, false);
+    add('bow', bowGeo, new THREE.MeshStandardMaterial({ color: '#3b2a1c', roughness: 0.7 }), 1, false, false);
+    add('aspis-scorpion', aspisFace(0.86), shieldMat('scorpion', 'bronze'), 1, true, false);
+    add('aspis-boar-blue', aspisFace(0.9), shieldMat('boar', 'blue', 0.35), 1, true, false);
+    add('aspis-lion-gilt', aspisFace(1.0), shieldMat('lion', 'gilt', 0.9), 1, true, false);
+    add('aspis-boar-worn', aspisFace(0.9), shieldMat('boar', 'worn', 0.7), 1, true, false);
+    add('pelt', peltMantle(), cloth(THREE.DoubleSide), 1, false);
+    add('stump', stumpCap(), new THREE.MeshStandardMaterial({ color: '#6a1410', roughness: 0.45, emissive: '#2a0604', emissiveIntensity: 0.6 }), 1 * 8, false, false);
+  }
+
+  private set(key: string, slot: number, k: number, m: THREE.Matrix4 | null, color?: THREE.Color) {
+    const l = this.L[key];
+    const i = slot * l.perSlot + k;
+    l.mesh.setMatrixAt(i, m ?? ZERO);
+    if (color && l.mesh.instanceColor) l.mesh.setColorAt(i, color);
+  }
+
+  hide(slot: number) {
+    for (const key of Object.keys(this.L)) for (let k = 0; k < this.L[key].perSlot; k++) this.set(key, slot, k, null);
+  }
+
+  private tint(base: THREE.Color, slot: number) {
+    const fl = this.flash[slot];
+    return fl > 0 ? this.c.copy(base).lerp(FLASH, fl * 0.75) : base;
+  }
+
+  /** Compose a piece riding on a part (part center/quaternion, uniform scale). */
+  private on(p: PartPose, s: number) { this.sc.setScalar(s); return this.m.compose(p.c, p.q, this.sc); }
+
+  write(slot: number, pose: PartPose[], look: SlotLook, opts: { shieldBroken?: boolean; forward?: THREE.Vector3; propVisible?: boolean; stumps?: Stump[]; broken?: boolean }) {
+    const s = look.scale;
+    // limbs (skin; lower legs darker where sandals/greaves sit)
+    const limbParts = [P.UArmL, P.LArmL, P.UArmR, P.LArmR, P.ULegL, P.LLegL, P.ULegR, P.LLegR];
+    for (let k = 0; k < 8; k++) {
+      const pi = limbParts[k];
+      const d = PART_DIM[pi];
+      const p = pose[pi];
+      this.sc.set(d.r * s, ((d.hh + d.r) / 2) * s, d.r * s);
+      this.m.compose(p.c, p.q, this.sc);
+      const lower = pi === P.LLegL || pi === P.LLegR;
+      const upperArm = pi === P.UArmL || pi === P.UArmR;
+      // chiton sleeves on the upper arms; laced leather on bare shins
+      this.set('limbs', slot, k, this.m, this.tint(upperArm ? look.chiton : lower && !look.greaves ? LEG_SKIN_DARK : look.skin, slot));
+    }
+    const head = pose[P.Head], torso = pose[P.Torso], pel = pose[P.Pelvis];
+    this.sc.setScalar(PART_DIM[P.Head].r * s * 1.05);
+    this.set('head', slot, 0, this.m.compose(head.c, head.q, this.sc), look.helmet === 'corinthian' ? FACE_SHADOW : WHITE);
+    this.set('chiton', slot, 0, this.on(torso, s), this.tint(look.chiton, slot));
+    this.set('skirt', slot, 0, this.on(pel, s), look.chiton);
+    this.set('muscle', slot, 0, look.armor === 'muscle' ? this.on(torso, s) : null, this.tint(look.armorTint, slot));
+    this.set('lino', slot, 0, look.armor === 'linothorax' ? this.on(torso, s) : null, this.tint(look.armorTint, slot));
+    this.set('pteruges', slot, 0, look.armor !== 'none' ? this.on(pel, s) : null, look.leather);
+    this.set('belt', slot, 0, this.on(pel, s), look.armorTint);
+    this.set('corinthian', slot, 0, look.helmet === 'corinthian' ? this.on(head, s) : null, this.tint(look.helmetTint, slot));
+    this.set('pilos', slot, 0, look.helmet === 'pilos' ? this.on(head, s) : null, look.helmetTint);
+    this.set('slit', slot, 0, look.helmet === 'corinthian' ? this.on(head, s) : null);
+    for (const [k, part] of [[0, P.LArmL], [1, P.LArmR]] as const) {
+      const p = pose[part];
+      if (k === 0 && look.shield !== 'none' && !opts.shieldBroken) { this.set('hands', slot, k, null); continue; } // fist is behind the aspis
+      this.v.set(0, -0.045 * s, 0).applyQuaternion(p.q).add(p.b);
+      this.sc.setScalar(s);
+      this.set('hands', slot, k, this.m.compose(this.v, p.q, this.sc), this.tint(look.skin, slot));
+    }
+    this.set('crestLong', slot, 0, look.helmet !== 'none' && look.crest === 'long' ? this.on(head, s) : null, look.crestColor);
+    this.set('crestTrans', slot, 0, look.helmet !== 'none' && look.crest === 'trans' ? this.on(head, s) : null, look.crestColor);
+    this.set('greave', slot, 0, look.greaves ? this.on(pose[P.LLegL], s) : null, look.armorTint);
+    this.set('greave', slot, 1, look.greaves ? this.on(pose[P.LLegR], s) : null, look.armorTint);
+    this.set('bracer', slot, 0, look.bracers ? this.on(pose[P.LArmL], s) : null, look.armorTint);
+    this.set('bracer', slot, 1, look.bracers ? this.on(pose[P.LArmR], s) : null, look.armorTint);
+    this.set('cloak', slot, 0, look.cloak ? this.on(torso, s) : null, look.cloak ?? undefined);
+
+    const handR = pose[P.LArmR];
+    const showProp = opts.propVisible !== false;
+    if (look.prop === 'xiphos' && showProp) {
+      this.q.copy(handR.q).multiply(this.tmpQ);
+      this.sc.setScalar(s);
+      this.set('xiphos', slot, 0, this.m.compose(handR.b, this.q, this.sc));
+    } else this.set('xiphos', slot, 0, null);
+    if (look.prop === 'spear' && showProp) {
+      this.q.copy(handR.q).multiply(new THREE.Quaternion().setFromAxisAngle(X, -Math.PI / 2 + 0.3));
+      this.sc.setScalar(s);
+      this.m.compose(handR.b, this.q, this.sc);
+      this.set('spear', slot, 0, this.m);
+      this.set('spearTip', slot, 0, this.m);
+    } else { this.set('spear', slot, 0, null); this.set('spearTip', slot, 0, null); }
+    const armL = pose[P.LArmL];
+    const fwd = opts.forward ?? this.v.set(0, 0, 1).applyQuaternion(pel.q);
+    if (look.prop === 'bow' && showProp) {
+      this.q.setFromUnitVectors(new THREE.Vector3(0, 0, -1), fwd);
+      this.sc.setScalar(s);
+      this.set('bow', slot, 0, this.m.compose(armL.b, this.q, this.sc));
+    } else this.set('bow', slot, 0, null);
+    for (const dev of ['scorpion', 'boar-blue', 'lion-gilt', 'boar-worn'] as const) {
+      const key = `aspis-${dev}`;
+      if (look.shield === 'round' && !opts.shieldBroken && look.shieldDevice === dev) {
+        const c = new THREE.Vector3().copy(armL.c).addScaledVector(fwd, 0.13 * s);
+        this.q.setFromUnitVectors(Z, fwd);
+        this.sc.setScalar(s);
+        this.set(key, slot, 0, this.m.compose(c, this.q, this.sc));
+      } else this.set(key, slot, 0, null);
+    }
+    this.set('pelt', slot, 0, look.pelt ? this.on(torso, s) : null, look.pelt ?? undefined);
+    // wound caps on severed joints
+    const stumps = opts.stumps ?? [];
+    for (let k = 0; k < 8; k++) {
+      const st = stumps[k];
+      if (!st) { this.set('stump', slot, k, null); continue; }
+      const p = pose[st.part];
+      this.v.copy(st.local).applyQuaternion(p.q).add(p.c);
+      // cap faces outward along the local offset direction
+      this.q.setFromUnitVectors(new THREE.Vector3(0, 1, 0), this.c2v.copy(st.local).normalize()).premultiply(p.q);
+      const r = PART_DIM[st.part === P.Torso ? P.Head : st.part].r * s * (st.part === P.Head ? 0.55 : 0.95);
+      this.sc.set(r, r, r);
+      this.set('stump', slot, k, this.m.compose(this.v, this.q, this.sc));
+    }
+    // posture broken: brass rim flash pulses (finisher window)
+    if (opts.broken) this.flash[slot] = Math.max(this.flash[slot], 0.45 + 0.25 * Math.sin(performance.now() / 90));
+  }
+
+  /** World-space segment of the warrior's sword (for deflection tests). */
+  swordSegment(pose: PartPose[], look: SlotLook, base: THREE.Vector3, tip: THREE.Vector3) {
+    const handR = pose[P.LArmR];
+    base.copy(handR.b);
+    const len = look.prop === 'spear' ? 1.6 : 0.62;
+    this.q.copy(handR.q).multiply(look.prop === 'spear' ? new THREE.Quaternion().setFromAxisAngle(X, -Math.PI / 2 + 0.3) : this.tmpQ);
+    tip.set(0, -len * look.scale, 0).applyQuaternion(this.q).add(base);
+    if (look.prop === 'spear') tip.set(0, -1.75 * look.scale, 0).applyQuaternion(this.q).add(base);
+  }
+
+  commit() {
+    for (const key of Object.keys(this.L)) {
+      const mesh = this.L[key].mesh;
+      mesh.instanceMatrix.needsUpdate = true;
+      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    }
+  }
+}

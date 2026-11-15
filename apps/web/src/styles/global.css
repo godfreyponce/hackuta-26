@@ -167,8 +167,33 @@ button, input, select { font: inherit; color: inherit; }
 .hud .tl { position: absolute; top: 22px; left: 26px; display: flex; flex-direction: column; gap: 10px; width: min(340px, 30vw); }
 .hud .tc { position: absolute; top: 18px; left: 50%; transform: translateX(-50%); text-align: center; display: flex; flex-direction: column; align-items: center; gap: 6px; }
 .hud .tr { position: absolute; top: 18px; right: 22px; width: min(300px, 26vw); display: flex; flex-direction: column; gap: 10px; pointer-events: auto; }
-.hud .bc { position: absolute; bottom: 26px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 12px; width: min(760px, 70vw); }
+.hud .bc { position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 12px; width: min(760px, 70vw); }
 .hud .bl { position: absolute; bottom: 20px; left: 24px; }
+.combat-overlay { position: fixed; inset: 0; width: 100vw; height: 100vh; pointer-events: none; z-index: 0; }
+.vitals { position: absolute; left: 48px; bottom: 48px; width: 260px; display: flex; flex-direction: column; gap: 6px; opacity: 0.62; transition: opacity 0.3s; }
+.vitals.on { opacity: 1; }
+.vitals .health { height: 8px; border-radius: 1px; border-color: rgba(196,154,74,0.8); }
+.vitals .health > i { background: linear-gradient(180deg, #efe6d4, #cfc4ae); }
+.vitals .health > i.low { background: linear-gradient(180deg, #ff6a4a, #a32a1c); }
+.posture { height: 4px; background: rgba(20,15,11,0.8); overflow: hidden; }
+.posture > i { display: block; height: 100%; background: var(--brass); transform-origin: center; transition: transform 0.15s; }
+.tally { display: flex; gap: 6px; margin: 6px 0 4px; }
+.tally i { width: 8px; height: 16px; border: 1px solid rgba(196,154,74,0.75); transform: skewX(-12deg); background: rgba(10,8,6,0.5); }
+.tally i.on { background: var(--brass); box-shadow: 0 0 8px rgba(255,190,110,0.5); }
+.score-sm { font-size: 18px; font-weight: 800; color: var(--ivory); letter-spacing: 0.06em; text-shadow: 0 2px 8px #000; }
+.bossbar { position: absolute; left: 50%; bottom: 128px; transform: translateX(-50%); width: min(720px, 60vw); display: flex; flex-direction: column; gap: 5px; }
+.boss-name { font-size: 14px; font-weight: 800; letter-spacing: 0.3em; color: var(--ivory); text-shadow: 0 2px 6px #000; }
+.boss-hp { position: relative; height: 8px; border: 1px solid var(--brass); background: rgba(10,8,6,0.75); }
+.boss-hp i, .boss-hp b { position: absolute; left: 0; top: 0; bottom: 0; transition: width 0.15s; }
+.boss-hp i { background: linear-gradient(90deg, #5c1a16, #a8322a); }
+.boss-hp b { background: rgba(232,223,204,0.4); transition: width 0.6s; }
+.boss-posture { height: 4px; background: rgba(10,8,6,0.6); }
+.boss-posture i { display: block; height: 100%; background: var(--brass-hi); transform-origin: center; transition: transform 0.15s; }
+.boss-intro { position: absolute; left: 7vw; bottom: 16vh; animation: introIn 0.4s ease-out both, introOut 0.4s ease-in 2.4s both; }
+.boss-intro-name { font-size: clamp(30px, 3.4vw, 48px); font-weight: 600; letter-spacing: 0.28em; color: var(--ivory); text-shadow: 0 3px 20px #000; }
+.boss-intro-epithet { font-family: var(--font-lore); font-style: italic; font-size: clamp(18px, 1.7vw, 24px); color: var(--brass); margin-top: 4px; text-shadow: 0 2px 10px #000; }
+@keyframes introIn { from { opacity: 0; transform: translateX(-20px); } }
+@keyframes introOut { to { opacity: 0; } }
 
 .health { position: relative; height: 16px; border-radius: 3px; background: rgba(20, 15, 11, 0.85); border: 1px solid rgba(138, 106, 64, 0.7); overflow: hidden; }
 .health > i { position: absolute; inset: 0; transform-origin: left; background: linear-gradient(180deg, #e0b560, #9b7638); transition: transform 0.2s; }

@@ -69,7 +69,10 @@ function EngineMount({ onReady }: { onReady: (e: Engine) => void }) {
       if (disposed) { e.dispose(); return; }
       engineRef.current = e;
       runtime.engine = e;
-      if (import.meta.env.DEV) (window as unknown as { __engine: Engine }).__engine = e;
+      if (import.meta.env.DEV || new URLSearchParams(location.search).get('debug') === '1') {
+        (window as unknown as { __engine: Engine }).__engine = e;
+        (window as unknown as { __combatLog: unknown[] }).__combatLog = [];
+      }
       if (runtime.input) e.setInput(runtime.input);
       e.resize(size.width, size.height);
       onReady(e);

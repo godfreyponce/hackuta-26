@@ -6,34 +6,34 @@ import { Btn, ClassIcon, fmtTime, useMenuNav } from './components';
 import { CallChip } from './CallChip';
 import { FriendPip } from './FriendPip';
 import { Turntable } from './Turntable';
+import { CombatOverlay } from './CombatOverlay';
 import { KEYMAP } from './Calibration';
 
 function HealthBlock() {
   const health = useApp((s) => s.hud.health);
-  const wave = useApp((s) => s.hud.wave);
-  const title = useApp((s) => s.hud.waveTitle);
-  const left = useApp((s) => s.hud.enemiesLeft);
+  const posture = useApp((s) => s.hud.posture);
   const blocking = useApp((s) => s.hud.blocking);
   const [ghost, setGhost] = useState(health);
-  useEffect(() => { const t = setTimeout(() => setGhost(health), 350); return () => clearTimeout(t); }, [health]);
+  const [active, setActive] = useState(false);
+  useEffect(() => {
+    setActive(true);
+    const a = setTimeout(() => setGhost(health), 350);
+    const b = setTimeout(() => setActive(false), 2000);
+    return () => { clearTimeout(a); clearTimeout(b); };
+  }, [health]);
   return (
-    <div className="tl">
+    <div className={`vitals ${active || health < 35 ? 'on' : ''}`}>
       <div className="row" style={{ justifyContent: 'space-between' }}>
         <span className="hud-label">Odysseus</span>
-        <span className="hud-label num">{Math.round(health)}</span>
+        <span className="row" style={{ gap: 8 }}>
+          {blocking && <span className="hud-label" style={{ color: 'var(--verdigris-hi)' }}>Guard</span>}
+          <span className="hud-label num">{Math.round(health)}</span>
+        </span>
       </div>
+      {posture > 1 && <div className="posture"><i style={{ transform: `scaleX(${Math.min(1, posture / 100)})` }} /></div>}
       <div className="health" role="meter" aria-label="Health" aria-valuenow={Math.round(health)} aria-valuemin={0} aria-valuemax={100}>
         <b style={{ transform: `scaleX(${Math.max(0, ghost) / 100})` }} />
         <i className={health < 35 ? 'low' : ''} style={{ transform: `scaleX(${Math.max(0, health) / 100})` }} />
-      </div>
-      <div className="row" style={{ gap: 10 }}>
-        <span className="hud-label">Wave {['I', 'II', 'III'][wave - 1] ?? '—'}</span>
-        <span className="hud-label" style={{ color: 'var(--dust)' }}>{title}</span>
-      </div>
-      <div className="row" style={{ gap: 10 }}>
-        <span className="hud-label num" style={{ color: 'var(--brass-hi)' }}>{left}</span>
-        <span className="hud-label" style={{ color: 'var(--dust)' }}>wooers remain</span>
-        {blocking && <span className="chip ok" style={{ marginLeft: 'auto' }}><span className="dot" />Guard</span>}
       </div>
     </div>
   );
@@ -41,25 +41,57 @@ function HealthBlock() {
 
 function ScoreBlock() {
   const score = useApp((s) => s.hud.score);
-  const combo = useApp((s) => s.hud.combo);
-  const boss = useApp((s) => s.hud.boss);
+  const wave = useApp((s) => s.hud.wave);
+  const title = useApp((s) => s.hud.waveTitle);
+  const tally = useApp((s) => s.hud.tally);
   const time = useApp((s) => s.hud.matchTimeMs);
   return (
     <div className="tc">
-      <div className="score">{score.toLocaleString()}</div>
-      <div className="row" style={{ gap: 12 }}>
-        {combo > 1 && <span className="combo">×{combo.toFixed(2)} COMBO</span>}
+      <div className="hud-label" style={{ letterSpacing: '0.3em' }}>Wave {['I', 'II', 'III'][wave - 1] ?? '—'} · <span style={{ color: 'var(--dust)' }}>{title}</span></div>
+      <div className="tally" aria-label={`${tally.killed} of ${tally.total} wooers slain`}>
+        {Array.from({ length: tally.total }, (_, i) => <i key={i} className={i < tally.killed ? 'on' : ''} />)}
+      </div>
+      <div className="row" style={{ gap: 14 }}>
+        <span className="score-sm num">{score.toLocaleString()}</span>
         <span className="hud-label num" style={{ color: 'var(--dust)' }}>{fmtTime(time)}</span>
       </div>
-      {boss && (
-        <div className="boss">
-          <div className="hud-label" style={{ marginBottom: 4 }}>{boss.name}</div>
-          <div className="bars">
-            <div className="bar"><i style={{ width: `${boss.hp * 100}%` }} /></div>
-            {boss.shield > 0 && <div className="bar shield"><i style={{ width: `${boss.shield * 100}%` }} /></div>}
-          </div>
-        </div>
-      )}
+    </div>
+  );
+}
+
+function BossBar() {
+  const boss = useApp((s) => s.hud.boss);
+  const [trail, setTrail] = useState(1);
+  useEffect(() => {
+    if (!boss) return;
+    const t = setTimeout(() => setTrail(boss.hp), 600);
+    return () => clearTimeout(t);
+  }, [boss?.hp, boss]);
+  if (!boss) return null;
+  return (
+    <div className="bossbar">
+      <div className="row" style={{ justifyContent: 'space-between' }}>
+        <span className="boss-name">{boss.name}</span>
+        {boss.shield > 0 && <span className="hud-label" style={{ color: 'var(--brass)' }}>Gilded shield {Math.round(boss.shield * 100)}%</span>}
+      </div>
+      {(boss.posture ?? 0) > 0.01 && <div className="boss-posture"><i style={{ transform: `scaleX(${Math.min(1, boss.posture ?? 0)})` }} /></div>}
+      <div className="boss-hp">
+        <b style={{ width: `${Math.max(boss.hp, trail) * 100}%` }} />
+        <i style={{ width: `${boss.hp * 100}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function BossIntro() {
+  const intro = useApp((s) => s.hud.bossIntro);
+  const [, force] = useState(0);
+  useEffect(() => { if (!intro) return; const t = setTimeout(() => force((x) => x + 1), 2900); return () => clearTimeout(t); }, [intro]);
+  if (!intro || Date.now() - intro.at > 2800) return null;
+  return (
+    <div className="boss-intro" key={intro.at}>
+      <div className="boss-intro-name">{intro.name}</div>
+      <div className="boss-intro-epithet">{intro.epithet}</div>
     </div>
   );
 }
@@ -263,6 +295,11 @@ function PauseMenu({ onResume }: { onResume: () => void }) {
         </div>
         {inputKind === 'motion' && <Btn onClick={() => { void runtime.input?.calibrate?.(); }}>Recalibrate</Btn>}
         <div className="field">
+          <label htmlFor="shake">Camera shake</label>
+          <input id="shake" type="range" min={0} max={100} defaultValue={Math.round((runtime.engine?.shakeScale ?? 1) * 100)}
+            onChange={(ev) => { if (runtime.engine) runtime.engine.shakeScale = Number(ev.target.value) / 100; }} />
+        </div>
+        <div className="field">
           <label>Difficulty (next match)</label>
           <div className="seg">
             <button aria-pressed={difficulty === 'easy'} onClick={() => useApp.setState({ difficulty: 'easy' })}>Easy</button>
@@ -308,9 +345,12 @@ export function Hud() {
 
   return (
     <div className="hud">
+      <CombatOverlay />
       <HealthBlock />
       <ScoreBlock />
       <CallPanel />
+      <BossBar />
+      <BossIntro />
       <Toasts />
       <GestureRing />
       <div className="bc">
