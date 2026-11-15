@@ -233,7 +233,12 @@ export function Toasts() {
   const toasts = useApp((s) => s.toasts);
   return (
     <div className="toasts">
-      {toasts.slice(-3).map((t) => (
+      {(() => {
+        // one big banner at a time (the newest); small info lines only when no banner is up
+        const big = toasts.filter((t) => t.kind === 'trickshot' || t.kind === 'wave' || t.kind === 'gift').slice(-1);
+        const rest = toasts.filter((t) => t.kind !== 'trickshot' && t.kind !== 'wave' && t.kind !== 'gift' && (!big.length || t.kind === 'warn')).slice(-2);
+        return [...big, ...rest];
+      })().map((t) => (
         <div key={t.id} className={`toast ${t.kind}`} style={{ ['--out' as string]: t.kind === 'trickshot' ? '1.2s' : t.kind === 'info' ? '0.6s' : '2.2s' }}>
           <div className="t">{t.title}</div>
           {t.kind === 'trickshot' && <div className="band" />}

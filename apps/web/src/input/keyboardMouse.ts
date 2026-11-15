@@ -389,9 +389,11 @@ export function createKeyboardMouseController(): KeyboardMouseController {
     const L = hands.left, R = hands.right;
     if (mode.bow) {
       // bow arm extended, held left of the sightline and canted; draw hand travels to a chin anchor
-      L.target.copy(aimDir).multiplyScalar(0.64).add(tmp.set(-0.21, -0.13, 0));
+      // bow held out to the left of the sightline so the stave never covers the reticle; the draw hand anchors
+      // 0.3 m out (not at the chin, where it filled the bottom of the screen)
+      L.target.copy(aimDir).multiplyScalar(0.64).add(tmp.set(-0.3, -0.15, 0));
       const rest = tmp2.copy(L.target).addScaledVector(aimDir, -0.09).add(tmp.set(0.03, 0.02, 0));
-      R.target.copy(rest).lerp(tmp.set(0.05, -0.13, -0.14), state.bowDraw);
+      R.target.copy(rest).lerp(tmp.set(0.1, -0.16, -0.3), state.bowDraw);
       L.grip = 1; R.grip = drawing ? 1 : 0.4;
     } else if (rmb && !L.shield && !R.shield) {
       // guard: sword raised crosswise in front of the face, through all three attack lanes — the blade turns into

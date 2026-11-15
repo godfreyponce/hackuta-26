@@ -745,7 +745,7 @@ export class Engine {
     } else {
       cam.position.copy(this.eye);
       const drawing = this.weapons.drawing && (state?.bowDraw ?? 0) > 0.2;
-      const fovTarget = drawing ? 42 : this.slow.active ? 48 : 55;
+      const fovTarget = drawing ? 48 : this.slow.active ? 48 : 55;
       this.fov = damp(this.fov, fovTarget, 6, realDt);
       // handheld sway ~0.3° @ 0.7 Hz + trauma² shake (≤ 2°)
       const sway = THREE.MathUtils.degToRad(0.3);
