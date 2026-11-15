@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
 import { dispose, VideoBufferType, VideoFrame } from '@livekit/rtc-node';
-import { AGENT_H, AGENT_W, cropRgba, letterbox, relayable } from '../src/video.ts';
+import { AGENT_H, AGENT_W, cropRgba, letterbox, relayable, titleCard } from '../src/video.ts';
 
 const SIZES = [[1280, 720], [960, 540], [640, 360], [480, 270], [320, 180], [160, 90]] as const;
 const CROPS: Array<[number, number, number, number]> = [[0.08, 0.12, 0.92, 0.88], [0.32, 0.09, 0.68, 0.8]];
@@ -66,6 +66,20 @@ test('letterbox takes I420 input and pillarboxes a portrait frame', () => {
   assert.equal(out.width, AGENT_W); assert.equal(out.height, AGENT_H);
   assert.deepEqual(px(out, 0, AGENT_H >> 1), [0, 0, 0]);
   assert.deepEqual(px(out, AGENT_W - 1, AGENT_H >> 1), [0, 0, 0]);
+});
+
+// Review #4: at 40 px the title "Calling Warrior <name>…" ran off both sides for names over about 11 characters, and
+// POST /api/friends allows up to 40. A U+FE0F in a name made Pango abort the agent in captions (fa36d1b); same font path.
+test('the title card fits any allowed friend name inside the frame', async () => {
+  const SIDE = 16;
+  for (const name of ['Bo', 'Godfrey', 'Maximilian Alexander', 'W'.repeat(40), 'Ana\u2694\uFE0F\u{1F600}']) {
+    const f = await titleCard(`Calling Warrior ${name}…`, 'Odysseus is home, and he wants a fight.');
+    const bg = px(f, 0, 0);
+    for (let y = 0; y < AGENT_H; y++) for (let s = 0; s < SIDE; s++) {
+      assert.deepEqual(px(f, s, y), bg, `${name}: text at x ${s}, y ${y}`);
+      assert.deepEqual(px(f, AGENT_W - 1 - s, y), bg, `${name}: text at x ${AGENT_W - 1 - s}, y ${y}`);
+    }
+  }
 });
 
 after(() => dispose());

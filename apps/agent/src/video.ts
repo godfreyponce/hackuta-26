@@ -16,11 +16,25 @@ const LIVE_STALE_MS = 1_000; // show the card again if friend-view stops this lo
 
 const esc = (s: string) => s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]!);
 
-async function titleCard(title: string, subtitle: string): Promise<VideoFrame> {
+const TITLE_SIZE = 40;
+
+/** Width of the title at TITLE_SIZE. The canvas allows 1.5 em per character, wider than any Georgia glyph, so nothing is clipped before trim. */
+async function titleWidth(title: string): Promise<number> {
+  const w = Math.ceil(title.length * TITLE_SIZE * 1.5) + 1;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${TITLE_SIZE * 2}"><text x="0" y="${TITLE_SIZE * 1.5}" font-family="Georgia, serif" font-size="${TITLE_SIZE}" font-weight="bold">${esc(title)}</text></svg>`;
+  const { info } = await sharp(Buffer.from(svg)).trim().toBuffer({ resolveWithObject: true });
+  return info.width;
+}
+
+/** The title shrinks to fit a long friend name (up to 40 characters) inside the caption pill's side margins. */
+export async function titleCard(title: string, subtitle: string): Promise<VideoFrame> {
+  title = drawable(title);
+  const textW = await titleWidth(title);
+  const size = textW > PILL_MAX_W ? Math.floor((TITLE_SIZE * PILL_MAX_W) / textW) : TITLE_SIZE;
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${AGENT_W}" height="${AGENT_H}">
     <rect width="100%" height="100%" fill="#140d07"/>
     <text x="50%" y="40%" text-anchor="middle" font-family="Georgia, serif" font-size="30" fill="#c9a24a">THE QUARTERMASTER</text>
-    <text x="50%" y="58%" text-anchor="middle" font-family="Georgia, serif" font-size="40" font-weight="bold" fill="#f3e6c4">${esc(title)}</text>
+    <text x="50%" y="58%" text-anchor="middle" font-family="Georgia, serif" font-size="${size}" font-weight="bold" fill="#f3e6c4">${esc(title)}</text>
     <text x="50%" y="74%" text-anchor="middle" font-family="Georgia, serif" font-size="24" fill="#a89878">${esc(subtitle)}</text>
   </svg>`;
   const raw = await sharp(Buffer.from(svg)).ensureAlpha().raw().toBuffer();

@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 
 const schema = z.object({
@@ -19,6 +20,7 @@ const schema = z.object({
   ELEVENLABS_API_KEY: z.string().min(1),
   ELEVENLABS_VOICE_ID: z.string().min(1),
   ELEVENLABS_MODEL_ID: z.string().default('eleven_flash_v2_5'),
+  TTS_CACHE_DIR: z.string().default(fileURLToPath(new URL('../.cache/tts/', import.meta.url))),
 });
 
 const parsed = schema.parse(process.env);

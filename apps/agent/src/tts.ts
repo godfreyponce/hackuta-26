@@ -2,6 +2,7 @@
 // pcm_48000 is allowed on the Creator plan (checked 2026-11-14; only pcm_44100 needs Pro), so no resampling.
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { env } from './env.ts';
 import { log } from './log.ts';
 
@@ -57,18 +58,17 @@ async function collect(text: string): Promise<Int16Array> {
   return out;
 }
 
-const CACHE_DIR = new URL('../.cache/tts/', import.meta.url);
-
 /** Renders a fixed line once and keeps it on disk, so restarts cost no credits. */
 export async function renderCached(text: string): Promise<Int16Array> {
   const key = createHash('sha256').update(`${env.ELEVENLABS_VOICE_ID}|${env.ELEVENLABS_MODEL_ID}|${text}`).digest('hex').slice(0, 24);
-  const file = new URL(`${key}.pcm`, CACHE_DIR);
+  const dir = env.TTS_CACHE_DIR;
+  const file = join(dir, `${key}.pcm`);
   try {
     const buf = await readFile(file);
     return new Int16Array(new Uint8Array(buf).buffer); // copy: Buffer offsets may be odd
   } catch { /* not cached yet */ }
   const pcm = await collect(text);
-  await mkdir(CACHE_DIR, { recursive: true });
+  await mkdir(dir, { recursive: true });
   await writeFile(file, new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength));
   log('tts_rendered', { chars: text.length, ms: Math.round((pcm.length / TTS_SAMPLE_RATE) * 1000) });
   return pcm;

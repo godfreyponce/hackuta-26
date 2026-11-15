@@ -41,11 +41,29 @@ export async function prerenderLines(): Promise<void> {
   log('tts_cache_ready', { lines: await renderAll(UNNAMED), of: UNNAMED.length, ms: Date.now() - t0 });
 }
 
-/** Renders this friend's named lines when a call starts. The disk cache keeps them, so a name costs credits once. */
-export async function prepareFriendLines(friendName: string): Promise<void> {
+/**
+ * Renders this friend's named lines when a call starts. The disk cache keeps them, so a name costs credits once.
+ * `greeting` resolves true once the greeting is cached, and the call dials only then; the other named lines render
+ * after it in `rest`, and one picked before it is done streams live. A failed greeting renders nothing else.
+ */
+export function prepareFriendLines(friendName: string): { greeting: Promise<boolean>; rest: Promise<void> } {
   const t0 = Date.now();
-  const texts = NAMED.map((l) => fill(l, friendName));
-  log('friend_lines_ready', { lines: await renderAll(texts), of: texts.length, ms: Date.now() - t0 });
+  const greetings: readonly string[] = LINES.greeting;
+  const others = NAMED.filter((l) => !greetings.includes(l)).map((l) => fill(l, friendName));
+  const ready = renderAll(greetings.map((l) => fill(l, friendName))).then((n) => {
+    log('friend_greeting_ready', { ok: n === greetings.length, ms: Date.now() - t0 });
+    return n === greetings.length;
+  });
+  const rest = ready.then(async (ok) => {
+    if (ok) log('friend_lines_ready', { lines: await renderAll(others), of: others.length, ms: Date.now() - t0 });
+  });
+  return { greeting: ready, rest };
+}
+
+/** The friend's greeting did not render: the call ends before dialing with the same reason main uses to refuse one. */
+export class GreetingNotReadyError extends Error {
+  readonly code = 'tts_not_ready';
+  constructor() { super('friend greeting not rendered'); }
 }
 
 /** Renders into the cache; returns how many of texts are cached. */

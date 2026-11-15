@@ -11,7 +11,7 @@ import {
 import type { CallState, GameEvent, ServerToAgent, WeaponSpawn } from '@ithaca/shared';
 import { env } from './env.ts';
 import type { Hub } from './hub.ts';
-import { friendTitle, pick, prepareFriendLines, type LineKey } from './lines.ts';
+import { friendTitle, GreetingNotReadyError, pick, prepareFriendLines, type LineKey } from './lines.ts';
 import { clearActiveCall, noteActiveCall } from './recovery.ts';
 import { errText, log, maskPhone, warn } from './log.ts';
 import { Mixer } from './mixer.ts';
@@ -120,7 +120,7 @@ export class CallSession {
     try {
       await this.setup;
     } catch (e) {
-      const reason = e instanceof ChertError ? e.code : 'agent_error';
+      const reason = e instanceof ChertError || e instanceof GreetingNotReadyError ? e.code : 'agent_error';
       warn('call_run_failed', { error: errText(e) });
       await this.end(reason, 'failed');
     }
@@ -130,10 +130,12 @@ export class CallSession {
   private async setUp(): Promise<void> {
     this.status('dialing');
     log('call_start', { sid: this.sid, friend: this.friend.name, phone: maskPhone(this.friend.phoneE164), ftRoom: this.ftRoom, mode: env.AGENT_MODE });
-    const friendLines = prepareFriendLines(this.friend.name); // the greeting names the friend; a miss streams it live
+    const friendLines = prepareFriendLines(this.friend.name);
     await this.joinGameRoom();
-    await friendLines; // before the phone room: a bridge that joined while this ran would greet uncached, then go back to ringing
+    // Before the phone room: a bridge that joined while this ran would greet uncached, then go back to ringing.
+    const greetingReady = await friendLines.greeting;
     if (this.ending) return;
+    if (!greetingReady) throw new GreetingNotReadyError();
     await this.joinFtRoom();
     if (this.ending) return;
     if (this.mock) {
