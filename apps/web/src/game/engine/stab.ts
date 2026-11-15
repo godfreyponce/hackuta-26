@@ -488,7 +488,7 @@ export class StabSystem {
           if (tear.lengthSq() < 1e-6) tear.set(1, 0, 0);
           this.enemies.woundDecals.add(e, L.part, null, entryW, nrm, tear, 0.14, 'gash', this.enemies.t, 5, stainSize(L.part, 0.24));
         }
-        for (const wd of e.wounds) if (this.enemies.t - wd.bornT < 30) wd.bleedUntil = Math.max(wd.bleedUntil, this.enemies.t + 5);
+        for (const wd of e.wounds) if (wd.kind !== 'stain' && this.enemies.t - wd.bornT < 30) wd.bleedUntil = Math.max(wd.bleedUntil, this.enemies.t + 5);
       }
       if (!e.dead) this.enemies.impaleEnd(e, how === 'tear' ? 'tear' : 'pull', w.id);
     }

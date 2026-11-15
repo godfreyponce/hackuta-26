@@ -105,7 +105,7 @@ export class BloodDrops {
     this.iVel = new THREE.InstancedBufferAttribute(this.vel, 3).setUsage(THREE.DynamicDrawUsage);
     this.iData = new THREE.InstancedBufferAttribute(this.data, 4).setUsage(THREE.DynamicDrawUsage);
     g.setAttribute('iHead', this.iHead); g.setAttribute('iVel', this.iVel); g.setAttribute('iData', this.iData);
-    g.instanceCount = this.cap;
+    g.instanceCount = 0; // nothing drawn until a drop flies
     // unlit, so the colours are what the eye gets before the grade: a deep wet red that still reads in the shadows
     const mat = bloodBlend(new THREE.ShaderMaterial({
       vertexShader: DROP_VERT, fragmentShader: DROP_FRAG, transparent: true, depthWrite: false, side: THREE.DoubleSide,
@@ -135,6 +135,7 @@ export class BloodDrops {
       this.drag[i] = o.drag ?? 0.6;
     }
     this.live = this.cap;
+    (this.mesh.geometry as THREE.InstancedBufferGeometry).instanceCount = this.cap;
   }
 
   update(dt: number) {
@@ -158,11 +159,16 @@ export class BloodDrops {
       }
       this.data[i * 4 + 3] = this.age[i] / this.max[i];
     }
-    if (!any) this.live = 0;
+    if (!any) { this.live = 0; (this.mesh.geometry as THREE.InstancedBufferGeometry).instanceCount = 0; }
     this.iHead.needsUpdate = true; this.iVel.needsUpdate = true; this.iData.needsUpdate = true;
   }
 
-  clear() { for (let i = 0; i < this.cap; i++) this.data[i * 4 + 1] = 0; this.iData.needsUpdate = true; }
+  clear() {
+    for (let i = 0; i < this.cap; i++) this.data[i * 4 + 1] = 0;
+    this.iData.needsUpdate = true;
+    this.live = 0;
+    (this.mesh.geometry as THREE.InstancedBufferGeometry).instanceCount = 0;
+  }
 }
 
 // ── blood on the floor ────────────────────────────────────────────────────

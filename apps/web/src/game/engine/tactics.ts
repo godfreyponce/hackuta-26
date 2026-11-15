@@ -16,6 +16,20 @@ interface Track { active: boolean; t0: number; lastFast: number; peak: number; s
 const newTrack = (): Track => ({ active: false, t0: 0, lastFast: 0, peak: 0, start: new THREE.Vector3(), last: new THREE.Vector3(), minY: 0, maxY: 0 });
 
 const MAX_SWINGS = 10;
+
+interface Blade { tip: THREE.Vector3; vel: THREE.Vector3; base?: THREE.Vector3; side?: 'left' | 'right' }
+const TRACK_SIDE = ['right', 'left'] as const;
+/** each hand keeps its own track (picking up or dropping a sword in one hand never joins two hands' points into one
+ *  cut); blades without a side (older callers) go by position */
+function bladeFor(blades: Blade[], i: number): Blade | undefined {
+  let sided = false;
+  for (const b of blades) {
+    if (!b.side) continue;
+    sided = true;
+    if (b.side === TRACK_SIDE[i]) return b;
+  }
+  return sided ? undefined : blades[i];
+}
 const _d = new THREE.Vector3();
 
 export class PlayerHabits {
@@ -45,7 +59,7 @@ export class PlayerHabits {
   /**
    * Watch his blades for one frame. `yaw` is his view (+ = turned left); `ss` the input's speed scale (mouse 0.65).
    */
-  update(dt: number, t: number, blades: { tip: THREE.Vector3; vel: THREE.Vector3; base?: THREE.Vector3 }[], head: THREE.Vector3, yaw: number, guardUp: boolean, ss: number) {
+  update(dt: number, t: number, blades: Blade[], head: THREE.Vector3, yaw: number, guardUp: boolean, ss: number) {
     this.t = t;
     // guard
     if (guardUp) { this.guardHeld += dt; this.sinceGuard = 0; } else { this.guardHeld = 0; this.sinceGuard += dt; }
@@ -55,7 +69,7 @@ export class PlayerHabits {
     const vOn = 3.0 * ss;
     for (let i = 0; i < this.tracks.length; i++) {
       const tr = this.tracks[i];
-      const b = blades[i];
+      const b = bladeFor(blades, i);
       if (!b) { if (tr.active) this.finish(tr, head, yaw, vOn); continue; }
       if (b.tip.y > head.y - 0.55 || b.vel.lengthSq() > 1) low = false;
       if (guardUp) this.guardHigh += ((b.tip.y > head.y - 0.25 ? 1 : 0) - this.guardHigh) * (1 - Math.exp(-dt / 1.5));
@@ -140,8 +154,9 @@ export class PlayerHabits {
     return this.guardHeld >= (body ? 1.8 : 1.0) || this.guardFrac >= (body ? 0.8 : 0.62);
   }
 
-  /** guard down: no guard for a while, his blade low and still, not cutting */
-  open(): boolean { return this.sinceGuard > 1.5 && this.sinceSwing > 0.8 && this.bladeLow; }
+  /** guard down: no guard for a while, his blade low and still, not cutting. With the body (webcam) the guard is a
+   *  two-handed gesture and a resting arm reads as a low blade, so it takes longer to count as open */
+  open(body = false): boolean { return this.sinceGuard > (body ? 2.5 : 1.5) && this.sinceSwing > 0.8 && this.bladeLow; }
 
   /** he answered (or failed to answer) one of their blows */
   noteOutcome(dir: AttackDir, o: Outcome) {

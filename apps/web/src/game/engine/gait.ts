@@ -4,6 +4,8 @@
 import { RIG, type Anim } from './humanoid';
 import { clamp } from './math';
 
+const FEET = [1, -1] as const;
+
 export interface GaitState {
   phase: number;
   /** smoothed velocity in his own frame (m/s): + = toward his left / forward */
@@ -69,7 +71,7 @@ export function stepGait(g: GaitState, dt: number, vx: number, vz: number, yaw: 
   const guarded = clamp((stance.crouch - STANCE_WALK.crouch) / (STANCE_GUARD.crouch - STANCE_WALK.crouch), 0, 1);
   const sway = -0.022 * k * Math.cos(g.phase) + 0.028 * idle * Math.sin(t * 0.85 + seed) * (0.4 + 0.6 * guarded);
   const bob = -stance.crouch - 0.016 * k * (0.5 + 0.5 * Math.cos(2 * g.phase)) - 0.006 * idle * (0.5 + 0.5 * Math.sin(t * 1.7 + seed * 3)); // breathing
-  for (const side of [1, -1] as const) {
+  for (const side of FEET) {
     const ph = g.phase + (side === 1 ? 0 : Math.PI);
     const s = Math.sin(ph);
     const lift = Math.max(0, Math.cos(ph)) * liftH;

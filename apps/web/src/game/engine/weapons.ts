@@ -1119,7 +1119,8 @@ export class WeaponManager {
     const thr = w.state === 'held' && w.hand && source === 'melee' ? this.hooks.thrustOf?.(w.hand) ?? null : null;
     // (a tracked hand's single step is mostly jitter: on its own it only counts as the point leading when it's fast)
     const pointLeads = (axis.dot(dir) > 0.8 && (cap !== null || speed >= 2.5)) || (!!thr && axis.dot(thr.dir) > 0.8);
-    if (w.state === 'held' && source === 'melee' && stabProfile(w) && pointLeads && !(cap && !cap.driven)) {
+    // (a point that met his aspis is a blow on the shield, not a stab — it doesn't wait to reach the arm behind it)
+    if (w.state === 'held' && source === 'melee' && stabProfile(w) && pointLeads && !(cap && !cap.driven) && !hit.shield) {
       const ab = _st1.subVectors(b, a);
       const frac = _st2.subVectors(hit.point, a).dot(ab) / Math.max(1e-6, ab.lengthSq());
       if (frac >= 0.7) {

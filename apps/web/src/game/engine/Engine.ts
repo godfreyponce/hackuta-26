@@ -253,15 +253,16 @@ export class Engine {
         // (a split shield has its own toast in onWeaponHit)
       },
       playerBlades: () => {
-        const out: { tip: THREE.Vector3; vel: THREE.Vector3; base: THREE.Vector3 }[] = [];
+        const out: { tip: THREE.Vector3; vel: THREE.Vector3; base: THREE.Vector3; side: Hand }[] = [];
         for (const side of ['right', 'left'] as const) {
           const w = this.weapons.heldBy(side);
           if (!w || !w.spec.sharp || w.cls === 'bow' || w.cls === 'shield') continue;
           // tip travel per physics step (each step covers FIXED of real time — hand poses are spread across steps)
-          out.push({ tip: w.tip, base: w.center, vel: w.tip.clone().sub(w.prevTip).multiplyScalar(1 / FIXED) });
+          out.push({ tip: w.tip, base: w.center, side, vel: w.tip.clone().sub(w.prevTip).multiplyScalar(1 / FIXED) });
         }
         return out;
       },
+      playerHandSeen: () => !this.tracked || this.handViews.left.visible || this.handViews.right.visible,
       playerShield: () => {
         const w = this.weapons.heldBy('left')?.cls === 'shield' ? this.weapons.heldBy('left') : this.weapons.heldBy('right')?.cls === 'shield' ? this.weapons.heldBy('right') : null;
         return w ? w.center : null;
@@ -1085,7 +1086,9 @@ export class Engine {
       if (hs.visible) {
         const tgt = this.handTarget[side].set(hs.pos.x, hs.pos.y, hs.pos.z).applyAxisAngle(new THREE.Vector3(0, 1, 0), this.yaw).add(this.eye);
         tgt.add(this.recoilOff[side]);
-        if (thr.ext > 1e-4) tgt.addScaledVector(_gv7.set(hs.forward.x, hs.forward.y, hs.forward.z).applyAxisAngle(_UP, this.yaw).normalize(), thr.ext);
+        // along the thrust's own line: a blade turning into a cut doesn't swing the lunge round with it (that would
+        // add the lunge's length × the turn to the cut's speed)
+        if (thr.ext > 1e-4) tgt.addScaledVector(thr.dir, thr.ext);
         this.recoilOff[side].multiplyScalar(Math.exp(-realDt / 0.15));
         const prev = hv.pos.clone();
         // webcam reacquire: the hand glides in from where it rested (no teleport, and the jump is no punch)

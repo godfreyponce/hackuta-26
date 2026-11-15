@@ -20,6 +20,9 @@ function starts(rec: Recording, trace?: [number, number]) {
   eng.begin();
   const rd = { left: new ThrustReader(), right: new ThrustReader() };
   const out: Record<'left' | 'right', number[]> = { left: [], right: [] };
+  // how hard each thrust drives the point (m/s, the most the stab reads in its first 0.3 s)
+  const drives: Record<'left' | 'right', number[]> = { left: [], right: [] };
+  const since = { left: -1, right: -1 };
   const seen = { left: -1, right: -1 };
   const vel = new THREE.Vector3(), fwd = new THREE.Vector3(), depth = new THREE.Vector3(0, 0, 1);
   const F = rec.frames;
@@ -35,29 +38,36 @@ function starts(rec: Recording, trace?: [number, number]) {
       fwd.set(hs.forward.x, hs.forward.y, hs.forward.z).normalize();
       const was = rd[h].on;
       rd[h].update(wall / 1000, 1 / 60, vel, fwd, depth, hs.visible && seen[h] >= 0 && wall - seen[h] > 300, false);
-      if (!was && rd[h].on) out[h].push(Math.round(wall));
+      if (!was && rd[h].on) { out[h].push(Math.round(wall)); drives[h].push(0); since[h] = wall; }
+      const sv = rd[h].stab?.v;
+      if (sv !== undefined && wall - since[h] <= 300 && drives[h].length) drives[h][drives[h].length - 1] = Math.max(drives[h][drives[h].length - 1]!, sv);
       if (trace && h === 'right' && wall >= trace[0] && wall <= trace[1]) {
         console.log(`    ${Math.round(wall)} on ${+rd[h].on} vEff ${rd[h].vEff.toFixed(2)} travel ${rd[h].travel.toFixed(3)} across ${rd[h].across.toFixed(3)} vel ${vel.toArray().map((x) => x.toFixed(2))} fwd ${fwd.toArray().map((x) => x.toFixed(2))}`);
       }
     }
   }
-  return { out, dur };
+  return { out, dur, drives };
 }
 
 const SEEDS = [7, 11, 23];
 let ok = true;
 const check = (label: string, pass: boolean, detail: string) => { console.log(`${pass ? 'PASS' : 'FAIL'}  ${label}  ${detail}`); ok &&= pass; };
+// a thrust's point must go through linen (the linothorax, the bracers): enemies.ts VPEN.linen thrust speed
+const LINEN_THRUST = 4;
 for (const [name, need] of [['thrust', 9], ['jab', 7], ['diagonal', 7]] as const) {
   let caught = 0;
   const lat: number[] = [];
+  const dv: number[] = [];
   for (const seed of SEEDS) {
-    const { out } = starts(swordMove(name, seed));
+    const { out, drives } = starts(swordMove(name, seed));
+    dv.push(...drives.right);
     for (const t0 of MOVES[name].onsets) {
       const s = out.right.find((t) => t >= t0 - 100 && t <= t0 + 450);
       if (s !== undefined) { caught++; lat.push(s - t0); }
     }
   }
   check(`scripted ${name}: read as a thrust`, caught >= need, `${caught}/9 (need ${need}) · ms after onset ${lat.join(' ')}`);
+  check(`scripted ${name}: drives through linen`, dv.length > 0 && dv.every((v) => v >= LINEN_THRUST), `m/s ${dv.map((v) => v.toFixed(1)).join(' ')} (need ≥ ${LINEN_THRUST})`);
 }
 for (const name of ['slash', 'chop'] as SwordMove[]) {
   const fs = SEEDS.map((seed) => {

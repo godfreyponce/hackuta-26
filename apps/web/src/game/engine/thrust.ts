@@ -42,10 +42,14 @@ export const WC_THRUST = {
   /** …reached no sooner than this after the thrust starts (s); with the point in a man, pushing on reaches this (m) */
   pace: 0.2,
   maxExtIn: 0.36,
+  /** a thrust read as one drives the point at least this hard (m/s): enough for linen and the gaps, never bronze
+   *  (the camera under-reads a thrust that isn't straight at it, and a steady arm's push reads slower than it is) */
+  vFloor: 4.5,
 };
 
 export interface ThrustStab {
-  /** how hard the point is driven (m/s, the thrust's peak corrected speed along the blade) */
+  /** how hard the point is driven (m/s: the push that started it, or its steadiest 0.2 s since — never one frame's
+   *  spike — and at least WC_THRUST.vFloor) */
   v: number;
   /** the line it's driven along (unit, world) */
   dir: THREE.Vector3;
@@ -97,7 +101,7 @@ export class ThrustReader {
     this.travel = travel; this.across = across;
     if (!this.on) {
       // the point aimed into the hall (at a man — not raised overhead for a cut, nor dropped low)
-      const aimed = Math.abs(fwd.dot(depthAxis)) >= WC_THRUST.aimDepth && Math.abs(fwd.y) <= WC_THRUST.aimPitch;
+      const aimed = -fwd.dot(depthAxis) >= WC_THRUST.aimDepth && Math.abs(fwd.y) <= WC_THRUST.aimPitch;
       // a cut's wind-up: the arm going up, the blade tipping up with it (the arm foreshortens, so it reads as depth)
       const windup = vel.y > WC_THRUST.windupRise && fwd.y - (this.hist[0]?.fy ?? fwd.y) > WC_THRUST.windupTip;
       if (aimed && !windup && drive >= WC_THRUST.start && along > 0 && travel >= WC_THRUST.travel && travel >= WC_THRUST.straight * across) {
@@ -105,7 +109,7 @@ export class ThrustReader {
       }
     } else {
       if (recent > 0.03) this.lastPushT = now;
-      this.peak = Math.max(this.peak, along);
+      this.peak = Math.max(this.peak, travel / WC_THRUST.win); // the window's average, not a frame's spike
       this.dir.lerp(fwd, Math.min(1, dt * 8)).normalize();
       if (along < WC_THRUST.retract || lat > WC_THRUST.lateral || now - this.lastPushT > WC_THRUST.idle || now - this.t0 > WC_THRUST.maxDur) this.on = false;
     }
@@ -119,7 +123,12 @@ export class ThrustReader {
     if (!this.on && !lodged) this.ext *= Math.exp(-dt / 0.45);
   }
 
-  get stab(): ThrustStab | null { return this.on ? { v: this.peak, dir: this.dir } : null; }
+  private readonly out: ThrustStab = { v: 0, dir: this.dir };
+  get stab(): ThrustStab | null {
+    if (!this.on) return null;
+    this.out.v = Math.max(this.peak, WC_THRUST.vFloor);
+    return this.out;
+  }
 
   reset() { this.on = false; this.ext = 0; this.peak = 0; this.vEff = 0; this.hist.length = 0; }
 }

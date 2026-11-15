@@ -121,6 +121,8 @@ export class WoundDecals {
         sh.fragmentShader = sh.fragmentShader.replace('#include <normal_fragment_maps>',
           `#include <normal_fragment_maps>\n  diffuseColor.a *= smoothstep(${f0.toFixed(2)}, ${f1.toFixed(2)}, abs(dot(normal, normalize(vViewPosition))));`);
       };
+      // the fade's numbers are baked into the shader: each kind needs its own program, not the first one compiled
+      mat.customProgramCacheKey = () => 'wound-fade-' + kind;
       const m = new THREE.InstancedMesh(geo, mat, this.cap);
       m.frustumCulled = false;
       m.count = 0;
