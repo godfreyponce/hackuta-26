@@ -44,6 +44,20 @@ export const DEFAULT_CONFIG = {
   releaseWindowMs: 80,
   /** … ending this long before the release fired (compensates grip-filter lag). */
   releaseLagMs: 0,
+
+  // ── call_sign / request_weapon (C.5) ──
+  /** Palm center within this of an ear (m). */
+  callEarDist: 0.12,
+  callHoldMs: 1000,
+  callCooldownMs: 5000,
+  /** Thumb tip ÷ palm distance from the index MCP above which the thumb counts as extended. */
+  callThumbExt: 0.6,
+  callPinkyMaxCurl: 0.45,
+  callFingerMinCurl: 0.55,
+  requestAboveHeadM: 0.15,
+  requestHoldMs: 800,
+  requestCooldownMs: 4000,
+  requestMinVisibility: 0.3,
 };
 
 export type MotionConfig = { -readonly [K in keyof typeof DEFAULT_CONFIG]: number };
@@ -88,5 +102,17 @@ export const CONFIG_RANGES: Record<string, Partial<Record<keyof MotionConfig, [n
     gripHoldMs: [0, 1000, 50],
     releaseWindowMs: [16, 250, 4],
     releaseLagMs: [0, 150, 4],
+  },
+  'Call sign / request weapon': {
+    callEarDist: [0.04, 0.3, 0.01],
+    callHoldMs: [200, 2000, 50],
+    callCooldownMs: [0, 10000, 250],
+    callThumbExt: [0.2, 1.2, 0.05],
+    callPinkyMaxCurl: [0.1, 0.9, 0.05],
+    callFingerMinCurl: [0.2, 0.95, 0.05],
+    requestAboveHeadM: [0, 0.4, 0.01],
+    requestHoldMs: [200, 2000, 50],
+    requestCooldownMs: [0, 10000, 250],
+    requestMinVisibility: [0, 1, 0.05],
   },
 };

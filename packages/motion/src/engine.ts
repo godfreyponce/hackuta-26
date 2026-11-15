@@ -2,12 +2,13 @@
 // so the live controller, the replay controller and unit tests all share it.
 import type { InputEvent, PlayerInputState } from '@ithaca/shared';
 import { config } from './config';
+import { Gestures } from './gestures';
 import { GripTracker } from './grip';
 import { HANDS, Mapper, type Body } from './mapping';
 import { copy3 } from './math';
 import { neutralState } from './neutral';
 import { cloneProfile, DEFAULT_PROFILE, type Profile } from './profile';
-import type { RawFrame } from './types';
+import type { PendingGesture, RawFrame } from './types';
 
 export type Listener = (e: InputEvent) => void;
 
@@ -31,6 +32,7 @@ export class Engine {
 
   readonly mapper = new Mapper();
   readonly grip = new GripTracker();
+  readonly gestures = new Gestures();
   private readonly listeners = new Set<Listener>();
   private poseLostSince = -1;
   private poseBackSince = -1;
@@ -73,6 +75,7 @@ export class Engine {
     this.state.tracking = 'lost';
     this.mapper.reset();
     this.grip.reset();
+    this.gestures.reset();
   }
 
   end(): void {
@@ -86,6 +89,7 @@ export class Engine {
     this.updateTracking(frame);
     const body = this.mapper.update(frame.poseImage, frame.poseWorld, frame.hands, frame.t, this.aspect, this.profile, this.state);
     this.grip.update(body, frame.hands === null, this.profile, this.state, this.emitFn);
+    this.gestures.update(body, this.grip, this.state, this.emitFn);
     this.state.t = frame.t;
   }
 
@@ -144,6 +148,11 @@ export class Engine {
       : this.cpuFallback || this.avgVisibility < config.degradedVisibility
         ? 'degraded'
         : 'ok';
+  }
+
+  /** In-flight hold gesture (call_sign / request_weapon / drink) for A's progress ring. */
+  getPendingGesture(): PendingGesture | null {
+    return this.state.tracking === 'off' ? null : this.gestures.pending(this.state.t);
   }
 
   get visibility(): number {

@@ -3,7 +3,7 @@
 import { HandLandmarker, PoseLandmarker } from '@mediapipe/tasks-vision';
 import type { InputController, InputEvent } from '@ithaca/shared';
 import { createMotionController, type MotionDebug } from '../controller';
-import type { RawLandmark } from '../types';
+import type { PendingGesture, RawLandmark } from '../types';
 import { buildSliders, drawGameSpace } from './panels';
 import { LAB_CSS } from './styles';
 
@@ -11,7 +11,7 @@ export interface MotionLabOptions {
   modelBaseUrl?: string;
 }
 
-type LabController = InputController & Partial<MotionDebug>;
+type LabController = InputController & Partial<MotionDebug> & { getPendingGesture?(): PendingGesture | null };
 
 const POSE_EDGES = PoseLandmarker.POSE_CONNECTIONS;
 const HAND_EDGES = HandLandmarker.HAND_CONNECTIONS;
@@ -44,6 +44,7 @@ export function mountMotionLab(root: HTMLElement, opts: MotionLabOptions = {}): 
           <video playsinline muted></video>
           <canvas class="overlay"></canvas>
         </div>
+        <div class="ring" hidden><span></span></div>
         <div class="placeholder">Camera off. Press <b>Start camera</b>.</div>
       </section>
       <aside>
@@ -76,6 +77,7 @@ export function mountMotionLab(root: HTMLElement, opts: MotionLabOptions = {}): 
   const logEl = badge('log');
   const errorEl = badge('error');
   const spaceCv = q<HTMLCanvasElement>('canvas.space');
+  const ring = q<HTMLElement>('.ring');
   buildSliders(q<HTMLElement>('.sliders'));
 
   let controller: LabController | null = null;
@@ -172,6 +174,12 @@ export function mountMotionLab(root: HTMLElement, opts: MotionLabOptions = {}): 
   function loop(now: number): void {
     raf = requestAnimationFrame(loop);
     drawOverlay();
+    const pg = controller?.getPendingGesture?.() ?? null;
+    ring.hidden = !pg;
+    if (pg) {
+      ring.style.setProperty('--p', pg.progress.toFixed(3));
+      (ring.firstElementChild as HTMLElement).textContent = pg.name.replace('_', ' ');
+    }
     drawGameSpace(spaceCv, controller?.getState() ?? null, controller?.getDebugBody?.() ?? null);
     if (now - lastReadout > 100) {
       lastReadout = now;

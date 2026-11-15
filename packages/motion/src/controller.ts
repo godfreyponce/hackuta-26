@@ -4,7 +4,7 @@ import { Engine } from './engine';
 import type { Body } from './mapping';
 import { loadProfile } from './profile';
 import { Tracker } from './tracker';
-import type { RawFrame, RawHand, TrackerStats } from './types';
+import type { PendingGesture, RawFrame, RawHand, TrackerStats } from './types';
 
 export interface MotionControllerOptions {
   /** URL prefix where the .task models and wasm/ live. Default "/models". */
@@ -29,6 +29,8 @@ export interface MotionDebug {
 
 export interface MotionController extends InputController, MotionDebug {
   readonly kind: 'motion';
+  /** In-flight hold gesture for a radial progress ring (C.5), or null. */
+  getPendingGesture(): PendingGesture | null;
 }
 
 export function createMotionController(opts: MotionControllerOptions = {}): MotionController {
@@ -68,5 +70,6 @@ export function createMotionController(opts: MotionControllerOptions = {}): Moti
     getDebugFrame: () => engine.lastFrame,
     getDebugHands: () => tracker.getLastHands(),
     getDebugBody: () => engine.body,
+    getPendingGesture: () => engine.getPendingGesture(),
   };
 }
