@@ -336,7 +336,7 @@ export class Engine {
   /** Owner ask: the body tracker's drink (hand to mouth) is easier to hit than call_sign, so with no call it places one.
    *  The keyboard's E stays a drink. */
   private drinkPlacesCall(e: InputEvent) {
-    return e.type === 'drink' && this.input?.kind !== 'keyboard_mouse' && !this.cb.callLive();
+    return e.type === 'drink' && this.input?.kind !== 'keyboard_mouse' && !this.weapons.drawing && !this.blocking && !this.cb.callLive();
   }
 
   private onInput(e: InputEvent) {

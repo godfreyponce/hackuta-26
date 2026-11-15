@@ -374,7 +374,7 @@ export function Hud() {
       } else if (e.code === 'KeyT' && !useApp.getState().paused) setMic(!useApp.getState().micEnabled);
       else if (e.code === 'KeyH') setHint((h) => !h);
       // the keyboard controller turns C into call_sign; the body tracker has no key listener of its own
-      else if (e.code === 'KeyC' && useApp.getState().inputKind !== 'keyboard_mouse') requestCall();
+      else if (e.code === 'KeyC' && !e.repeat && useApp.getState().inputKind !== 'keyboard_mouse') requestCall();
     };
     window.addEventListener('keydown', onKey);
     const t = setTimeout(() => setHint(false), 12000);
