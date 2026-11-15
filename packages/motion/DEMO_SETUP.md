@@ -45,7 +45,7 @@ Each step waits until it actually sees the move, shows a hint if something's off
 - Use Chrome. Close other tabs and apps that use the camera (Zoom, FaceTime, Photo Booth).
 - Plug in the charger. Battery saver can throttle the GPU and halve the fps.
 - If the header says **CPU** (degraded), reload the page. If it stays on CPU, switch the pose model to **lite**.
-- If fps drops under 40, tracking switches itself to 960×540 and runs hands every other frame. The header shows `hands ½`.
+- Hands are found in two 256×256 crops placed from the pose wrists (the header shows `hand crops · hit L … R …`; the overlay draws the dashed `L crop` / `R crop` squares). If detection can't keep up with the camera (ms/frame > 0.8 × the frame interval for 3 s), the left and right crops run on alternate frames; the header shows `hands L/R alt`. With `handRoi` at 0 (old full-frame path) the fallback is 960×540 + hands every other frame (`hands ½`).
 - The fps badge needs to stay **≥ 30**. The Windows dev laptop only managed 15–17 fps, so demo on the M-series Mac.
 
 ## Quick troubleshooting

@@ -30,9 +30,40 @@ export function thumbExtension(lm: RawLandmark[]): number {
   return palm > 1e-6 ? d3(lm[4], lm[5]) / palm : 0;
 }
 
-/** Hand-world landmarks are metric 3D, so they are the better input; image landmarks are a fallback. */
+/** Hand-world landmarks (metric 3D) when present, else image landmarks. Thumb / palm-normal input. */
 export function curlInput(lm: { world: RawLandmark[] | null; image: RawLandmark[] }): RawLandmark[] {
   return lm.world ?? lm.image;
+}
+
+const imgBuf: RawLandmark[] = Array.from({ length: 21 }, () => ({ x: 0, y: 0, z: 0 }));
+const curlI = [0, 0, 0, 0];
+const curlW = [0, 0, 0, 0];
+
+/**
+ * Per-finger curl that holds up at webcam distance. Hand-world landmarks are a learned 3D guess: an open
+ * hand whose fingers point at / away from the camera reads 0.4-0.8 "curled" there (throw + bow fixtures),
+ * so the hand never opens. A projection can only shorten a finger, so when the IMAGE landmarks
+ * (aspect-corrected; MediaPipe's image z uses x's scale) show the tip well past the knuckle, the finger is
+ * extended. When the image shows it short, it is curled OR foreshortened, and hand-world decides (max).
+ */
+export function fusedCurls(hd: { world: RawLandmark[] | null; image: RawLandmark[] }, aspect: number, out: number[]): number[] {
+  for (let i = 0; i < 21; i++) {
+    const p = hd.image[i], q = imgBuf[i] as RawLandmark;
+    if (!p) continue;
+    q.x = p.x * aspect;
+    q.y = p.y;
+    q.z = p.z * aspect;
+  }
+  fingerCurls(imgBuf, curlI);
+  if (hd.world) fingerCurls(hd.world, curlW);
+  const lo = config.gripImgOpenCurl, span = Math.max(config.gripImgShortCurl - lo, 0.01);
+  for (let f = 0; f < 4; f++) {
+    const ci = curlI[f] ?? 0;
+    const cw = hd.world ? (curlW[f] ?? 0) : ci;
+    const k = clamp((ci - lo) / span, 0, 1);
+    out[f] = ci + (Math.max(ci, cw) - ci) * k;
+  }
+  return out;
 }
 
 /** v = filtered 3D hand velocity; s = max(|v|, image-plane wrist speed). */
@@ -44,6 +75,8 @@ class HandGrip {
   above = 0;
   below = 0;
   lostSince = -1;
+  /** body.t of the last frame the hand model saw this hand (the grip filter runs at the hand rate). */
+  lastSeenT = -1;
   /** Ring buffer of recent velocities for release.vel. */
   readonly hist: VelSample[] = Array.from({ length: 64 }, () => ({ t: -1e9, x: 0, y: 0, z: 0, s: 0 }));
   head = 0;
@@ -103,9 +136,18 @@ export class GripTracker {
       g.filter.reset();
       g.gripping = false;
       g.above = g.below = 0;
-      g.lostSince = g.lastLostFrom = g.lastLostTo = -1;
+      g.lostSince = g.lastLostFrom = g.lastLostTo = g.lastSeenT = -1;
       for (const s of g.hist) s.t = -1e9;
     }
+  }
+
+  /**
+   * Start fresh but with the latch set to what the game actually holds: `keep[h]` true = the game holds
+   * something in that hand, so the next open hand releases it; false = the next fist is a new grab.
+   */
+  resync(keep: Record<Hand, boolean>): void {
+    this.reset();
+    for (const h of HANDS) this.hand[h].gripping = !!keep[h];
   }
 
   isGripping(h: Hand): boolean {
@@ -127,7 +169,7 @@ export class GripTracker {
       const g = this.hand[h];
       const hs = state.hands[h];
       if (hs.visible) g.push(t, hs.vel, body.wristImgSpeed[h]);
-      if (handsSkipped) continue;
+      if (handsSkipped || !body.handRan[h]) continue;
 
       const hd = body.hand[h];
       if (!hd || !body.handFresh[h]) {
@@ -135,7 +177,7 @@ export class GripTracker {
         // for gripHoldMs, then keep treating a closed hand as gripping until the hand comes back.
         if (g.lostSince < 0) g.lostSince = t;
         if (g.gripping && t - g.lostSince > config.gripHoldMs) hs.grip = 1;
-        g.above = g.below = 0;
+        // A missed detection is no evidence either way: keep the debounce counts.
         continue;
       }
       if (g.lostSince >= 0) {
@@ -145,29 +187,36 @@ export class GripTracker {
       g.lostSince = -1;
 
       const lm = curlInput(hd);
-      const curls = fingerCurls(lm, body.curls[h]);
+      const curls = fusedCurls(hd, body.aspect, body.curls[h]);
       const raw = ((curls[0] ?? 0) + (curls[1] ?? 0) + (curls[2] ?? 0) + (curls[3] ?? 0)) / 4;
       body.gripRaw[h] = raw;
       body.thumbExt[h] = thumbExtension(lm);
       const range = profile.grip[h];
-      const norm = clamp((raw - range.min) / Math.max(range.max - range.min, 0.05), 0, 1);
+      const lo = Math.min(range.min, config.gripRangeMaxMin);
+      const hi = Math.max(range.max, config.gripRangeMinMax);
+      const norm = clamp((raw - lo) / Math.max(hi - lo, 0.05), 0, 1);
+      // Filter at the hand rate: with hands every 2nd frame, body.dt is half the real sample spacing.
+      const dt = g.lastSeenT >= 0 ? clamp((t - g.lastSeenT) / 1000, 1 / 240, 0.25) : body.dt;
+      g.lastSeenT = t;
       g.filter.minCutoff = config.gripMinCutoff;
-      hs.grip = clamp(g.filter.filter(norm, body.dt), 0, 1);
+      hs.grip = clamp(g.filter.filter(norm, dt), 0, 1);
 
-      // Hysteresis: > gripOn for N frames → grab; < gripOff for N frames → release.
+      // Hysteresis on the UNFILTERED grip: > gripOn for N hand frames -> grab; < gripOff for N -> release.
+      // A clear reading (strong threshold, wrist tracked by the pose, confident hand) fires on its first frame.
       const frames = Math.max(1, Math.round(config.gripFrames));
+      const clear = body.wristVis[h] >= config.gripStrongMinWristVis && hd.score >= config.gripStrongMinScore;
       if (!g.gripping) {
-        g.above = hs.grip > config.gripOn ? g.above + 1 : 0;
-        if (g.above >= frames) {
+        g.above = norm > config.gripOn ? g.above + 1 : 0;
+        if (g.above >= frames || (clear && norm >= config.gripStrongOn)) {
           g.gripping = true;
-          g.above = 0;
+          g.above = g.below = 0;
           emit({ type: 'grab', hand: h });
         }
       } else {
-        g.below = hs.grip < config.gripOff ? g.below + 1 : 0;
-        if (g.below >= frames) {
+        g.below = norm < config.gripOff ? g.below + 1 : 0;
+        if (g.below >= frames || (clear && norm <= config.gripStrongOff)) {
           g.gripping = false;
-          g.below = 0;
+          g.above = g.below = 0;
           emit({ type: 'release', hand: h, vel: g.releaseVel(t, hs.forward) });
         }
       }

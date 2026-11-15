@@ -108,6 +108,14 @@ describe('mapping (C.3)', () => {
     expect(later - at).toBeCloseTo(vx * 0.05, 3);
   });
 
+  it('M4: a fresh, confident hand keeps a low-visibility wrist visible; without it the hand hides', () => {
+    const { e, push } = engine();
+    run(push, 300, { hands: { right: {} }, occlude: [16] }); // pose wrist visibility 0.2 < 0.3
+    expect(e.state.hands.right.visible).toBe(true);
+    run(push, 100, { occlude: [16] }, 300);
+    expect(e.state.hands.right.visible).toBe(false);
+  });
+
   it('uses NEUTRAL as the resting pose', () => {
     expect(NEUTRAL[16]?.[0]).toBeGreaterThan(0);
   });

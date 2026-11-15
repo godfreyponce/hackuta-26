@@ -1,6 +1,6 @@
 // Engine: turns RawFrames into PlayerInputState + InputEvents. Pure (no DOM, no MediaPipe),
 // so the live controller, the replay controller and unit tests all share it.
-import type { CalibrationResult, InputEvent, PlayerInputState } from '@ithaca/shared';
+import type { CalibrationResult, Hand, InputEvent, PlayerInputState } from '@ithaca/shared';
 import { Calibrator } from './calibration';
 import { config } from './config';
 import { Gestures, type DetectorFlags } from './gestures';
@@ -99,7 +99,7 @@ export class Engine {
     this.lastFrame = frame;
     this.lastFrameWall = wallNow;
     this.updateTracking(frame);
-    const body = this.mapper.update(frame.poseImage, frame.poseWorld, frame.hands, frame.t, this.aspect, this.profile, this.state);
+    const body = this.mapper.update(frame.poseImage, frame.poseWorld, frame.hands, frame.t, this.aspect, this.profile, this.state, frame.skippedHands);
     this.grip.update(body, frame.hands === null, this.profile, this.state, this.emitFn);
     this.gestures.update(body, this.grip, this.state, this.emitFn);
     if (this.calibrator) {
@@ -172,9 +172,8 @@ export class Engine {
     if (this.calibrator) return this.calibrator.promise;
     const prevTracking = this.state.tracking;
     // Close out anything the game thinks is held, then run with gameplay events muted.
-    for (const h of HANDS) if (this.grip.isGripping(h)) this.emit({ type: 'release', hand: h, vel: { x: 0, y: 0, z: 0 } });
+    this.resyncGrip();
     if (this.gestures.isBlocking) this.emit({ type: 'block_end' });
-    this.grip.reset();
     this.gestures.reset();
     this.state.tracking = 'calibrating';
     const cal = new Calibrator(
@@ -201,6 +200,21 @@ export class Engine {
     // Wall-clock safety net in case frames stop arriving (camera unplugged, never started).
     this.calibTimer = setTimeout(() => cal.cancel(), config.calibTimeoutMs + 2000);
     return cal.promise;
+  }
+
+  /**
+   * Make the grip latch mirror what the game holds. For each hand the motion side thinks is closed but the
+   * game does not hold (`keep[h]` false), emit `release` (zero velocity); then reset the grip filters and
+   * debounce counters and set the latch to `keep[h]`. So with keep = false the next fist is a fresh `grab`,
+   * and with keep = true the next open hand is a `release`. The game calls this when a match starts or
+   * resumes: grabs made on menu screens are dropped by the game, and without this the tracker stays
+   * "gripping" and never grabs again (playlog: 0 grabs for the whole match).
+   */
+  resyncGrip(keep: Record<Hand, boolean> = { left: false, right: false }): void {
+    for (const h of HANDS) {
+      if (this.grip.isGripping(h) && !keep[h]) this.emit({ type: 'release', hand: h, vel: { x: 0, y: 0, z: 0 } });
+    }
+    this.grip.resync(keep);
   }
 
   onCalibrationStep(cb: (s: CalibrationStep) => void): () => void {

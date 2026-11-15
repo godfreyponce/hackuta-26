@@ -1,6 +1,8 @@
 // Golden regression: the 10 moves that passed the Lab gesture test, plus calibration, must produce
 // exactly the same events (type, hand, frame time, swing speed/dir) as before the throw/bow fix.
-// The snapshot was recorded on the pre-fix code (commit 8765147).
+// The snapshot was recorded on the pre-fix code (commit 8765147). The grab/release, sword swing and drink
+// snapshots were refreshed for the fused-curl grip (M3): same events, 17-67 ms earlier (hysteresis now runs on
+// the unfiltered grip, and a clear reading fires on its first frame).
 import { describe, expect, it } from 'vitest';
 import type { InputEvent } from '@ithaca/shared';
 import { Engine } from '../src/engine';

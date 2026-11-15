@@ -6,7 +6,22 @@ export const DEFAULT_CONFIG = {
   trackingLostMs: 500,
   trackingOkMs: 300,
   degradedVisibility: 0.5,
+  /** Perf fallback (tracker.ts): only when detection can't keep up (ms/frame > 0.8 × the camera's frame interval) and fps < this. 0 disables. */
   downgradeBelowFps: 40,
+
+  // ── hand crops from the pose (tracker.ts / handRoi.ts) ──
+  /** 0 = whole frame (old path), 1 = one 256² crop per pose wrist (VIDEO), 2 = crops + same-frame IMAGE retry on a miss. */
+  handRoi: 2,
+  /** Crop side = this × |wrist → (2·index + pinky)/3| (Holistic: 2 × 2.7). */
+  handRoiScale: 5.4,
+  /** Crop centre this many wrist→knuckle lengths past the wrist. */
+  handRoiCenterAlong: 1.2,
+  /** Keep last frame's crop while the target moved less than this × its size (VIDEO tracking stays valid). */
+  handRoiSticky: 0.12,
+  /** Pose wrist visibility needed to place a crop from the pose (Holistic's gate). */
+  handRoiMinWristVis: 0.1,
+  /** IMAGE retry only while the frame has used less than this (pose + crops so far). */
+  handRoiRetryBudgetMs: 20,
 
   // ── mapping (C.3) ──
   /** Game arm reach the player's measured arm length maps to. */
@@ -26,7 +41,8 @@ export const DEFAULT_CONFIG = {
   bodySmoothing: 0.3,
   /** Shoulder drop (in shoulder widths) that counts as a full crouch. */
   crouchFullDropSw: 1.2,
-  wristMinVisibility: 0.5,
+  /** Pose wrist visibility below this hides the hand, unless the hand model sees it this frame (score ≥ 0.5). */
+  wristMinVisibility: 0.3,
   /** Max image distance (image heights) to pair a hand with a pose wrist. */
   assocMaxDist: 0.25,
   lostHandConfidence: 0.4,
@@ -38,6 +54,19 @@ export const DEFAULT_CONFIG = {
   /** Consecutive frames past a threshold before grab/release fires. */
   gripFrames: 2,
   gripMinCutoff: 4,
+  /** Fused curl (grip.ts fusedCurls): image curl at or below this = finger visibly extended, hand-world ignored … */
+  gripImgOpenCurl: 0.25,
+  /** … at or above this the finger looks short in the image (curled OR foreshortened): take max(image, world). */
+  gripImgShortCurl: 0.55,
+  /** One hand frame past these (normalized grip) fires grab / release at once, if the hand is seen clearly. */
+  gripStrongOn: 0.85,
+  gripStrongOff: 0.08,
+  gripStrongMinScore: 0.85,
+  /** … and the pose wrist visibility is at least this. */
+  gripStrongMinWristVis: 0.5,
+  /** A calibrated grip range never starts above / ends below these, so open and fist stay reachable. */
+  gripRangeMaxMin: 0.25,
+  gripRangeMinMax: 0.7,
   /** Hand lost but wrist still tracked: hold the last grip this long, then treat a closed hand as gripping. */
   gripHoldMs: 300,
   /** release.vel = mean velocity over this window … */
@@ -126,6 +155,14 @@ export const CONFIG_RANGES: Record<string, Partial<Record<keyof MotionConfig, [n
     degradedVisibility: [0, 1, 0.05],
     downgradeBelowFps: [0, 60, 1],
   },
+  'Hand ROI': {
+    handRoi: [0, 2, 1],
+    handRoiScale: [3, 8, 0.1],
+    handRoiCenterAlong: [0, 2.5, 0.05],
+    handRoiSticky: [0, 0.4, 0.01],
+    handRoiMinWristVis: [0, 0.8, 0.05],
+    handRoiRetryBudgetMs: [0, 40, 1],
+  },
   Mapping: {
     gameArmReach: [0.4, 1.2, 0.05],
     eyeToShoulderM: [0, 0.5, 0.01],
@@ -148,6 +185,14 @@ export const CONFIG_RANGES: Record<string, Partial<Record<keyof MotionConfig, [n
     gripOff: [0.05, 0.7, 0.01],
     gripFrames: [1, 6, 1],
     gripMinCutoff: [0.5, 15, 0.5],
+    gripImgOpenCurl: [0, 0.5, 0.01],
+    gripImgShortCurl: [0.3, 0.9, 0.01],
+    gripStrongOn: [0.6, 1.01, 0.01],
+    gripStrongOff: [-0.01, 0.35, 0.01],
+    gripStrongMinScore: [0, 1, 0.05],
+    gripStrongMinWristVis: [0, 1, 0.05],
+    gripRangeMaxMin: [0, 0.5, 0.01],
+    gripRangeMinMax: [0.5, 1, 0.01],
     gripHoldMs: [0, 1000, 50],
     releaseWindowMs: [16, 250, 4],
     releaseLagMs: [0, 150, 4],

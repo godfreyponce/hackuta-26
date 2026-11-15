@@ -41,7 +41,8 @@ pnpm --filter @ithaca/motion typecheck
 | C.7 | Motion Lab: overlay, game-space view, readouts, detector chips, sliders, calibrate, **Test gestures** (12 guided moves with PASS/FAIL), record / load replay | `src/lab/*`, `lab/` |
 | C.7 | `createReplayController`, `runReplay`. Recordings now store the calibration; older ones get the grip range rebuilt from their own data (`replayProfile`) | `src/replay.ts`, `src/recording.ts` |
 | C.7 | 5 reference recordings: throw, bow, block, call, drink | `fixtures/` |
-| C.8 | fps and ms/frame in the Lab; auto-drop to 960×540 + hands every 2nd frame below 40 fps | `tracker.ts` |
+| C.8 | fps, ms/frame (pose · hands), per-side hand hit rate and IMAGE retries in the Lab. Perf fallback only when detection is the bottleneck: alternate L/R hand crops (960×540 + hands every 2nd frame only on the old full-frame path); reset on stop | `tracker.ts` |
+| C.2 | Pose-guided hand crops: one VIDEO HandLandmarker per side on a 256² crop placed from the pose wrist (Holistic geometry), same-frame IMAGE retry, full-frame re-seed, duplicate-hand guard. Finds hands down to ~40 px that the full-frame palm detector misses below ~60–90 px | `handRoi.ts`, `tracker.ts` |
 | C.9 | `degraded` when visibility < 0.5 or on CPU; venue guide | `engine.ts`, `DEMO_SETUP.md` |
 
 ## For Adam (A): wiring it in

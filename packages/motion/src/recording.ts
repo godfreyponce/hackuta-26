@@ -26,6 +26,7 @@ function packHand(h: RawHand): RawHand {
     world: packLandmarks(h.world),
     label: h.label,
     score: r3(h.score),
+    ...(h.side ? { side: h.side } : {}),
   };
 }
 
@@ -64,6 +65,7 @@ export class Recorder {
       poseWorld: packLandmarks(f.poseWorld),
       poseImage: packLandmarks(f.poseImage),
       hands: f.hands ? f.hands.map(packHand) : null,
+      ...(f.skippedHands?.length ? { skippedHands: [...f.skippedHands] } : {}),
     });
     if (this.frames.length > MAX_FRAMES) this.frames.shift();
   }

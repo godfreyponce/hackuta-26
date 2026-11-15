@@ -1,7 +1,8 @@
-import type { CalibrationResult, InputController, PlayerInputState } from '@ithaca/shared';
+import type { CalibrationResult, Hand, InputController, PlayerInputState } from '@ithaca/shared';
 import { config } from './config';
 import { Engine } from './engine';
 import type { DetectorFlags } from './gestures';
+import type { CropRect } from './handRoi';
 import type { Body } from './mapping';
 import { clearSavedProfile, cloneProfile, DEFAULT_PROFILE, loadProfile, saveProfile, type Profile } from './profile';
 import { Recorder } from './recording';
@@ -29,6 +30,8 @@ export interface MotionDebug {
   getDebugBody(): Body | null;
   /** Per-detector live flags (block pose, bow arm, phone shape, …). */
   getDebugGestures(): DetectorFlags;
+  /** Pose-guided hand crops of the last frame, source-video px (live camera only). */
+  getDebugRois?(): Record<Hand, CropRect | null>;
 }
 
 export interface MotionController extends InputController, MotionDebug {
@@ -41,6 +44,11 @@ export interface MotionController extends InputController, MotionDebug {
   getProfile(): Readonly<Profile>;
   /** Forget the saved calibration and go back to defaults. */
   resetCalibration(): void;
+  /**
+   * Call on match start / resume. Emits `release` for any hand the motion side thinks is closed but the game
+   * does not hold (`keep[h]` false), resets grip tracking, and latches each hand to `keep[h]`.
+   */
+  resyncGrip?(keep?: Record<Hand, boolean>): void;
   /** C.7: record raw tracker frames for replay / tuning. */
   startRecording(label?: string): void;
   stopRecording(): Recording | null;
@@ -89,9 +97,11 @@ export function createMotionController(opts: MotionControllerOptions = {}): Moti
     getDebugBody: () => engine.body,
     getPendingGesture: () => engine.getPendingGesture(),
     getDebugGestures: () => engine.detectorFlags(),
+    getDebugRois: () => tracker.getDebugRois(),
     calibrate: () => engine.calibrate(),
     onCalibrationStep: (cb) => engine.onCalibrationStep(cb),
     getProfile: () => engine.profile,
+    resyncGrip: (keep) => engine.resyncGrip(keep),
     startRecording(label?: string) {
       recorder.start({ label, aspect: tracker.aspect, width: tracker.stats.width, height: tracker.stats.height, profile: cloneProfile(engine.profile) });
     },

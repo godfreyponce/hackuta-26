@@ -1,6 +1,6 @@
 // createReplayController: an InputController driven by a recording, in real time.
 // Lets A test motion behavior without standing up, and lets C tune deterministically.
-import type { CalibrationResult, InputController, PlayerInputState } from '@ithaca/shared';
+import type { CalibrationResult, Hand, InputController, PlayerInputState } from '@ithaca/shared';
 import type { MotionDebug } from './controller';
 import { Engine } from './engine';
 import type { DetectorFlags } from './gestures';
@@ -27,6 +27,8 @@ export interface ReplayController extends InputController, MotionDebug {
   getProfile(): Readonly<Profile>;
   /** 0..1 playback position. */
   getProgress(): number;
+  /** Same as MotionController.resyncGrip: mirror what the game holds (optional for callers). */
+  resyncGrip?(keep?: Record<Hand, boolean>): void;
 }
 
 type Tick = (cb: () => void) => unknown;
@@ -126,5 +128,6 @@ export function createReplayController(input: Recording | string, opts: ReplayOp
     onCalibrationStep: (cb) => engine.onCalibrationStep(cb),
     getProfile: () => engine.profile,
     getProgress: () => (frames.length ? Math.min(idx / frames.length, 1) : 0),
+    resyncGrip: (keep) => engine.resyncGrip(keep),
   };
 }
