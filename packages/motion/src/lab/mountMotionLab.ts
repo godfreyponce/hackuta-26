@@ -4,7 +4,9 @@ import { HandLandmarker, PoseLandmarker } from '@mediapipe/tasks-vision';
 import type { CalibrationResult, InputController, InputEvent } from '@ithaca/shared';
 import { createMotionController, type MotionDebug } from '../controller';
 import { clearSavedProfile } from '../profile';
-import type { CalibrationStep, PendingGesture, RawLandmark } from '../types';
+import { downloadRecording, parseRecording } from '../recording';
+import { createReplayController } from '../replay';
+import type { CalibrationStep, PendingGesture, RawLandmark, Recording } from '../types';
 import type { Profile } from '../profile';
 import { buildSliders, drawGameSpace } from './panels';
 import { LAB_CSS } from './styles';
@@ -20,6 +22,10 @@ type LabController = InputController &
     getProfile?(): Readonly<Profile>;
     resetCalibration?(): void;
     calibrate?(): Promise<CalibrationResult>;
+    startRecording?(label?: string): void;
+    stopRecording?(): Recording | null;
+    getRecordingInfo?(): { recording: boolean; frames: number; durationMs: number };
+    getProgress?(): number;
   };
 
 const POSE_EDGES = PoseLandmarker.POSE_CONNECTIONS;
@@ -45,6 +51,12 @@ export function mountMotionLab(root: HTMLElement, opts: MotionLabOptions = {}): 
       <button data-a="stop" disabled>Stop</button>
       <button data-a="calibrate" disabled>Calibrate</button>
       <button data-a="uncalibrate">Reset calibration</button>
+      <span class="sep"></span>
+      <input data-a="label" placeholder="label (throw, bow…)" size="14">
+      <button data-a="record" disabled>● Record</button>
+      <label class="file">Load replay <input data-a="load" type="file" accept="application/json,.json"></label>
+      <span class="badge" data-k="replay" hidden></span>
+      <span class="sep"></span>
       <label>Pose model
         <select data-a="model"><option value="full">full</option><option value="lite">lite</option></select>
       </label>
@@ -99,6 +111,49 @@ export function mountMotionLab(root: HTMLElement, opts: MotionLabOptions = {}): 
   const calibMsg = badge('calibMsg');
   const calibBar = q<HTMLProgressElement>('.calib progress');
   let calibUnsub: (() => void) | null = null;
+  const btnRec = q<HTMLButtonElement>('[data-a="record"]');
+  const labelIn = q<HTMLInputElement>('[data-a="label"]');
+  const loadIn = q<HTMLInputElement>('[data-a="load"]');
+  const replayBadge = badge('replay');
+
+  function toggleRecording(): void {
+    const c = controller;
+    if (!c?.startRecording || !c.stopRecording) return;
+    if (c.getRecordingInfo?.().recording) {
+      const rec = c.stopRecording();
+      btnRec.classList.remove('on');
+      btnRec.textContent = '● Record';
+      if (rec && rec.frames.length) {
+        downloadRecording(rec, labelIn.value.trim() || undefined);
+        logLine('recorded', `${rec.frames.length} frames, ${(rec.frames[rec.frames.length - 1]?.t ?? 0) / 1000}s → downloaded`);
+      }
+    } else {
+      c.startRecording(labelIn.value.trim() || undefined);
+      btnRec.classList.add('on');
+    }
+  }
+
+  async function loadReplay(file: File): Promise<void> {
+    let rec: Recording;
+    try {
+      rec = parseRecording(await file.text());
+    } catch (err) {
+      errorEl.textContent = err instanceof Error ? err.message : String(err);
+      return;
+    }
+    stop();
+    errorEl.textContent = '';
+    const c = createReplayController(rec, { loop: true });
+    controller = c;
+    unsub = c.on(logEvent);
+    await c.start();
+    placeholder.hidden = true;
+    video.hidden = true;
+    btnStop.disabled = false;
+    btnCal.disabled = false;
+    replayBadge.hidden = false;
+    logLine('replay', `${file.name}: ${rec.frames.length} frames${rec.meta.label ? ' · ' + rec.meta.label : ''}`);
+  }
 
   async function runCalibration(): Promise<void> {
     const c = controller;
@@ -152,11 +207,14 @@ export function mountMotionLab(root: HTMLElement, opts: MotionLabOptions = {}): 
     });
     controller = c;
     unsub = c.on(logEvent);
+    video.hidden = false;
+    replayBadge.hidden = true;
     try {
       await c.start();
       placeholder.hidden = true;
       btnStop.disabled = false;
       btnCal.disabled = false;
+      btnRec.disabled = false;
     } catch (err) {
       errorEl.textContent = err instanceof Error ? err.message : String(err);
       stop();
@@ -174,12 +232,17 @@ export function mountMotionLab(root: HTMLElement, opts: MotionLabOptions = {}): 
     placeholder.hidden = false;
     btnStop.disabled = true;
     btnCal.disabled = true;
+    btnRec.disabled = true;
+    btnRec.classList.remove('on');
+    btnRec.textContent = '● Record';
+    replayBadge.hidden = true;
   }
 
   function drawOverlay(): void {
     if (!ctx2d) return;
-    const w = video.videoWidth || 1280;
-    const h = video.videoHeight || 720;
+    const st = controller?.getStats?.();
+    const w = video.videoWidth || st?.width || 1280;
+    const h = video.videoHeight || st?.height || 720;
     if (overlay.width !== w || overlay.height !== h) {
       overlay.width = w;
       overlay.height = h;
@@ -216,6 +279,10 @@ export function mountMotionLab(root: HTMLElement, opts: MotionLabOptions = {}): 
     const vis = frame?.poseImage ? avgVisibility(frame.poseImage) : null;
     badge('vis').textContent = vis === null ? 'vis –' : `vis ${vis.toFixed(2)}`;
     if (s?.error && !errorEl.textContent) errorEl.textContent = s.error;
+    const ri = controller?.getRecordingInfo?.();
+    if (ri?.recording) btnRec.textContent = `■ Stop (${(ri.durationMs / 1000).toFixed(1)}s)`;
+    const prog = controller?.getProgress?.();
+    if (prog !== undefined) replayBadge.textContent = `replay ${(prog * 100).toFixed(0)}%`;
     const prof = controller?.getProfile?.();
     badge('calibrated').textContent = prof?.calibrated ? `calibrated · arm ${prof.armLengthM.toFixed(2)} m` : 'uncalibrated';
     badge('calibrated').dataset.level = prof?.calibrated ? 'ok' : prof ? 'warn' : '';
@@ -246,6 +313,12 @@ export function mountMotionLab(root: HTMLElement, opts: MotionLabOptions = {}): 
   btnStart.addEventListener('click', () => void start());
   btnStop.addEventListener('click', stop);
   btnCal.addEventListener('click', () => void runCalibration());
+  btnRec.addEventListener('click', toggleRecording);
+  loadIn.addEventListener('change', () => {
+    const f = loadIn.files?.[0];
+    if (f) void loadReplay(f);
+    loadIn.value = '';
+  });
   q<HTMLButtonElement>('[data-a="uncalibrate"]').addEventListener('click', () => {
     if (controller?.resetCalibration) controller.resetCalibration();
     else clearSavedProfile();

@@ -196,7 +196,8 @@ export class Tracker {
       this.lastHands = hands;
     }
     const dtMs = performance.now() - t0;
-    this.stats.msPerFrame = this.stats.msPerFrame ? this.stats.msPerFrame * 0.9 + dtMs * 0.1 : dtMs;
+    // Skip warm-up frames (shader compilation) so the C.8 budget readout is honest.
+    if (this.frameNo > 5) this.stats.msPerFrame = this.stats.msPerFrame ? this.stats.msPerFrame * 0.9 + dtMs * 0.1 : dtMs;
     this.detectErrors = 0;
 
     this.onFrame({
@@ -215,6 +216,8 @@ export class Tracker {
     this.stats.fps = (this.fpsCount * 1000) / span;
     this.fpsCount = 0;
     this.fpsWindowStart = now;
+    // Cameras often report their real size only after the first frames.
+    if (this.stats.width !== this.video.videoWidth) this.updateResolution();
     const threshold = this.opts.downgradeBelowFps;
     if (threshold > 0 && !this.stats.handsEveryOtherFrame && now - this.startedAt > 3000) {
       this.slowWindows = this.stats.fps < threshold ? this.slowWindows + 1 : 0;
@@ -236,8 +239,8 @@ export class Tracker {
 
   private updateResolution(): void {
     const s = this.stream?.getVideoTracks()[0]?.getSettings();
-    this.stats.width = s?.width ?? this.video.videoWidth;
-    this.stats.height = s?.height ?? this.video.videoHeight;
+    this.stats.width = this.video.videoWidth || s?.width || 0;
+    this.stats.height = this.video.videoHeight || s?.height || 0;
   }
 
   private handleDetectError(err: unknown): void {

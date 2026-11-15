@@ -61,4 +61,10 @@ export const LAB_CSS = `
 .ithaca-lab .chips { display: flex; flex-wrap: wrap; gap: 4px; }
 .ithaca-lab .chip { font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
 .ithaca-lab .chip.on { background: var(--ok); border-color: var(--ok); color: #08150e; font-weight: 600; }
+.ithaca-lab .sep { width: 1px; height: 20px; background: var(--line); }
+.ithaca-lab input[data-a="label"] { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; }
+.ithaca-lab label.file { border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; background: var(--panel); cursor: pointer; }
+.ithaca-lab label.file input { display: none; }
+.ithaca-lab .badge[hidden] { display: none; }
+.ithaca-lab video[hidden] { display: none; }
 `;

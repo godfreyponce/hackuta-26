@@ -4,8 +4,9 @@ import { Engine } from './engine';
 import type { DetectorFlags } from './gestures';
 import type { Body } from './mapping';
 import { clearSavedProfile, cloneProfile, DEFAULT_PROFILE, loadProfile, saveProfile, type Profile } from './profile';
+import { Recorder } from './recording';
 import { Tracker } from './tracker';
-import type { CalibrationStep, PendingGesture, RawFrame, RawHand, TrackerStats } from './types';
+import type { CalibrationStep, PendingGesture, RawFrame, RawHand, Recording, TrackerStats } from './types';
 
 export interface MotionControllerOptions {
   /** URL prefix where the .task models and wasm/ live. Default "/models". */
@@ -40,11 +41,16 @@ export interface MotionController extends InputController, MotionDebug {
   getProfile(): Readonly<Profile>;
   /** Forget the saved calibration and go back to defaults. */
   resetCalibration(): void;
+  /** C.7: record raw tracker frames for replay / tuning. */
+  startRecording(label?: string): void;
+  stopRecording(): Recording | null;
+  getRecordingInfo(): { recording: boolean; frames: number; durationMs: number };
 }
 
 export function createMotionController(opts: MotionControllerOptions = {}): MotionController {
   const engine = new Engine(loadProfile());
   engine.onProfileChange = saveProfile;
+  const recorder = new Recorder();
   const tracker = new Tracker({
     modelBaseUrl: opts.modelBaseUrl ?? '/models',
     poseModel: opts.poseModel ?? 'full',
@@ -56,6 +62,7 @@ export function createMotionController(opts: MotionControllerOptions = {}): Moti
     engine.aspect = tracker.aspect;
     engine.cpuFallback = tracker.stats.delegate === 'CPU';
     engine.push(f);
+    recorder.push(f);
   };
 
   return {
@@ -85,6 +92,11 @@ export function createMotionController(opts: MotionControllerOptions = {}): Moti
     calibrate: () => engine.calibrate(),
     onCalibrationStep: (cb) => engine.onCalibrationStep(cb),
     getProfile: () => engine.profile,
+    startRecording(label?: string) {
+      recorder.start({ label, aspect: tracker.aspect, width: tracker.stats.width, height: tracker.stats.height });
+    },
+    stopRecording: () => recorder.stop(),
+    getRecordingInfo: () => ({ recording: recorder.recording, frames: recorder.frameCount, durationMs: recorder.durationMs }),
     resetCalibration() {
       clearSavedProfile();
       engine.profile = cloneProfile(DEFAULT_PROFILE);
