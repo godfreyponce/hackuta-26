@@ -62,7 +62,10 @@ export async function cutoutDrift(original: Buffer, cut: Buffer): Promise<number
   return opaque ? sum / opaque / 3 : Number.POSITIVE_INFINITY;
 }
 
-const isGreen = (r: number, g: number, b: number) => g > r && g > b && g - Math.min(r, b) > 0.25 * g;
+const isGreen = (r: number, g: number, b: number, slack = 0) => g + slack > r && g + slack > b && g - Math.min(r, b) > 0.25 * g;
+// The paint is mid-bright yellow-green (about 144,184,79); the cutout shifts real colors by a few levels.
+const PAINT_MIN_G = 80;
+const SHIFT_SLACK = 12;
 
 /**
  * The cutout paints the hand green; remove-background can keep that paint, so drop green pixels that were not green in the original.
@@ -73,7 +76,8 @@ export async function keyOutPaint(original: Buffer, cut: Buffer): Promise<Buffer
   const o = await sharp(original).flatten({ background: '#ffffff' }).toColourspace('srgb').resize(info.width, info.height, { fit: 'fill' }).raw().toBuffer();
   for (let i = 0; i < info.width * info.height; i++) {
     const p = i * 4, q = i * 3;
-    if (isGreen(data[p]!, data[p + 1]!, data[p + 2]!) && !isGreen(o[q]!, o[q + 1]!, o[q + 2]!)) data.fill(255, p, p + 3).fill(0, p + 3, p + 4);
+    const darkOpaque = data[p + 3]! >= 128 && data[p + 1]! < PAINT_MIN_G;
+    if (isGreen(data[p]!, data[p + 1]!, data[p + 2]!) && !darkOpaque && !isGreen(o[q]!, o[q + 1]!, o[q + 2]!, SHIFT_SLACK)) data.fill(255, p, p + 3).fill(0, p + 3, p + 4);
   }
   return sharp(data, { raw: { width: info.width, height: info.height, channels: 4 } }).png().toBuffer();
 }

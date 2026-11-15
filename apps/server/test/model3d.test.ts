@@ -69,3 +69,19 @@ test('a green object keeps its green pixels', async () => {
     .composite([{ input: await solid(100, 300, green), left: 206, top: 106 }]).png().toBuffer();
   assert.equal(await opaqueIn(await keyOutPaint(orig, cut), 206, 106, 100, 300), 100 * 300);
 });
+
+test('a small color shift on a yellow, cyan or dark object does not key it out', async () => {
+  const pairs = [
+    [{ r: 232, g: 228, b: 70 }, { r: 228, g: 232, b: 70 }],
+    [{ r: 60, g: 180, b: 182 }, { r: 60, g: 183, b: 180 }],
+    [{ r: 20, g: 20, b: 20 }, { r: 16, g: 22, b: 15 }],
+    [{ r: 40, g: 52, b: 46 }, { r: 40, g: 56, b: 46 }],
+  ];
+  for (const [o, c] of pairs) {
+    const orig = await sharp(await solid(512, 512, { r: 255, g: 255, b: 255 }))
+      .composite([{ input: await solid(100, 300, o!), left: 206, top: 106 }]).png().toBuffer();
+    const cut = await sharp(await solid(512, 512, { r: 0, g: 0, b: 0, alpha: 0 }))
+      .composite([{ input: await solid(100, 300, c!), left: 206, top: 106 }]).png().toBuffer();
+    assert.equal(await opaqueIn(await keyOutPaint(orig, cut), 206, 106, 100, 300), 100 * 300, JSON.stringify(o));
+  }
+});
