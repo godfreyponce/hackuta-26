@@ -191,14 +191,14 @@ export class Fx {
   update(dt: number, ambientDt: number) {
     // ambient fire runs on the ambient clock (slows in slow-mo too)
     if (this.hearth) {
-      this.flameAcc += ambientDt * 70;
+      this.flameAcc += ambientDt * 130;
       while (this.flameAcc > 1) {
         this.flameAcc -= 1;
-        const a = Math.random() * Math.PI * 2, r = Math.sqrt(Math.random()) * 0.9;
+        const a = Math.random() * Math.PI * 2, r = Math.sqrt(Math.random()) * 0.55;
         this.flame.emit(1, {
           pos: this.tmp.set(this.hearth.x + Math.cos(a) * r, 0.45, this.hearth.z + Math.sin(a) * r),
-          vel: this.tmpV.set(0, rand(0.8, 1.6), 0), spread: 0.15, life: [0.45, 0.85], size: [0.38, 0.7],
-          color: '#ff9a40', color2: '#7a2a0a', alpha: 0.3, grow: 0.45, gravity: -0.6,
+          vel: this.tmpV.set(0, rand(1.4, 2.6), 0), spread: 0.18, life: [0.45, 0.9], size: [0.22, 0.48],
+          color: '#ff9a3c', color2: '#a8300f', alpha: 0.24, grow: 0.35, gravity: -1.3,
         });
       }
       this.emberAcc += ambientDt * 26;
@@ -209,10 +209,10 @@ export class Fx {
           vel: this.tmpV.set(rand(-0.2, 0.2), rand(0.6, 1.8), rand(-0.2, 0.2)), spread: 0.35, life: [1.6, 3.4], size: [0.02, 0.045],
           color: '#ffd08a', color2: '#ff5a1a', alpha: 1, gravity: -0.25, drag: 0.3,
         });
-        if (Math.random() < 0.25) this.smoke.emit(1, {
+        if (Math.random() < 0.6) this.smoke.emit(1, {
           pos: this.tmp.set(this.hearth.x + rand(-0.4, 0.4), 1.6, this.hearth.z + rand(-0.4, 0.4)),
-          vel: this.tmpV.set(0, rand(0.6, 0.9), 0), spread: 0.15, life: [3.5, 5], size: [0.8, 1.2], grow: 3,
-          color: '#2a2622', alpha: 0.22, gravity: -0.1,
+          vel: this.tmpV.set(0, rand(0.9, 1.3), 0), spread: 0.12, life: [4.5, 6.5], size: [0.7, 1.1], grow: 3.2,
+          color: '#3a3836', alpha: 0.18, gravity: -0.15,
         });
       }
       for (const b of this.braziers) {

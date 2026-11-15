@@ -20,7 +20,8 @@ void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor)
   float warm = clamp((c.r - c.b) * 2.2 - 0.12, 0.0, 1.0) * smoothstep(0.18, 0.65, l);
   float sat = mix(uSat, max(uSat, 0.98), warm);
   c = mix(vec3(l), c, sat);
-  c *= mix(vec3(0.84, 0.95, 1.14), vec3(1.07, 0.99, 0.88), smoothstep(0.04, 0.55, l));
+  // film grade: blue-grey night in the shadows (#1C2633), amber firelight in the highs
+  c = mix(c * vec3(0.78, 0.9, 1.12) + vec3(0.006, 0.01, 0.018), c * vec3(1.08, 0.98, 0.86), smoothstep(0.03, 0.5, l));
   vec2 d = uv - 0.5;
   d.x *= uAspect;
   float r = length(d);
@@ -47,7 +48,7 @@ export class GradeEffect extends Effect {
         ['uLetterbox', new Uniform(0)],
         ['uTime', new Uniform(0)],
         ['uAspect', new Uniform(16 / 9)],
-        ['uGrain', new Uniform(0.026)],
+        ['uGrain', new Uniform(0.016)],
         ['uVignette', new Uniform(0.3)],
       ]),
     });

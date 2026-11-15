@@ -6,6 +6,8 @@ import { Fx } from './fx';
 import { EnemyManager, type Attack, type Enemy, type HitInfo, type HitResult, type Outcome } from './enemies';
 import { WeaponManager, type HandView, type WeaponEnt } from './weapons';
 import { Gauntlet } from './hands';
+import { Trails } from './trails';
+import { loadBodyTemplate, type BodyTemplate } from './skinnedBody';
 import { Director, type WaveDef } from './director';
 import { Scoring, TRICK_POINTS, TRICK_TITLES } from './scoring';
 import { audio } from './audio';
@@ -39,6 +41,7 @@ export class Engine {
   world!: InstanceType<typeof RAPIER.World>;
   hall!: HallRig;
   fx = new Fx();
+  trails = new Trails();
   enemies!: EnemyManager;
   weapons!: WeaponManager;
   hands!: Record<Hand, Gauntlet>;
@@ -118,11 +121,14 @@ export class Engine {
   }
 
   static async create(scene: THREE.Scene, camera: THREE.PerspectiveCamera, cb: EngineCallbacks): Promise<Engine> {
-    await initPhysics();
+    // realistic warrior body (Microsoft Rocketbox, MIT) — falls back to capsule bodies if it can't load
+    const [, tpl] = await Promise.all([initPhysics(), loadBodyTemplate('/characters/rocketbox/warrior_male_01.glb').catch(() => null)]);
     const e = new Engine(scene, camera, cb);
+    e.bodyTpl = tpl;
     e.build();
     return e;
   }
+  private bodyTpl: BodyTemplate | null = null;
 
   private build() {
     this.world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
@@ -130,6 +136,7 @@ export class Engine {
     this.hall = buildHall(this.world);
     this.scene.add(this.hall.group);
     this.scene.add(this.fx.group);
+    this.scene.add(this.trails.group);
     this.fx.hearth = HALL.hearth.clone();
     this.fx.braziers = [new THREE.Vector3(-1.5, 1.08, -1.4), ...HALL.doors.map((d) => new THREE.Vector3(d.x * 1.55, 1.2, HALL.zFar + 1.4))];
 
@@ -157,6 +164,7 @@ export class Engine {
       shake: (v) => this.addTrauma(v),
       difficultyMult: () => (this.difficulty === 'easy' ? 0.75 : 1),
     });
+    this.enemies.setBodyTemplate(this.bodyTpl);
     this.scene.add(this.enemies.renderer.group);
 
     this.weapons = new WeaponManager(this.world, this.enemies, this.fx, {
@@ -590,6 +598,7 @@ export class Engine {
     this.fx.update(realDt * (this.paused ? 0 : Math.max(0.15, scale)), ambientDt);
     this.hall.update(this.realT, realDt);
     this.enemies.render();
+    this.updateTrails(realDt);
     this.updateCamera(state, realDt);
     this.updatePost(realDt);
 
@@ -858,6 +867,23 @@ export class Engine {
       counter: this.realT < this.counterUntil,
       enemies: this.enemies.list,
     };
+  }
+
+  private updateTrails(dt: number) {
+    for (const side of ['left', 'right'] as const) {
+      const w = this.weapons.heldBy(side);
+      if (!w || w.cls === 'bow' || w.cls === 'shield' || !w.spec.sharp && w.cls !== 'blunt') { this.trails.updatePlayer(side, null, null, 0, dt); continue; }
+      const t = w.body.translation();
+      this.trails.updatePlayer(side, new THREE.Vector3(t.x, t.y, t.z), w.tip, w.speed, dt);
+    }
+    const list: { base: THREE.Vector3; tip: THREE.Vector3 }[] = [];
+    for (const e of this.enemies.list) {
+      if (e.state !== 'strike' && !(e.state === 'windup' && e.attack && e.attack.impactAt - this.enemies.t < 0.2)) continue;
+      const base = new THREE.Vector3(), tip = new THREE.Vector3();
+      this.enemies.renderer.swordSegment(e.pose, e.look, base, tip);
+      list.push({ base, tip });
+    }
+    this.trails.updateEnemies(list, dt);
   }
 
   /** Camera FOV/aspect sync from the canvas. */

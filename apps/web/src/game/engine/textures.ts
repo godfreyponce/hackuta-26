@@ -61,12 +61,12 @@ export function wallTexture() {
   return canvasTex('wall', 1024, 512, (ctx, w, h) => {
     const g = ctx.createLinearGradient(0, 0, 0, h);
     g.addColorStop(0, '#1d1814');      // soot-blackened top
-    g.addColorStop(0.35, '#6b5f50');
-    g.addColorStop(1, '#5a4f42');
+    g.addColorStop(0.35, '#5f584e');
+    g.addColorStop(1, '#4f4941');
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, w, h);
     // dado (lower painted band)
-    ctx.fillStyle = '#5c2320';
+    ctx.fillStyle = '#6B3A2E';
     ctx.fillRect(0, h * 0.78, w, h * 0.22);
     // fresco band
     const by = h * 0.5, bh = h * 0.16;
@@ -221,7 +221,7 @@ export function faceTexture() {
 /** Aspis blazon: field + offset rim + painted device (no gods: boar, scorpion, lion, serpent). */
 export function shieldTexture(device: 'boar' | 'scorpion' | 'serpent' | 'lion' = 'scorpion', field: 'bronze' | 'blue' | 'gilt' | 'worn' = 'bronze') {
   return canvasTex(`aspis-${device}-${field}`, 256, 256, (ctx, w, h) => {
-    const F = { bronze: ['#b98a4c', '#5e4428'], blue: ['#2f5578', '#1a2e44'], gilt: ['#e2c06a', '#8a6a2a'], worn: ['#7a5c38', '#3e2e1e'] }[field];
+    const F = { bronze: ['#b98a4c', '#5e4428'], blue: ['#4a6f9a', '#2E4A73'], gilt: ['#e2c06a', '#8a6a2a'], worn: ['#7a5c38', '#3e2e1e'] }[field];
     const g = ctx.createRadialGradient(w * 0.42, h * 0.38, 10, w / 2, h / 2, w * 0.55);
     g.addColorStop(0, F[0]); g.addColorStop(1, F[1]);
     ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
@@ -242,12 +242,18 @@ export function shieldTexture(device: 'boar' | 'scorpion' | 'serpent' | 'lion' =
         for (let k = 0; k < 3; k++) { ctx.beginPath(); ctx.moveTo(sd * 16, k * 12); ctx.lineTo(sd * 46, -8 + k * 16); ctx.stroke(); }
       }
     } else if (device === 'boar') {
-      ctx.beginPath(); ctx.ellipse(-4, 4, 58, 30, 0, 0, Math.PI * 2); ctx.fill();
-      ctx.beginPath(); ctx.moveTo(48, -12); ctx.lineTo(80, 2); ctx.lineTo(48, 20); ctx.fill();
-      ctx.fillRect(-42, 24, 11, 32); ctx.fillRect(26, 24, 11, 32);
-      for (let k = -44; k < 36; k += 10) { ctx.beginPath(); ctx.moveTo(k, -22); ctx.lineTo(k + 5, -40); ctx.lineTo(k + 10, -22); ctx.fill(); }
-      ctx.lineWidth = 5; ctx.strokeStyle = field === 'blue' ? '#2f5578' : F[0];
-      ctx.beginPath(); ctx.moveTo(66, 8); ctx.quadraticCurveTo(74, -8, 64, -14); ctx.stroke(); // tusk
+      // charging boar in profile (black-figure): hump, long snout, bristled spine, tusk, thin legs
+      ctx.beginPath();
+      ctx.moveTo(-70, 10); ctx.quadraticCurveTo(-72, -22, -40, -30); ctx.quadraticCurveTo(-6, -46, 26, -26);
+      ctx.quadraticCurveTo(48, -16, 62, -6); ctx.lineTo(88, 2); ctx.lineTo(86, 12); ctx.lineTo(60, 14);
+      ctx.quadraticCurveTo(30, 26, -10, 24); ctx.quadraticCurveTo(-50, 26, -70, 10); ctx.closePath(); ctx.fill();
+      for (let k = -50; k < 34; k += 7) { const y0 = -30 - Math.sin(((k + 50) / 84) * Math.PI) * 14; ctx.beginPath(); ctx.moveTo(k, y0 + 6); ctx.lineTo(k + 3, y0 - 9); ctx.lineTo(k + 7, y0 + 6); ctx.fill(); }
+      ctx.lineWidth = 8;
+      for (const [x0, x1] of [[-52, -58], [-36, -30], [30, 24], [46, 52]]) { ctx.beginPath(); ctx.moveTo(x0, 18); ctx.lineTo(x1, 56); ctx.stroke(); }
+      ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(-70, 4); ctx.quadraticCurveTo(-84, -4, -80, -16); ctx.stroke(); // tail
+      ctx.strokeStyle = F[0]; ctx.lineWidth = 4;
+      ctx.beginPath(); ctx.moveTo(74, 10); ctx.quadraticCurveTo(80, -4, 70, -12); ctx.stroke(); // tusk
+      ctx.fillStyle = F[0]; ctx.beginPath(); ctx.arc(56, -6, 3, 0, Math.PI * 2); ctx.fill(); // eye
     } else if (device === 'lion') {
       // striding lion, facing left (black-figure)
       ctx.beginPath(); ctx.ellipse(14, 8, 52, 20, -0.05, 0, Math.PI * 2); ctx.fill();          // body

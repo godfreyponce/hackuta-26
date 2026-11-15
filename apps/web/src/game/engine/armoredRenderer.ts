@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { P, PART_DIM, type PartPose } from './humanoid';
 import { faceTexture, shieldTexture } from './textures';
 import {
-  aspisFace, bracer, cloak, corinthianHelmet, corinthianSlit, crest, greave, linothorax, muscleCuirass, peltMantle, pilosCap, pteruges, stumpCap, xiphosProp,
+  aspisFace, bracer, cloak, corinthianHelmet, corinthianSlit, crest, greave, linothorax, muscleCuirass, peltMantle, pilosCap, pteruges, stumpCap, xiphosProp, trouserThigh, trouserCalf, lacing, circlet, brassTrim, quiver,
 } from './armorGeo';
 import type { Stump } from './enemies';
 
@@ -29,6 +29,12 @@ export interface SlotLook {
   shield: ShieldKind;
   shieldDevice: 'scorpion' | 'boar-blue' | 'lion-gilt' | 'boar-worn';
   pelt: THREE.Color | null;
+  /** film details */
+  trousers?: THREE.Color | null;
+  lacing?: boolean;
+  circlet?: boolean;
+  trim?: THREE.Color | null;
+  quiver?: boolean;
   boss: boolean;
 }
 
@@ -106,11 +112,13 @@ export class ArmoredRenderer {
     add('chiton', chitonGeo, cloth(), 1, true);
     add('skirt', skirtGeo, cloth(THREE.DoubleSide), 1, false);
     add('muscle', muscleCuirass(), metal(), 1, true);
-    add('lino', linothorax(), cloth(), 1, true);
+    add('lino', linothorax(), cloth(THREE.DoubleSide), 1, true);
     add('pteruges', pteruges(), cloth(), 1, false);
     add('belt', beltGeo, metal(), 1, false);
-    add('corinthian', corinthianHelmet(), metal(), 1, true);
-    add('pilos', pilosCap(), metal(), 1, true);
+    // lathe bells are wound inward — render both sides so the bronze closes over the face
+    const helmMetal = () => { const m = metal(); m.side = THREE.DoubleSide; return m; };
+    add('corinthian', corinthianHelmet(), helmMetal(), 1, true);
+    add('pilos', pilosCap(), helmMetal(), 1, true);
     add('slit', corinthianSlit(), new THREE.MeshBasicMaterial({ color: '#070504', side: THREE.DoubleSide }), 1, false, false);
     const handGeo = new THREE.SphereGeometry(1, 8, 6);
     handGeo.scale(0.045, 0.06, 0.035);
@@ -125,10 +133,16 @@ export class ArmoredRenderer {
     add('spearTip', tipGeo, new THREE.MeshStandardMaterial({ color: '#a07a45', metalness: 0.9, roughness: 0.35 }), 1, false, false);
     add('bow', bowGeo, new THREE.MeshStandardMaterial({ color: '#3b2a1c', roughness: 0.7 }), 1, false, false);
     add('aspis-scorpion', aspisFace(0.86), shieldMat('scorpion', 'bronze'), 1, true, false);
-    add('aspis-boar-blue', aspisFace(0.9), shieldMat('boar', 'blue', 0.35), 1, true, false);
+    add('aspis-boar-blue', aspisFace(0.9), shieldMat('boar', 'blue', 0.12), 1, true, false);
     add('aspis-lion-gilt', aspisFace(1.0), shieldMat('lion', 'gilt', 0.9), 1, true, false);
     add('aspis-boar-worn', aspisFace(0.9), shieldMat('boar', 'worn', 0.7), 1, true, false);
     add('pelt', peltMantle(), cloth(THREE.DoubleSide), 1, false);
+    add('trouserThigh', trouserThigh(), cloth(THREE.DoubleSide), 2, false);
+    add('trouserCalf', trouserCalf(), cloth(THREE.DoubleSide), 2, false);
+    add('lacing', lacing(), new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.8 }), 2, false);
+    add('circlet', circlet(), new THREE.MeshStandardMaterial({ color: '#D4AF5A', metalness: 1, roughness: 0.25 }), 1, false, false);
+    add('trim', brassTrim(), metal(), 1, false);
+    add('quiver', quiver(), new THREE.MeshStandardMaterial({ color: '#4a3020', roughness: 0.75 }), 1, false, false);
     add('stump', stumpCap(), new THREE.MeshStandardMaterial({ color: '#6a1410', roughness: 0.45, emissive: '#2a0604', emissiveIntensity: 0.6 }), 1 * 8, false, false);
   }
 
@@ -151,8 +165,9 @@ export class ArmoredRenderer {
   /** Compose a piece riding on a part (part center/quaternion, uniform scale). */
   private on(p: PartPose, s: number) { this.sc.setScalar(s); return this.m.compose(p.c, p.q, this.sc); }
 
-  write(slot: number, pose: PartPose[], look: SlotLook, opts: { shieldBroken?: boolean; forward?: THREE.Vector3; propVisible?: boolean; stumps?: Stump[]; broken?: boolean }) {
+  write(slot: number, pose: PartPose[], look: SlotLook, opts: { shieldBroken?: boolean; forward?: THREE.Vector3; propVisible?: boolean; stumps?: Stump[]; broken?: boolean; skinned?: boolean }) {
     const s = look.scale;
+    const sk = !!opts.skinned; // realistic body present → no capsule skin layers
     // limbs (skin; lower legs darker where sandals/greaves sit)
     const limbParts = [P.UArmL, P.LArmL, P.UArmR, P.LArmR, P.ULegL, P.LLegL, P.ULegR, P.LLegR];
     for (let k = 0; k < 8; k++) {
@@ -164,12 +179,12 @@ export class ArmoredRenderer {
       const lower = pi === P.LLegL || pi === P.LLegR;
       const upperArm = pi === P.UArmL || pi === P.UArmR;
       // chiton sleeves on the upper arms; laced leather on bare shins
-      this.set('limbs', slot, k, this.m, this.tint(upperArm ? look.chiton : lower && !look.greaves ? LEG_SKIN_DARK : look.skin, slot));
+      this.set('limbs', slot, k, sk ? null : this.m, this.tint(upperArm ? look.chiton : lower && !look.greaves ? LEG_SKIN_DARK : look.skin, slot));
     }
     const head = pose[P.Head], torso = pose[P.Torso], pel = pose[P.Pelvis];
     this.sc.setScalar(PART_DIM[P.Head].r * s * 1.05);
-    this.set('head', slot, 0, this.m.compose(head.c, head.q, this.sc), look.helmet === 'corinthian' ? FACE_SHADOW : WHITE);
-    this.set('chiton', slot, 0, this.on(torso, s), this.tint(look.chiton, slot));
+    this.set('head', slot, 0, sk ? null : this.m.compose(head.c, head.q, this.sc), look.helmet === 'corinthian' ? FACE_SHADOW : WHITE);
+    this.set('chiton', slot, 0, sk && look.armor !== 'none' ? null : this.on(torso, s), this.tint(look.chiton, slot));
     this.set('skirt', slot, 0, this.on(pel, s), look.chiton);
     this.set('muscle', slot, 0, look.armor === 'muscle' ? this.on(torso, s) : null, this.tint(look.armorTint, slot));
     this.set('lino', slot, 0, look.armor === 'linothorax' ? this.on(torso, s) : null, this.tint(look.armorTint, slot));
@@ -180,7 +195,7 @@ export class ArmoredRenderer {
     this.set('slit', slot, 0, look.helmet === 'corinthian' ? this.on(head, s) : null);
     for (const [k, part] of [[0, P.LArmL], [1, P.LArmR]] as const) {
       const p = pose[part];
-      if (k === 0 && look.shield !== 'none' && !opts.shieldBroken) { this.set('hands', slot, k, null); continue; } // fist is behind the aspis
+      if (sk || (k === 0 && look.shield !== 'none' && !opts.shieldBroken)) { this.set('hands', slot, k, null); continue; } // real hands / fist behind the aspis
       this.v.set(0, -0.045 * s, 0).applyQuaternion(p.q).add(p.b);
       this.sc.setScalar(s);
       this.set('hands', slot, k, this.m.compose(this.v, p.q, this.sc), this.tint(look.skin, slot));
@@ -224,6 +239,16 @@ export class ArmoredRenderer {
       } else this.set(key, slot, 0, null);
     }
     this.set('pelt', slot, 0, look.pelt ? this.on(torso, s) : null, look.pelt ?? undefined);
+    const tr = look.trousers ?? null;
+    this.set('trouserThigh', slot, 0, tr ? this.on(pose[P.ULegL], s) : null, tr ?? undefined);
+    this.set('trouserThigh', slot, 1, tr ? this.on(pose[P.ULegR], s) : null, tr ?? undefined);
+    this.set('trouserCalf', slot, 0, tr ? this.on(pose[P.LLegL], s) : null, tr ?? undefined);
+    this.set('trouserCalf', slot, 1, tr ? this.on(pose[P.LLegR], s) : null, tr ?? undefined);
+    this.set('lacing', slot, 0, look.lacing ? this.on(pose[P.LLegL], s) : null, look.leather);
+    this.set('lacing', slot, 1, look.lacing ? this.on(pose[P.LLegR], s) : null, look.leather);
+    this.set('circlet', slot, 0, look.circlet ? this.on(head, s) : null);
+    this.set('trim', slot, 0, look.trim && look.armor !== 'none' ? this.on(torso, s) : null, look.trim ?? undefined);
+    this.set('quiver', slot, 0, look.quiver ? this.on(torso, s) : null);
     // wound caps on severed joints
     const stumps = opts.stumps ?? [];
     for (let k = 0; k < 8; k++) {

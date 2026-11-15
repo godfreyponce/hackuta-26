@@ -50,7 +50,8 @@ export function Turntable({ url, cls, speed = 1.1 }: { url: string; cls: WeaponC
   return (
     <Canvas dpr={[1, 1.5]} camera={{ position: [0, 0.35, 2.6], fov: 38 }} gl={{ antialias: true, alpha: true }} style={{ position: 'absolute', inset: 0 }}>
       <color attach="background" args={[env]} />
-      <ambientLight intensity={0.9} color="#9fb6d4" />
+      <ambientLight intensity={1.4} color="#b8c8dc" />
+      <spotLight position={[0.6, 2.4, 2.2]} angle={0.6} penumbra={0.6} intensity={40} color="#ffe2b0" />
       <pointLight position={[1.6, 1.8, 2]} intensity={28} color="#ffb060" />
       <directionalLight position={[0, 3, 2]} intensity={1.6} color="#ffe2b0" />
       <pointLight position={[-2, 0.5, -1.5]} intensity={6} color="#5d7aa0" />

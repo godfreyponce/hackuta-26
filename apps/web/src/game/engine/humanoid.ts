@@ -18,7 +18,21 @@ export const PART_DIM: { hh: number; r: number; mass: number }[] = [
   { hh: 0.14, r: 0.075, mass: 7 }, { hh: 0.15, r: 0.065, mass: 4.5 },
   { hh: 0.14, r: 0.075, mass: 7 }, { hh: 0.15, r: 0.065, mass: 4.5 },
 ];
-const L_UARM = 0.29, L_LARM = 0.3, L_ULEG = 0.43, L_LLEG = 0.43;
+/** Rig proportions (meters, scale 1). Re-measured from the realistic body model when it loads (setRig). */
+export const RIG = {
+  pelvisY: 0.95, spineY: 1.06, torsoC: 0.28, torsoA: 0.1, torsoB: 0.46, headY: 0.7, headZ: 0.01,
+  shoulderX: 0.23, shoulderY: 0.47, hipX: 0.1, hipY: 0.9,
+  uarm: 0.29, larm: 0.3, uleg: 0.43, lleg: 0.43,
+};
+/** Adopt measured proportions; capsule half-heights follow the limb lengths. */
+export function setRig(m: Partial<typeof RIG>) {
+  Object.assign(RIG, m);
+  const hh = (len: number, r: number) => Math.max(0.02, len / 2 - r * 0.6);
+  PART_DIM[P.UArmL].hh = PART_DIM[P.UArmR].hh = hh(RIG.uarm, PART_DIM[P.UArmL].r);
+  PART_DIM[P.LArmL].hh = PART_DIM[P.LArmR].hh = hh(RIG.larm, PART_DIM[P.LArmL].r);
+  PART_DIM[P.ULegL].hh = PART_DIM[P.ULegR].hh = hh(RIG.uleg, PART_DIM[P.ULegL].r);
+  PART_DIM[P.LLegL].hh = PART_DIM[P.LLegR].hh = hh(RIG.lleg, PART_DIM[P.LLegL].r);
+}
 
 export interface PartPose { c: THREE.Vector3; q: THREE.Quaternion; a: THREE.Vector3; b: THREE.Vector3 }
 export const newPose = (): PartPose[] => Array.from({ length: PART_COUNT }, () => ({
@@ -59,47 +73,47 @@ export function solvePose(out: PartPose[], pos: THREE.Vector3, yaw: number, s: n
 
   // pelvis (static-ish), torso rotates around the spine joint
   const pelvisQ = _q.copy(root);
-  const pc = W(0, 0.95, 0, _v);
+  const pc = W(0, RIG.pelvisY, 0, _v);
   out[P.Pelvis].c.copy(pc); out[P.Pelvis].q.copy(pelvisQ);
   out[P.Pelvis].a.set(-0.12 * s, 0, 0).applyQuaternion(pelvisQ).add(pc);
   out[P.Pelvis].b.set(0.12 * s, 0, 0).applyQuaternion(pelvisQ).add(pc);
 
   const torsoQ = _q2.copy(root).multiply(_qT.setFromEuler(_e.set(an.lean, an.twist, 0, 'YXZ')));
-  const spine = W(0, 1.06, 0, new THREE.Vector3());
+  const spine = W(0, RIG.spineY, 0, new THREE.Vector3());
   const tLocal = (lx: number, ly: number, lz: number, o: THREE.Vector3) => o.set(lx * s, ly * s, lz * s).applyQuaternion(torsoQ).add(spine);
-  const tc = tLocal(0, 0.28, 0, out[P.Torso].c);
+  const tc = tLocal(0, RIG.torsoC, 0, out[P.Torso].c);
   out[P.Torso].q.copy(torsoQ);
-  tLocal(0, 0.1, 0, out[P.Torso].a); tLocal(0, 0.46, 0, out[P.Torso].b);
+  tLocal(0, RIG.torsoA, 0, out[P.Torso].a); tLocal(0, RIG.torsoB, 0, out[P.Torso].b);
   void tc;
 
   // head
   const headQ = new THREE.Quaternion().copy(torsoQ).multiply(_qT.setFromAxisAngle(X, an.headPitch));
-  tLocal(0, 0.7, 0.01, out[P.Head].c);
+  tLocal(0, RIG.headY, RIG.headZ, out[P.Head].c);
   out[P.Head].q.copy(headQ);
   out[P.Head].a.copy(out[P.Head].c).addScaledVector(_v.set(0, -0.02 * s, 0).applyQuaternion(headQ), 1);
   out[P.Head].b.copy(out[P.Head].c).addScaledVector(_v.set(0, 0.02 * s, 0).applyQuaternion(headQ), 1);
 
   // arms (side: +1 = left (+X), -1 = right)
   const arm = (side: 1 | -1, ang: [number, number, number], up: P, lo: P) => {
-    const sh = tLocal(0.23 * side, 0.47, 0, new THREE.Vector3());
+    const sh = tLocal(RIG.shoulderX * side, RIG.shoulderY, 0, new THREE.Vector3());
     const uq = new THREE.Quaternion().copy(torsoQ)
       .multiply(_qT.setFromEuler(_e.set(-ang[0], 0, ang[1] * side, 'ZXY')));
-    const el = _v.copy(DOWN).applyQuaternion(uq).multiplyScalar(L_UARM * s).add(sh);
+    const el = _v.copy(DOWN).applyQuaternion(uq).multiplyScalar(RIG.uarm * s).add(sh);
     setPart(out[up], sh, el, uq);
     const lq = new THREE.Quaternion().copy(uq).multiply(_qT.setFromAxisAngle(X, -ang[2]));
-    const wr = _v2.copy(DOWN).applyQuaternion(lq).multiplyScalar(L_LARM * s).add(el);
+    const wr = _v2.copy(DOWN).applyQuaternion(lq).multiplyScalar(RIG.larm * s).add(el);
     setPart(out[lo], el, wr, lq);
   };
   arm(1, an.armL, P.UArmL, P.LArmL);
   arm(-1, an.armR, P.UArmR, P.LArmR);
 
   const leg = (side: 1 | -1, ang: [number, number], up: P, lo: P) => {
-    const hip = W(0.1 * side, 0.9, 0, new THREE.Vector3());
+    const hip = W(RIG.hipX * side, RIG.hipY, 0, new THREE.Vector3());
     const uq = new THREE.Quaternion().copy(root).multiply(_qT.setFromAxisAngle(X, -ang[0]));
-    const kn = _v.copy(DOWN).applyQuaternion(uq).multiplyScalar(L_ULEG * s).add(hip);
+    const kn = _v.copy(DOWN).applyQuaternion(uq).multiplyScalar(RIG.uleg * s).add(hip);
     setPart(out[up], hip, kn, uq);
     const lq = new THREE.Quaternion().copy(uq).multiply(_qT.setFromAxisAngle(X, ang[1]));
-    const ft = _v2.copy(DOWN).applyQuaternion(lq).multiplyScalar(L_LLEG * s).add(kn);
+    const ft = _v2.copy(DOWN).applyQuaternion(lq).multiplyScalar(RIG.lleg * s).add(kn);
     setPart(out[lo], kn, ft, lq);
   };
   leg(1, an.legL, P.ULegL, P.LLegL);

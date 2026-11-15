@@ -9,6 +9,7 @@ import {
 } from './humanoid';
 import { ArmoredRenderer, type SlotLook, type ShieldKind } from './armoredRenderer';
 import { lookFor } from './panoply';
+import { SkinnedBody, type BodyTemplate } from './skinnedBody';
 import { HALL } from './hall';
 import { ballisticDir, clamp, damp, pick, rand, segSegDist2 } from './math';
 import type { Fx } from './fx';
@@ -86,6 +87,8 @@ export interface Enemy {
   blockTimes: number[];
   flinch: { t: number; dir: THREE.Vector3; amount: number };
   bleedUntil: number;
+  /** severed limbs of the realistic body, following their gib bodies */
+  gibs: { part: number; mesh: THREE.Object3D }[];
 }
 
 export interface HitInfo {
@@ -180,6 +183,17 @@ export class EnemyManager {
   private lastImpactAt = -99;
   melanthius = false;
   t = 0;
+  private bodyTpl: BodyTemplate | null = null;
+  private bodies: (SkinnedBody | null)[] = [];
+
+  /** Realistic skinned bodies (Rocketbox). Without a template the capsule mannequins are used. */
+  setBodyTemplate(tpl: BodyTemplate | null) { this.bodyTpl = tpl; }
+  private bodyFor(slot: number): SkinnedBody | null {
+    if (!this.bodyTpl) return null;
+    let b = this.bodies[slot];
+    if (!b) { b = new SkinnedBody(this.bodyTpl); this.bodies[slot] = b; this.renderer.group.add(b.root); }
+    return b;
+  }
 
   constructor(private world: World, private fx: Fx, private hooks: EnemyHooks, capacity = 24) {
     this.renderer = new ArmoredRenderer(capacity);
@@ -206,7 +220,7 @@ export class EnemyManager {
       anim: newAnim(), pose: newPose(), ragdoll: null, severed: new Set(), stumps: [], armed: look.prop !== 'none',
       dead: false, diedAt: 0, ring: null, attack: null, nextAttackAt: 0, spot: null, lastHit: new Map(), spawnT: this.t,
       name: boss ? 'Antinous' : undefined, pinned: false, feastSeed: Math.random() * 10, forward: new THREE.Vector3(0, 0, 1),
-      charging: false, blockTimes: [], flinch: { t: -9, dir: new THREE.Vector3(), amount: 0 }, bleedUntil: 0,
+      charging: false, blockTimes: [], flinch: { t: -9, dir: new THREE.Vector3(), amount: 0 }, bleedUntil: 0, gibs: [],
     };
     if (kind === 'archer') {
       const side = Math.random() < 0.5 ? -1 : 1;
@@ -214,6 +228,8 @@ export class EnemyManager {
       if (Math.abs(e.spot.z - HALL.hearth.z) < 2.4) e.spot.x = side * 2.5;
     }
     solvePose(e.pose, e.pos, e.yaw, e.look.scale, e.anim);
+    const body = this.bodyFor(slot);
+    if (body) { body.reset(); body.root.visible = true; body.root.scale.setScalar(body.baseScale * look.scale); }
     this.list.push(e);
     return e;
   }
@@ -229,6 +245,10 @@ export class EnemyManager {
   private release(e: Enemy) {
     if (e.ragdoll) { destroyRagdoll(this.world, e.ragdoll); e.ragdoll = null; }
     this.renderer.hide(e.slot);
+    const body = this.bodies[e.slot];
+    if (body) { body.reset(); body.root.visible = false; }
+    for (const g of e.gibs) { this.renderer.group.remove(g.mesh); g.mesh.traverse((o) => (o as THREE.Mesh).geometry?.dispose()); }
+    e.gibs.length = 0;
     if (e.ring !== null) this.ringOwner[e.ring] = null;
     this.freeSlots.push(e.slot);
   }
@@ -954,6 +974,11 @@ export class EnemyManager {
     if (!e.dead) addBodies(this.world, e.ragdoll, e.pose, pieces, vel); // alive: only the limb becomes physical
     severJoint(this.world, e.ragdoll, part);
     for (const p of pieces) e.severed.add(p);
+    const skin = this.bodies[e.slot];
+    if (skin) {
+      const gib = skin.sever(part, e.pose[part]);
+      if (gib) { this.renderer.group.add(gib); e.gibs.push({ part, mesh: gib }); }
+    }
     // fling the piece along the cut
     const body = e.ragdoll.bodies[part];
     if (body) {
@@ -1072,12 +1097,16 @@ export class EnemyManager {
   render() {
     for (const e of this.list) {
       if (e.ragdoll && (e.dead || e.state === 'down')) readRagdoll(e.ragdoll, e.pose);
+      const body = this.bodies[e.slot];
+      if (body) body.apply(e.pose);
+      for (const g of e.gibs) { const p = e.pose[g.part]; g.mesh.position.copy(p.c); g.mesh.quaternion.copy(p.q); }
       this.renderer.write(e.slot, e.pose, e.look, {
         shieldBroken: e.shieldHp <= 0,
         forward: e.dead || e.state === 'down' ? undefined : e.forward,
         propVisible: e.armed && !e.severed.has(P.LArmR),
         stumps: e.stumps,
         broken: e.state === 'broken',
+        skinned: !!body,
       });
     }
     this.renderer.commit();

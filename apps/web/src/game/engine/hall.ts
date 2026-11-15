@@ -55,7 +55,7 @@ export function buildHall(world: InstanceType<typeof RAPIER.World> | null): Hall
 
   // ── materials ──
   const floorMat = new THREE.MeshStandardMaterial({ map: floorTexture(), roughness: 0.92, metalness: 0, color: '#9a8f80' });
-  const wallMat = new THREE.MeshStandardMaterial({ map: wallTexture(), roughness: 0.95, color: '#a69a88' });
+  const wallMat = new THREE.MeshStandardMaterial({ map: wallTexture(), roughness: 0.95, color: '#9a9488' });
   const woodMat = new THREE.MeshStandardMaterial({ map: woodTexture(), roughness: 0.85, color: '#8a7a68' });
   const beamMat = new THREE.MeshStandardMaterial({ color: '#17120e', roughness: 0.9 });
   const colMat = new THREE.MeshStandardMaterial({ map: columnTexture(), roughness: 0.8, color: '#b0a090' });
@@ -142,14 +142,38 @@ export function buildHall(world: InstanceType<typeof RAPIER.World> | null): Hall
   rim.rotation.x = Math.PI / 2;
   rim.position.set(HALL.hearth.x, 0.33, HALL.hearth.z);
   group.add(rim);
-  const coals = new THREE.Mesh(new THREE.CircleGeometry(HALL.hearthRadius - 0.15, 24),
-    new THREE.MeshStandardMaterial({ color: '#1a0c06', emissive: '#ff5a1a', emissiveIntensity: 1.4 }));
-  coals.rotation.x = -Math.PI / 2;
-  coals.position.set(HALL.hearth.x, 0.335, HALL.hearth.z);
-  group.add(coals);
+  // ash bed, a ragged ring of live coals, crossed oak logs
+  const ash = new THREE.Mesh(new THREE.CircleGeometry(HALL.hearthRadius - 0.12, 24), new THREE.MeshStandardMaterial({ color: '#1A1410', roughness: 1 }));
+  ash.rotation.x = -Math.PI / 2;
+  ash.position.set(HALL.hearth.x, 0.333, HALL.hearth.z);
+  group.add(ash);
+  const coalGeo: THREE.BufferGeometry[] = [];
+  for (let i = 0; i < 26; i++) {
+    const a = Math.random() * Math.PI * 2, r = Math.sqrt(Math.random()) * 0.62;
+    const c = new THREE.DodecahedronGeometry(0.05 + Math.random() * 0.05, 0);
+    c.translate(HALL.hearth.x + Math.cos(a) * r, 0.36, HALL.hearth.z + Math.sin(a) * r);
+    coalGeo.push(c.toNonIndexed());
+  }
+  coalGeo.forEach((g) => { for (const k of Object.keys(g.attributes)) if (k !== 'position' && k !== 'normal') g.deleteAttribute(k); });
+  group.add(new THREE.Mesh(mergeGeometries(coalGeo), new THREE.MeshStandardMaterial({ color: '#1a0c06', emissive: '#ff4a10', emissiveIntensity: 2.2, roughness: 1 })));
+  const logGeo: THREE.BufferGeometry[] = [];
+  for (let i = 0; i < 5; i++) {
+    const l = new THREE.CylinderGeometry(0.07, 0.08, 1.1, 7);
+    l.rotateZ(Math.PI / 2 - 0.18);
+    l.rotateY((i / 5) * Math.PI);
+    l.translate(HALL.hearth.x, 0.45, HALL.hearth.z);
+    logGeo.push(l.toNonIndexed());
+  }
+  logGeo.forEach((g) => { for (const k of Object.keys(g.attributes)) if (k !== 'position' && k !== 'normal') g.deleteAttribute(k); });
+  group.add(new THREE.Mesh(mergeGeometries(logGeo), new THREE.MeshStandardMaterial({ color: '#2a1a10', emissive: '#7a2a08', emissiveIntensity: 0.5, roughness: 0.95 })));
 
   // moonlight shaft through the smoke-hole (additive, no light cost)
-  const shaftMat = new THREE.MeshBasicMaterial({ color: '#5d7aa0', transparent: true, opacity: 0.07, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
+  const shaftMat = new THREE.ShaderMaterial({
+    uniforms: { opacity: { value: 0.08 }, color: { value: new THREE.Color('#6c87ad') } },
+    vertexShader: 'varying vec3 vN; varying vec3 vV; varying float vY; void main(){ vec4 mv = modelViewMatrix * vec4(position,1.0); vN = normalize(normalMatrix*normal); vV = normalize(-mv.xyz); vY = position.y; gl_Position = projectionMatrix*mv; }',
+    fragmentShader: 'uniform float opacity; uniform vec3 color; varying vec3 vN; varying vec3 vV; varying float vY; void main(){ float f = pow(abs(dot(vN, vV)), 2.0); float h = smoothstep(-3.6, 1.2, vY); gl_FragColor = vec4(color, opacity * f * h); }',
+    transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+  });
   const moonShaft = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 1.9, H, 20, 1, true), shaftMat);
   moonShaft.position.set(HALL.hearth.x + 0.5, H / 2, HALL.hearth.z - 0.4);
   moonShaft.rotation.z = 0.08;
@@ -355,7 +379,7 @@ export function buildHall(world: InstanceType<typeof RAPIER.World> | null): Hall
         const n = Math.sin(t * f.rate + f.seed) * 0.5 + Math.sin(t * f.rate * 1.73 + f.seed * 2.1) * 0.3 + Math.sin(t * f.rate * 3.1 + f.seed * 0.7) * 0.2;
         f.light.intensity = f.base * (1 + n * 0.2);
       }
-      shaftMat.opacity = 0.06 + Math.sin(t * 0.3) * 0.012;
+      shaftMat.uniforms.opacity.value = 0.09 + Math.sin(t * 0.3) * 0.015;
       // storeroom door: swings open with the glow, then eases shut
       doorPivot.rotation.y = THREE.MathUtils.lerp(doorPivot.rotation.y, -srGlow01 * 1.6, 1 - Math.exp(-10 * dt));
       srGlowMat.opacity = srGlow01 * 0.85;

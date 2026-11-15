@@ -79,25 +79,30 @@ export function corinthianSlit(): THREE.BufferGeometry {
 }
 
 export function pilosCap(): THREE.BufferGeometry {
-  const g = new THREE.LatheGeometry([V2(0, 0.2), V2(0.05, 0.17), V2(0.11, 0.08), V2(0.135, 0.02), V2(0.138, -0.01), V2(0.142, -0.02)], 14);
-  return merge([g]);
+  const g = new THREE.LatheGeometry([V2(0, 0.25), V2(0.05, 0.22), V2(0.11, 0.135), V2(0.135, 0.075), V2(0.138, 0.05), V2(0.142, 0.04)], 14);
+  return merge([g]); // sits on the crown, brim above the brow
 }
 
 /** Horsehair crest on a stilt: a crescent fan running front→back (rotate 90° for a transverse crest). */
 export function crest(transverse = false): THREE.BufferGeometry {
-  const s = new THREE.Shape();
-  s.moveTo(-0.17, 0.0);
-  s.quadraticCurveTo(-0.16, 0.2, 0.02, 0.2);
-  s.quadraticCurveTo(0.2, 0.18, 0.24, -0.08);
-  s.quadraticCurveTo(0.12, 0.04, -0.17, 0.0);
-  const fan = new THREE.ExtrudeGeometry(s, { depth: 0.035, bevelEnabled: false, curveSegments: 6 });
-  fan.translate(0, 0, -0.0175);
-  fan.rotateY(Math.PI / 2); // runs along Z (front ← −X … back)
-  fan.scale(1.25, 1.2, 1.25);
-  fan.translate(0, 0.2, 0);
-  const stilt = new THREE.BoxGeometry(0.03, 0.05, 0.07);
+  // tall "broom-top" horsehair plume: a crescent fan thickened by fringe planes so it reads as hair
+  const s2 = new THREE.Shape();
+  s2.moveTo(-0.2, 0.0);
+  s2.quadraticCurveTo(-0.19, 0.26, 0.03, 0.27);
+  s2.quadraticCurveTo(0.24, 0.25, 0.3, -0.12);
+  s2.quadraticCurveTo(0.14, 0.05, -0.2, 0.0);
+  const parts: THREE.BufferGeometry[] = [];
+  for (let i = -2; i <= 2; i++) {
+    const fan = new THREE.ShapeGeometry(s2, 8);
+    fan.scale(1 - Math.abs(i) * 0.06, 1 - Math.abs(i) * 0.1, 1);
+    fan.rotateY(Math.PI / 2);
+    fan.translate(i * 0.012, 0.19, 0);
+    parts.push(fan);
+  }
+  const stilt = new THREE.BoxGeometry(0.03, 0.05, 0.08);
   stilt.translate(0, 0.195, 0);
-  const g = merge([fan, stilt]);
+  parts.push(stilt);
+  const g = merge(parts);
   if (transverse) g.rotateY(Math.PI / 2);
   return g;
 }
@@ -106,7 +111,8 @@ export function crest(transverse = false): THREE.BufferGeometry {
 export function muscleCuirass(): THREE.BufferGeometry {
   const prof = [V2(0.15, -0.27), V2(0.19, -0.25), V2(0.175, -0.17), V2(0.17, -0.05), V2(0.19, 0.08), V2(0.205, 0.17), V2(0.185, 0.23), V2(0.12, 0.27)];
   const body = new THREE.LatheGeometry(prof, 24);
-  body.scale(1.2, 1, 0.84);
+  body.scale(1.2, 1.08, 0.84);
+  body.translate(0, -0.02, 0);
   const neck = new THREE.TorusGeometry(0.12, 0.012, 4, 20);
   neck.rotateX(Math.PI / 2);
   neck.scale(1.2, 1, 0.84);
@@ -130,8 +136,9 @@ export function muscleCuirass(): THREE.BufferGeometry {
 
 /** Linothorax: boxy linen corselet with shoulder flaps. */
 export function linothorax(): THREE.BufferGeometry {
-  const body = new THREE.LatheGeometry([V2(0.172, -0.27), V2(0.188, -0.22), V2(0.18, -0.02), V2(0.19, 0.12), V2(0.198, 0.22), V2(0.13, 0.265)], 16);
-  body.scale(1.2, 1, 0.84);
+  const body = new THREE.LatheGeometry([V2(0.19, -0.27), V2(0.2, -0.22), V2(0.182, -0.08), V2(0.188, 0.04), V2(0.208, 0.14), V2(0.212, 0.22), V2(0.14, 0.27)], 18);
+  body.scale(1.18, 1.1, 0.88);
+  body.translate(0, -0.025, 0);
   const band = new THREE.CylinderGeometry(0.19, 0.19, 0.05, 16, 1, true);
   band.scale(1.21, 1, 0.85);
   band.translate(0, -0.16, 0);
@@ -246,6 +253,77 @@ export function stumpCap(): THREE.BufferGeometry {
   const g = new THREE.SphereGeometry(1, 10, 5, 0, Math.PI * 2, 0, Math.PI / 2);
   g.scale(1, 0.35, 1);
   return merge([g]);
+}
+
+/** Film-style baggy trousers over the thigh (rides on the upper-leg part; −Y = toward the knee). */
+export function trouserThigh(): THREE.BufferGeometry {
+  const g = new THREE.LatheGeometry([V2(0.088, -0.24), V2(0.1, -0.12), V2(0.104, 0.02), V2(0.1, 0.16), V2(0.094, 0.24)], 12);
+  return merge([g]);
+}
+/** Trouser leg below the knee, bunched into the greave/wraps (lower-leg part). */
+export function trouserCalf(): THREE.BufferGeometry {
+  const g = new THREE.LatheGeometry([V2(0.058, -0.2), V2(0.07, -0.08), V2(0.08, 0.06), V2(0.084, 0.2)], 12);
+  return merge([g]);
+}
+/** Over-the-knee sandal lacing: crossing leather straps up the shin (lower-leg part). */
+export function lacing(): THREE.BufferGeometry {
+  const parts: THREE.BufferGeometry[] = [];
+  for (let i = 0; i < 6; i++) {
+    const y = -0.2 + i * 0.075;
+    const r = 0.06 + i * 0.005;
+    const band = new THREE.TorusGeometry(r, 0.006, 3, 14);
+    band.rotateX(Math.PI / 2 + (i % 2 ? 0.35 : -0.35));
+    band.translate(0, y, 0);
+    parts.push(band);
+  }
+  return merge(parts);
+}
+/** Gilt circlet / diadem (head part). */
+export function circlet(): THREE.BufferGeometry {
+  const band = new THREE.TorusGeometry(0.105, 0.012, 4, 22);
+  band.rotateX(Math.PI / 2 - 0.12);
+  band.translate(0, 0.075, 0.005);
+  const leaf: THREE.BufferGeometry[] = [];
+  for (let i = -3; i <= 3; i++) {
+    const l = new THREE.ConeGeometry(0.012, 0.04, 4);
+    const a = i * 0.32;
+    l.rotateX(-0.3);
+    l.translate(Math.sin(a) * 0.106, 0.1, Math.cos(a) * 0.106);
+    leaf.push(l);
+  }
+  return merge([band, ...leaf]);
+}
+/** Brass embellishment bands for the wooers' linen (torso part): chest band, waist band, shoulder bosses. */
+export function brassTrim(): THREE.BufferGeometry {
+  const parts: THREE.BufferGeometry[] = [];
+  for (const [y, r] of [[0.13, 0.205], [-0.2, 0.19]] as const) {
+    const t = new THREE.TorusGeometry(r, 0.01, 3, 24);
+    t.rotateX(Math.PI / 2);
+    t.scale(1.21, 1, 0.86);
+    t.translate(0, y, 0);
+    parts.push(t);
+  }
+  for (const sx of [-1, 1]) {
+    const boss = new THREE.SphereGeometry(0.03, 8, 6);
+    boss.scale(1, 1, 0.5);
+    boss.translate(sx * 0.12, 0.2, 0.165);
+    parts.push(boss);
+  }
+  return merge(parts);
+}
+/** Quiver slung on the back (torso part). */
+export function quiver(): THREE.BufferGeometry {
+  const body = new THREE.CylinderGeometry(0.06, 0.05, 0.62, 10);
+  body.rotateZ(0.35);
+  body.translate(0.07, 0.02, -0.2);
+  const shafts: THREE.BufferGeometry[] = [];
+  for (let i = 0; i < 5; i++) {
+    const a = new THREE.CylinderGeometry(0.005, 0.005, 0.2, 3);
+    a.rotateZ(0.35);
+    a.translate(0.19 + (i - 2) * 0.012, 0.36, -0.2 + (i % 2) * 0.012);
+    shafts.push(a);
+  }
+  return merge([body, ...shafts]);
 }
 
 export const TORSO_HALF = 0.29;
