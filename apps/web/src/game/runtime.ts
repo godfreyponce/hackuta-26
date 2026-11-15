@@ -105,17 +105,32 @@ export function requestCall() {
   }
   useApp.setState({ call: { state: 'dialing' } });
   audio.unlock();
+  // this key press / click is a user gesture: let the call's audio (Part B) play once it arrives
+  void getCallBridge().media?.startAudio?.();
   audio.ring();
   net.hub.send({ type: 'call.request', friendId: st.friend.friendId });
+  armCallWatchdog(75_000);
+}
+
+/** Give up on a call that never connects. Re-armed by each dialing/ringing status, and stretched while the agent
+ *  waits its turn on the shared phone line (B queues up to 2 min before the 60 s ring). */
+function armCallWatchdog(ms: number) {
+  const net = runtime.net;
   if (callWatchdog) clearTimeout(callWatchdog);
   callWatchdog = setTimeout(() => {
     const s = useApp.getState().call.state;
     if (s === 'dialing' || s === 'ringing') {
       useApp.setState({ call: { state: 'failed', reason: 'timeout' } });
-      net.hub.send({ type: 'call.end' });
-      pushToast({ kind: 'warn', title: 'NO ANSWER', sub: 'Telemachus didn’t pick up. Press C to try again.' }, 2800);
+      net?.hub.send({ type: 'call.end' });
+      pushToast({ kind: 'warn', title: 'NO ANSWER', sub: `${friendTitle()} didn’t pick up. Press C to try again.` }, 2800);
     }
-  }, 75_000);
+  }, ms);
+}
+
+/** How the friend is named on screen — the same as the Quartermaster says it on the call ("Warrior <name>"). */
+export function friendTitle(): string {
+  const n = useApp.getState().friend?.name;
+  return n ? `Warrior ${n}` : 'Telemachus';
 }
 
 export function endCall() {
@@ -148,15 +163,16 @@ function onServer(m: ServerToWeb) {
       const connectedAt = m.state === 'connected' ? (prev.state === 'connected' ? prev.connectedAt : performance.now() - (m.elapsedMs ?? 0)) : prev.connectedAt;
       useApp.setState({ call: { state: m.state, reason: m.reason, connectedAt, elapsedMs: m.elapsedMs } });
       runtime.engine?.setCallActive(m.state === 'connected');
+      if (m.state === 'dialing' || m.state === 'ringing') armCallWatchdog(m.reason?.startsWith('line_busy') ? 150_000 : 75_000);
       if (m.state === 'connected' && prev.state !== 'connected') {
         if (callWatchdog) clearTimeout(callWatchdog);
         audio.lyre([0, 4, 7, 12], 0.07, 293.7);
-        pushToast({ kind: 'gift', title: 'TELEMACHUS IS ON THE LINE', sub: 'Raise both arms (or Q) to ask for a weapon' }, 3000);
+        pushToast({ kind: 'gift', title: `${friendTitle().toUpperCase()} IS ON THE LINE`, sub: useApp.getState().inputKind === 'keyboard_mouse' ? 'Press Q to ask for a weapon' : 'Raise both arms to ask for a weapon' }, 3000);
         void getCallBridge().media?.startAudio?.();
       }
       if (m.state === 'ringing' && prev.state !== 'ringing') audio.ring();
       if ((m.state === 'failed' || m.state === 'ended') && prev.state === 'connected') {
-        pushToast({ kind: 'warn', title: m.state === 'failed' ? 'CALL DROPPED' : 'CALL ENDED', sub: 'Telemachus is away' }, 2400);
+        pushToast({ kind: 'warn', title: m.state === 'failed' ? 'CALL DROPPED' : 'CALL ENDED', sub: `${friendTitle()} is away` }, 2400);
       }
       if (m.state === 'failed' && prev.state !== 'connected') {
         if (callWatchdog) clearTimeout(callWatchdog);
@@ -202,8 +218,14 @@ export function reasonText(r?: string) {
   switch (r) {
     case 'agent_offline': return 'The Quartermaster is offline — try again shortly';
     case 'line_busy': return 'The line is busy';
+    case 'tts_not_ready': return 'The Quartermaster lost his voice — try again shortly';
     case 'no_answer': case 'timeout': return 'No answer';
-    default: return r ? r.replace(/_/g, ' ') : 'Telemachus is away';
+    default: {
+      // B waits its turn on the shared phone line: line_busy_<position in the queue>
+      const q = r?.match(/^line_busy_(\d+)$/);
+      if (q) return `The line is busy — #${q[1]} in the queue`;
+      return r ? r.replace(/_/g, ' ') : `${friendTitle()} is away`;
+    }
   }
 }
 
@@ -285,6 +307,7 @@ export function startMatch() {
   for (const f of runtime.forged.values()) f.kills = 0;
   useApp.setState({ killcams: [], results: null, paused: false, scan: { state: 'idle', pct: 0, at: 0 }, incoming: null, narration: st.narration.slice(-1) });
   audio.unlock();
+  void getCallBridge().media?.startAudio?.(); // Start is a user gesture (B.8 autoplay)
   runtime.engine?.setCallActive(st.call.state === 'connected');
   runtime.engine?.startMatch(st.difficulty);
 }

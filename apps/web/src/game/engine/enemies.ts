@@ -857,7 +857,7 @@ export class EnemyManager {
     // the damage arc shows the side the blade came from (its lane), exaggerated off the player's eye line
     const from = _v3.subVectors(at.lane, head).multiply(_v2.set(2.6, 1, 1)).add(head);
     // per-wave blow damage (7 / 10 / 12 — wave 1 teaches), fists half; Antinous 22 (30 unblockable)
-    const base = e.kind === 'boss' ? (at.unblockable ? 30 : 22) : [7, 10, 12][Math.min(2, this.hooks.wave() - 1)] * (e.armed ? 1 : 0.5);
+    const base = e.kind === 'boss' ? (at.unblockable ? 30 : 22) : [6, 9, 12][Math.min(2, this.hooks.wave() - 1)] * (e.armed ? 1 : 0.5);
     switch (o) {
       case 'perfect':
         this.addPosture(e, 40, true);
@@ -1407,7 +1407,8 @@ export class EnemyManager {
 
   /** hurt but not staggered, a wooer standing his ground cuts back at once instead of waiting his turn */
   private lashBack(e: Enemy) {
-    if ((e.state === 'wait' || e.state === 'approach') && e.kind !== 'archer') e.nextAttackAt = Math.min(e.nextAttackAt, this.t + rand(0.2, 0.45));
+    // (wave-1 revelers are drunk and slow to answer — the lesson wave)
+    if ((e.state === 'wait' || e.state === 'approach') && e.kind !== 'archer' && this.hooks.wave() >= 2) e.nextAttackAt = Math.min(e.nextAttackAt, this.t + rand(0.2, 0.45));
   }
 
   private zoneMult(part: number, neck: boolean) {

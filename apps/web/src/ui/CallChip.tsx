@@ -13,9 +13,10 @@ export function CallChip({ compact = false }: { compact?: boolean }) {
     const t = setInterval(() => tick((x) => x + 1), 500);
     return () => clearInterval(t);
   }, [call.state]);
-  const name = friend?.name ?? 'Telemachus';
+  const name = friend?.name ? `Warrior ${friend.name}` : 'Telemachus';
+  const queued = call.reason?.match(/^line_busy_(\d+)$/);
   switch (call.state) {
-    case 'dialing': return <span className="chip pending"><span className="dot" />Dialing {name}…</span>;
+    case 'dialing': return <span className="chip pending"><span className="dot" />{queued ? <>Line busy · #{queued[1]} in queue</> : <>Dialing {name}…</>}</span>;
     case 'ringing': return <span className="chip pending"><span className="dot" />Ringing {name}…</span>;
     case 'connected': {
       const el = call.connectedAt ? performance.now() - call.connectedAt : 0;
