@@ -443,7 +443,8 @@ export class CallSession {
       case 'boss_spawn': this.say('bossSpawn', PRIORITY.danger); break;
       case 'player_pinned':
         // "Pinned again ... another weapon" only once a weapon came and no ask is open; the first pin started the call.
-        if (this.lastWeapon && !this.scanner.scanning && !this.awaitingWeapon) this.say('pinned', PRIORITY.danger);
+        // Weapon priority (80) never goes stale, so a pin right after a weapon waits behind the quip and weapon line; one copy at a time, since it never expires.
+        if (this.lastWeapon && !this.scanner.scanning && !this.awaitingWeapon && !this.narrator.pending(pick('pinned', this.friend.name).text)) this.say('pinned', PRIORITY.weapon);
         break;
       case 'trickshot':
         if (e.data?.trickshot === 'pin') this.say('pin', PRIORITY.trickshot);

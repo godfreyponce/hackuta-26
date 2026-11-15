@@ -49,6 +49,10 @@ export class Narrator {
     this.pump();
   }
 
+  pending(text: string): boolean {
+    return this.current?.text === text || this.queue.some((i) => i.text === text);
+  }
+
   stop(): void {
     this.stopped = true;
     this.queue = [];

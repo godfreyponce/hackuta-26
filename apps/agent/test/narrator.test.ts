@@ -70,3 +70,19 @@ test('the caption clears when a line ends, but not when a higher line interrupts
   assert.deepEqual(events, ['show flavor', 'show scan', 'clear scan']);
   narrator.stop();
 });
+
+test('pending is true while a line is queued or playing, false after it ends', async () => {
+  const mixer = new FakeMixer();
+  const narrator = new Narrator(mixer as unknown as Mixer, () => {});
+  narrator.say('first', PRIORITY.scan, Int16Array.of(1));
+  narrator.say('pinned', PRIORITY.weapon, Int16Array.of(2));
+  await tick();
+  assert.equal(narrator.pending('pinned'), true);
+  mixer.endCurrent();
+  await new Promise((r) => setTimeout(r, 2_600));
+  assert.deepEqual(mixer.played, [1, 2]);
+  assert.equal(narrator.pending('pinned'), true);
+  mixer.endCurrent();
+  await tick();
+  assert.equal(narrator.pending('pinned'), false);
+});

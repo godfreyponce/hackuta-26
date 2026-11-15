@@ -172,7 +172,6 @@ async function mockMainLoop(): Promise<void> {
   g.send('game.event', { event: { kind: 'player_pinned', t: 1000 } }); // the game may repeat the pin that started the call
   await sleep(9_000); // let the greeting finish
   check('greeting asks for the weapon, then the scan starts with no scan.request (owner: the pin started the call)', await waitFor(() => g.has('scan.status', 'looking') && said().length >= 2, 5_000) && /What weapon can you bring him\?$/.test(said()[0]!) && /camera/.test(said()[1]!), said());
-  check('the pin that started the call asks no second time (owner)', !said().some((t) => /pinned again/.test(t)), said());
   check('greeting under 1 s after join', phone.s.firstVoiceAt > 0 && phone.s.firstVoiceAt - phone.s.joinedAt < 1_000, phone.s.firstVoiceAt ? phone.s.firstVoiceAt - phone.s.joinedAt : null);
   check('agent video reaches the phone', phone.s.agentVideoFrames > 0, phone.s.agentVideoFrames);
   // Call 3: FaceTime cut our 16:9 frame to about 3:2, losing about 8% at each side. A 3:2 frame keeps the whole game.
@@ -187,16 +186,20 @@ async function mockMainLoop(): Promise<void> {
   check('friend-cam still has frames after the caller video restarts (live 1 #2)', g.friendCam.frames > camFramesBefore + 10, { before: camFramesBefore, after: g.friendCam.frames });
   check('one friend-cam after the caller video comes back', g.agentPubs('friend-cam') === 1, g.agentPubs('friend-cam'));
 
+  const dones = () => g.msgs.filter((m) => m.type === 'scan.status' && m.state === 'done').length;
+  check('the auto-scan brings a weapon', await waitFor(() => dones() >= 1, 20_000));
   g.send('scan.request');
-  const weapon = await waitFor(() => g.has('scan.status', 'done'), 20_000);
-  check('scan -> forge -> weapon.spawn -> done', weapon);
-  const scan = g.msgs.filter((m) => m.type === 'scan.status').map((m) => m.state);
+  const weapon = await waitFor(() => dones() >= 2, 20_000);
+  check('scan.request after the auto-scan: scan -> forge -> weapon.spawn -> done', weapon);
+  const allScan = g.msgs.filter((m) => m.type === 'scan.status').map((m) => m.state);
+  const scan = allScan.slice(allScan.indexOf('done') + 1);
   check('scan states in order', ['looking', 'detected', 'forging', 'done'].every((s, i, a) => scan.indexOf(s) >= 0 && (i === 0 || scan.indexOf(s) > scan.indexOf(a[i - 1]!))), scan);
-  await sleep(8_000); // quip, 2.5 s gap, then the weapon line
-  const lastScan = () => g.msgs.filter((m) => m.type === 'scan.status').at(-1)?.state;
-  await waitFor(() => lastScan() === 'done' || lastScan() === 'failed', 20_000);
+  // The real-call window: the pin comes while the quip and the weapon line still wait in the queue.
   g.send('game.event', { event: { kind: 'player_pinned', t: 30_000 } });
-  check('a later pin, after the weapon came, says pinned again (owner)', await waitFor(() => said().some((t) => /^Adam's pinned again! Warrior Godfrey, find him another weapon!$/.test(t)), 5_000), said());
+  g.send('game.event', { event: { kind: 'player_pinned', t: 30_500 } }); // the game may repeat it
+  check('a pin sent right after the weapon came says pinned again (owner)', await waitFor(() => said().some((t) => /^Adam's pinned again! Warrior Godfrey, find him another weapon!$/.test(t)), 25_000), said());
+  await sleep(10_000); // a second copy would play within the line plus the 2.5 s gap
+  check('pinned again plays once: the starting pin stays silent and a repeat is not queued twice (owner)', said().filter((t) => /pinned again/.test(t)).length === 1, said());
   g.send('call.end');
   check('call ends', await waitFor(() => g.has('call.status', 'ended'), 10_000));
   check('FaceTime room deleted', !(await roomExists(phone.ftRoom)));
