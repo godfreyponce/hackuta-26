@@ -88,3 +88,10 @@ test('contentRect returns the whole image when there are no bars', async () => {
   const frame = await sharp({ create: { width: 640, height: 480, channels: 3, background: '#c8b49a' } }).jpeg().toBuffer();
   assert.deepEqual(await contentRect(frame), { left: 0, top: 0, width: 640, height: 480 });
 });
+
+test('the schema keeps the object color, short and trimmed, and defaults it to empty', () => {
+  const base = { is_object: true, object_name: 'pen', display_name: 'Quill', weapon_class: 'spear', bbox: [0, 0, 1, 1], confidence: 0.9, quip: 'q' };
+  assert.equal(visionResultSchema.parse({ ...base, color: '  Black plastic and silver metal ' }).color, 'black plastic and silver metal');
+  assert.equal(visionResultSchema.parse({ ...base, color: 'x'.repeat(200) }).color.length, 60);
+  assert.equal(visionResultSchema.parse(base).color, '');
+});

@@ -15,6 +15,8 @@ export interface VisionResult {
   bbox: Box;
   confidence: number;
   quip: string;
+  /** Real main colors and material, e.g. "black plastic and silver metal"; '' when unknown. */
+  color: string;
   rejected?: 'person_only' | 'no_object' | 'unsafe' | 'screen_or_ui';
 }
 export interface VisionProvider { readonly name: string; readonly model: string; analyze(jpeg: Buffer): Promise<VisionResult> }
@@ -49,6 +51,7 @@ export const visionResultSchema = z.object({
   bbox: z.array(z.number()).length(4).catch([0, 0, 1, 1]),
   confidence: z.number().catch(0),
   quip: z.string().default(''),
+  color: z.string().catch(''),
   rejected: z.enum(['person_only', 'no_object', 'unsafe', 'screen_or_ui']).optional().catch(undefined),
 }).transform((r): VisionResult => {
   const out: VisionResult = {
@@ -59,6 +62,7 @@ export const visionResultSchema = z.object({
     bbox: toUnitBox(r.bbox, 'xy'),
     confidence: clamp01(r.confidence),
     quip: r.quip.trim().slice(0, 140),
+    color: (r.color ?? '').trim().toLowerCase().slice(0, 60),
   };
   if (r.rejected) out.rejected = r.rejected;
   return out;
@@ -138,7 +142,7 @@ class MockVision implements VisionProvider {
     await new Promise((r) => setTimeout(r, 400));
     return {
       is_object: true, object_name: 'frying pan', display_name: 'The Pan of Ithaca', weapon_class: 'blunt',
-      bbox: [0.25, 0.2, 0.75, 0.8], confidence: 0.95, quip: 'A frying pan? Bold. I like it. Forging now.',
+      bbox: [0.25, 0.2, 0.75, 0.8], confidence: 0.95, quip: 'A frying pan? Bold. I like it. Forging now.', color: 'black iron',
     };
   }
 }

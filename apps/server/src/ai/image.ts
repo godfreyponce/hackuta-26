@@ -38,7 +38,25 @@ export async function cropForModel(jpeg: Buffer, bbox: Box): Promise<CropOut> {
   if (!W || !H) throw new Error('could not read image size');
   const region = await sharp(upright).extract(cropRect(bbox, await contentRect(upright), W, H)).toBuffer();
   const square = sharp(region).resize(1024, 1024, { fit: 'contain', background: { r: 255, g: 255, b: 255, alpha: 1 } }).flatten({ background: '#ffffff' });
-  const png1024 = await square.clone().png().toBuffer();
-  const thumbJpeg = await square.clone().resize(384, 384).jpeg({ quality: 82 }).toBuffer();
-  return { png1024, thumbJpeg };
+  const png1024 = await square.png().toBuffer();
+  return { png1024, thumbJpeg: await toThumb(png1024) };
+}
+
+/** 384 px JPEG on white; a cutout's transparent background turns white. */
+export function toThumb(png: Buffer): Promise<Buffer> {
+  return sharp(png).flatten({ background: '#ffffff' }).resize(384, 384, { fit: 'contain', background: '#ffffff' }).jpeg({ quality: 82 }).toBuffer();
+}
+
+/** Mean RGB difference (0..255) between a cutout's opaque pixels and the same pixels of the image it came from; Infinity when nothing is opaque. */
+export async function cutoutDrift(original: Buffer, cut: Buffer): Promise<number> {
+  const S = 256;
+  const a = await sharp(original).flatten({ background: '#ffffff' }).toColourspace('srgb').resize(S, S, { fit: 'fill' }).raw().toBuffer();
+  const b = await sharp(cut).toColourspace('srgb').ensureAlpha().resize(S, S, { fit: 'fill' }).raw().toBuffer();
+  let sum = 0, opaque = 0;
+  for (let i = 0; i < S * S; i++) {
+    if (b[i * 4 + 3]! < 128) continue;
+    opaque++;
+    for (let c = 0; c < 3; c++) sum += Math.abs(a[i * 3 + c]! - b[i * 4 + c]!);
+  }
+  return opaque ? sum / opaque / 3 : Number.POSITIVE_INFINITY;
 }

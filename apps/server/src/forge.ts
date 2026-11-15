@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { WeaponClass, WeaponSpawn } from '@ithaca/shared';
 import { analyzeWithRetry, vision, type VisionResult } from './ai/vision';
-import { cropForModel } from './ai/image';
+import { cropForModel, toThumb } from './ai/image';
 import { generateGlb } from './ai/model3d';
 import { getStore, putFile, toOid } from './db/mongo';
 import { findRecentGlb, insertWeapon } from './db/weapons';
@@ -140,10 +140,15 @@ async function runPipeline(forgeId: string, jpeg: Buffer, sessionId: string, v: 
       } else {
         progress('3d', 40);
         const tick = setInterval(() => progress('3d', 60), 1500);
-        let glb: Buffer;
-        try { glb = await generateGlb(png1024, v.object_name); } finally { clearInterval(tick); }
+        let made: Awaited<ReturnType<typeof generateGlb>>;
+        try { made = await generateGlb(png1024, v); } finally { clearInterval(tick); }
         progress('3d', 90);
-        glbFileId = await putFile('models', glb, `${forgeId}.glb`, 'model/gltf-binary');
+        glbFileId = await putFile('models', made.glb, `${forgeId}.glb`, 'model/gltf-binary');
+        // The armory shows the object the model was built from (no hand, no room) when there is one.
+        if (made.image !== png1024) {
+          try { thumbFileId = await putFile('thumbs', await toThumb(made.image), `${forgeId}-clean.jpg`, 'image/jpeg'); }
+          catch (e) { log.warn({ err: errMsg(e) }, 'clean thumb failed, keeping the crop thumb'); }
+        }
       }
 
       if (spawned) throw new Error('deadline already hit; discarding late GLB');

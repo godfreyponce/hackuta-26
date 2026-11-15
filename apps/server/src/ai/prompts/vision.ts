@@ -10,6 +10,7 @@ export const VISION_PROMPT = `You are the Quartermaster of Ithaca's armory in a 
 3. Map it to one weapon class: spear (long poles), sword (flat/stick-like, arm length or shorter), blunt (heavy/solid), throwable (small, round or light), shield (flat and wide), bomb (cans/bottles that look like they'd explode in a cartoon), potion (drinkable containers). Examples: ${examples}.
 4. Give it an epic display name in the style of Homer's Odyssey (mortal heroes and places only, no gods), at most 4 words.
 5. Write a one-line gruff, funny quip (at most 14 words) the armorer would say on seeing it.
+6. Give the object's real main colors and material as seen in the image, at most 6 words (e.g. "black plastic and silver metal").
 If no object is clearly held up, set is_object=false with rejected="no_object". If it's only a person/hand, rejected="person_only". If it is a real firearm or something unsafe, rejected="unsafe". If the image is mostly a screen or video-call UI, rejected="screen_or_ui". Never describe the person.
 Report your answer by calling the report_object tool exactly once.`;
 
@@ -24,7 +25,8 @@ export const VISION_JSON_SCHEMA = {
     bbox: { type: 'array', items: { type: 'number' }, minItems: 4, maxItems: 4, description: 'x0,y0,x1,y1 normalized 0..1' },
     confidence: { type: 'number', description: '0..1' },
     quip: { type: 'string', description: 'at most 14 words' },
+    color: { type: 'string', description: 'real main colors and material, at most 6 words' },
     rejected: { type: 'string', enum: ['person_only', 'no_object', 'unsafe', 'screen_or_ui'] },
   },
-  required: ['is_object', 'object_name', 'display_name', 'weapon_class', 'bbox', 'confidence', 'quip'],
+  required: ['is_object', 'object_name', 'display_name', 'weapon_class', 'bbox', 'confidence', 'quip', 'color'],
 } as const;

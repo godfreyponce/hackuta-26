@@ -32,7 +32,7 @@ const schema = z.object({
   STABILITY_API_KEY: str(),
   SF3D_TEXTURE_RES: z.preprocess(blankToUndef, z.enum(['512', '1024', '2048']).default('512')),
   SF3D_TIMEOUT_MS: num(15000),
-  FORGE_CLEAN_IMAGE: z.preprocess(blankToUndef, z.enum(['0', '1']).default('0')),
+  FORGE_CLEAN_IMAGE: z.preprocess(blankToUndef, z.enum(['0', '1', 'cutout']).default('0')),
   FORGE_3D_MODEL: z.preprocess(blankToUndef, z.enum(['fast', 'spar']).default('fast')),
 
   LIVEKIT_URL: str(),
