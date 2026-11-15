@@ -34,6 +34,8 @@ export interface KeyboardMouseController extends InputController {
   engageOf(hand: Hand): number;
   /** max commanded point speed (m/s) from the cursor over the last 80 ms — caps how hard a blade can cut */
   readonly vCmd: number;
+  /** speed (m/s) of the W thrust's drive over the last 80 ms — a stab is as hard as the lunge behind it */
+  readonly thrustV: number;
   /** blade bounces off something: angular kick away from `dir` (body frame), 0..1 strength */
   kickBlade(hand: Hand, dir: { x: number; y: number; z: number }, k: number): void;
   /** take up / put away the bow (as if B were pressed) — clicking the bow on the table */
@@ -147,6 +149,9 @@ export function createKeyboardMouseController(): KeyboardMouseController {
   const cursor = { x: 0.25, y: -0.35 };
   let reach = 0.7;
   let thrust = 0;
+  let thrustHold = 0;
+  let thrustVNow = 0;
+  const thrustHist: { t: number; v: number }[] = [];
   let guardSide = 1;
   let lmbDownAt = 0;
   let vCmdNow = 0;
@@ -412,6 +417,9 @@ export function createKeyboardMouseController(): KeyboardMouseController {
     vHist.push({ t: now, v: vCmdNow });
     while (vHist.length > 1 && now - vHist[0].t > 80) vHist.shift();
     vCmdMax = vHist.reduce((m, x) => Math.max(m, x.v), 0);
+    thrustHist.push({ t: now, v: thrustVNow });
+    while (thrustHist.length > 1 && now - thrustHist[0].t > 80) thrustHist.shift();
+    thrustVNow = 0; // (set again below while an armed hand is lunging)
     const L = hands.left, R = hands.right;
     // the driven hand: the right, unless only the left holds a blade (after a throw/drop you fight on with it);
     // Shift drives the other one while held
@@ -450,12 +458,24 @@ export function createKeyboardMouseController(): KeyboardMouseController {
         // LEVER: the cursor marks where the blade's POINT goes; the hand rides between shoulder and point,
         // so the whole blade is on screen as a diagonal from the lower corner to the reticle and sweeps
         // visibly as you move the mouse (instead of pointing straight down the line of sight)
-        // W = thrust: drive the point straight out along the line of the blade
-        thrust = damp(thrust, keys.has('KeyW') ? 0.34 : 0, keys.has('KeyW') ? 22 : 9, dt);
+        // W = thrust (a stab): the point lines up on your aim first, then the whole arm drives out along the blade —
+        // a lunge, so the point travels along its own line (the stab system needs motion along the blade)
+        const wantT = keys.has('KeyW');
+        thrustHold = wantT ? thrustHold + dt : 0;
+        const lined = active.bdir.dot(tmp3.copy(aimDir).multiplyScalar(reach + 0.77).sub(active.pos).normalize()) > 0.975;
+        const prevThrust = thrust;
+        // (while it lines up the arm draws back — a chamber — so the lever swinging in doesn't poke him first); the
+        // lunge itself is a steady ~4.2 m/s drive (easing in its last 6 cm), so the point arrives as hard at 1.6 m as
+        // at 1.2 m: enough for flesh, linen and the gaps — bronze plate turns it (go for the throat, armpit or belly)
+        const goalT = wantT ? (lined || thrustHold > 0.16 ? 0.46 : -0.22) : 0;
+        if (wantT && goalT > thrust) thrust = Math.min(goalT, thrust + 4.2 * dt * clamp((goalT - thrust) / 0.06, 0.3, 1));
+        else thrust = damp(thrust, goalT, wantT ? 16 : 7, dt);
+        thrustVNow = dt > 1e-4 ? Math.max(0, (thrust - prevThrust) / dt) : 0;
         // WARD ↔ LEVER: at rest the blade stands up and across the view (point just above the reticle, hand offset
         // low-right) so the whole sword is on screen wherever the cursor is; moving the mouse with intent engages the
         // cutting lever (point on the reticle, arm extended). engage rises fast (55/s) and settles slowly (4/s).
-        const sT = Math.max(smooth(1.5, 6.0, vCmdNow), thrust / 0.34);
+        // A stab keeps the blade on its line until the point is drawn all the way back (it comes out straight).
+        const sT = Math.max(smooth(1.5, 6.0, vCmdNow), wantT || thrust > 0.03 ? 1 : 0);
         active.engage += (sT - active.engage) * (1 - Math.exp(-(sT > active.engage ? 55 : 4) * dt));
         const s = active.engage;
         const side = mode.activeHand === 'right' ? 1 : -1;
@@ -467,6 +487,8 @@ export function createKeyboardMouseController(): KeyboardMouseController {
         const ol = off.length();
         const armMax = 0.68 + 0.06 * s;
         if (ol > armMax || ol < 0.3) active.target.copy(sh).addScaledVector(off, clamp(ol, 0.3, armMax) / Math.max(1e-3, ol));
+        // the lunge: the body follows the arm out along the line of the stab
+        if (thrust !== 0) active.target.addScaledVector(aimDir, thrust);
         const pWard = ndcPoint(cursor.x + side * 0.08, cursor.y + 0.28, 0.64, tmp2);
         const pCut = tmp3.copy(aimDir).multiplyScalar(reach + 0.45 + 0.32 * s + thrust);
         const goal = tmp.copy(pWard).lerp(pCut, s);
@@ -531,6 +553,7 @@ export function createKeyboardMouseController(): KeyboardMouseController {
     cursor,
     get glancing() { return keys.has('Tab'); },
     get vCmd() { return vCmdMax; },
+    get thrustV() { return thrustHist.reduce((m, x) => Math.max(m, x.v), 0); },
     engageOf(h) { return hands[h].engage; },
     intentOf(h) {
       const tr = hands[h];

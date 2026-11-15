@@ -3,7 +3,7 @@ import type { GameEvent, GameEventKind, Hand, InputController, InputEvent, Playe
 import { RAPIER, initPhysics } from './physics';
 import { buildHall, HALL, type HallRig } from './hall';
 import { Fx } from './fx';
-import { EnemyManager, type Attack, type Enemy, type HitInfo, type HitResult, type Outcome } from './enemies';
+import { EnemyManager, type Attack, type Enemy, type HitInfo, type HitResult, type KillHow, type Outcome } from './enemies';
 import { WeaponManager, type HandView, type WeaponEnt } from './weapons';
 import { Gauntlet } from './hands';
 import { Trails } from './trails';
@@ -259,8 +259,10 @@ export class Engine {
       cutCap: (hand) => {
         if (!isKeyboardMouse(this.input)) return null;
         const intent = this.input.intentOf(hand);
-        const driven = intent === 'driven';
-        const vCap = 1 + 1.4 * this.input.vCmd;
+        // a W lunge is deliberate: a touch that bounced the blade while the point lined up doesn't take the stab away
+        const driven = intent === 'driven' || (intent === 'kicked' && this.input.thrustV > 1.5);
+        // a W stab drives the point as hard as the lunge behind it
+        const vCap = 1 + 1.4 * Math.max(this.input.vCmd, this.input.thrustV);
         return { vCap: driven ? vCap : Math.min(vCap, 3), driven };
       },
       onArrowsSpent: () => this.cb.toast({ kind: 'info', title: 'ARROWS SPENT', sub: 'Telemachus brings more between waves' }, 1400),
@@ -547,7 +549,7 @@ export class Engine {
     if (alive) this.scoring.addPoints(part === P.UArmR || part === P.LArmR ? 150 : 100);
   }
 
-  private onKill(e: Enemy, info: HitInfo, how: { decapitated: boolean; finisher: boolean; severed: number | null } = { decapitated: false, finisher: false, severed: null }) {
+  private onKill(e: Enemy, info: HitInfo, how: KillHow = { decapitated: false, finisher: false, severed: null }) {
     const w = info.weaponEntId !== null ? this.weapons.list.find((x) => x.id === info.weaponEntId) ?? null : null;
     const now = this.simT;
     const multi = w ? w.throwKills.filter((t) => now - t < 1.5).length + (w.state === 'free' ? 1 : 0) : 0;
@@ -569,7 +571,15 @@ export class Engine {
       this.cb.toast({ kind: 'trickshot', title: res.tricks.length ? `${title} + ${res.tricks.filter((t) => t !== 'headshot').map((t) => TRICK_TITLES[t]).join(' + ')}`.replace(/ \+ $/, '') : title, points: res.points }, 1500);
       for (const t of res.tricks) this.emit('trickshot', { trickshot: t, score: this.scoring.score, combo: this.scoring.combo, weaponName: w?.name });
       audio.stinger(true);
-      if (this.realT - this.lastDecapSlow > 10 || !this.seenDecap) { this.seenDecap = true; this.lastDecapSlow = this.realT; this.startSlowmo('headshot', 1.3, w?.name); }
+      // a beheading is swift: only the first one gets a short, smooth slow-motion beat (no freeze, no hitch)
+      if (how.decapitated) { if (!this.seenDecap) { this.seenDecap = true; this.lastDecapSlow = this.realT; this.startSlowmo('headshot', 0.55, w?.name); } }
+      else if (this.realT - this.lastDecapSlow > 10) { this.lastDecapSlow = this.realT; this.startSlowmo('headshot', 1.3, w?.name); }
+    } else if (how.impaled) {
+      // a stab that killed him on the blade
+      const title = how.impaled === 'through' ? 'RUN THROUGH' : how.impaled === 'throat' ? 'THROAT STAB' : how.impaled === 'heart' ? 'THROUGH THE HEART' : how.impaled === 'face' ? 'FACE STAB' : 'IMPALED';
+      this.cb.toast({ kind: 'trickshot', title: res.tricks.length ? `${title} + ${res.tricks.map((t) => TRICK_TITLES[t]).join(' + ')}` : title, points: res.points }, 1300);
+      for (const t of res.tricks) this.emit('trickshot', { trickshot: t, score: this.scoring.score, combo: this.scoring.combo, weaponName: w?.name });
+      audio.stinger(false);
     } else this.announceTricks(res.tricks, res.points, res.slowmo, w?.name);
     this.killEventCount++;
     this.waveKills++;
