@@ -240,13 +240,14 @@ const QUEUED_202 = {
 
 test('a 202 with a queue entry and no call id returns the queue entry (live 3)', async () => {
   const calls = stubFetch(() => Response.json(QUEUED_202, { status: 202 }));
-  assert.deepEqual(await createCall(call, 'key-q'), { queue: { id: 'q1', state: 'waiting', position: 1 } });
+  assert.deepEqual(await createCall(call, 'key-q'), { queue: { id: 'q1', state: 'waiting', position: 1, turnUntil: null } });
   assert.equal(calls.length, 1);
 });
 
 test('the queue entry is read from GET /calls/queue/<id> (live 3)', async () => {
-  const calls = stubFetch(() => Response.json({ data: { ...QUEUED_202.data, queue: { ...QUEUED_202.data.queue, state: 'ready', position: null } } }));
-  assert.deepEqual(await getQueueEntry('q1'), { id: 'q1', state: 'ready', position: null });
+  const turn = '2026-11-15T08:26:00.5+00:00';
+  const calls = stubFetch(() => Response.json({ data: { ...QUEUED_202.data, queue: { ...QUEUED_202.data.queue, state: 'ready', position: null, turn_until: turn } } }));
+  assert.deepEqual(await getQueueEntry('q1'), { id: 'q1', state: 'ready', position: null, turnUntil: Date.parse(turn) });
   assert.match(calls[0]!.url, /\/calls\/queue\/q1$/);
 });
 
@@ -257,7 +258,7 @@ test('a 202 whose queue entry already has a call id gives that call id (reviewer
 
 test('a GET reply with the entry directly under data still parses (reviewer #2)', async () => {
   stubFetch(() => Response.json({ data: { id: 'q2', state: 'waiting', position: 2 } }));
-  assert.deepEqual(await getQueueEntry('q2'), { id: 'q2', state: 'waiting', position: 2 });
+  assert.deepEqual(await getQueueEntry('q2'), { id: 'q2', state: 'waiting', position: 2, turnUntil: null });
 });
 
 test('the queue entry is cancelled with DELETE /calls/queue/<id> (live 3)', async () => {

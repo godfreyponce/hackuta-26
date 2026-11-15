@@ -50,11 +50,14 @@ const RETRY_DELAYS_MS = [500, 1_000, 2_000];
 /** Longest a create can run once the session ends: a backoff wait, the try in flight, and the one extra try. */
 export const CREATE_AFTER_CANCEL_MAX_MS = Math.max(...RETRY_DELAYS_MS) + 2 * CHERT_TIMEOUT_MS;
 
-/** A busy shared line: Chert holds our place. Repeat the create with the same key once `state` is no longer waiting. */
-export type QueueEntry = { id: string; state: string; position: number | null };
+/**
+ * A busy shared line: Chert holds our place. Repeat the create with the same key once `state` is no longer waiting.
+ * turnUntil: Chert's `turn_until` in epoch ms, when it sends one.
+ */
+export type QueueEntry = { id: string; state: string; position: number | null; turnUntil: number | null };
 export type Created = { id: string; queued: boolean; status: string | undefined } | { queue: QueueEntry };
 
-type RawQueue = { id?: unknown; state?: unknown; position?: unknown; call_id?: unknown };
+type RawQueue = { id?: unknown; state?: unknown; position?: unknown; call_id?: unknown; turn_until?: unknown };
 
 /** The 202 nests the entry under data.queue; the GET reply shape is unseen, so the entry directly under data counts too. */
 function rawQueue(body: unknown): RawQueue | undefined {
@@ -65,7 +68,8 @@ function rawQueue(body: unknown): RawQueue | undefined {
 function queueEntry(body: unknown): QueueEntry | null {
   const q = rawQueue(body);
   if (typeof q?.id !== 'string') return null;
-  return { id: q.id, state: String(q.state ?? 'unknown'), position: typeof q.position === 'number' ? q.position : null };
+  const turnUntil = typeof q.turn_until === 'string' ? Date.parse(q.turn_until) : NaN;
+  return { id: q.id, state: String(q.state ?? 'unknown'), position: typeof q.position === 'number' ? q.position : null, turnUntil: Number.isNaN(turnUntil) ? null : turnUntil };
 }
 
 export async function createCall(c: CreateCall, idempotencyKey: string, cancelled: () => boolean = () => false): Promise<Created> {

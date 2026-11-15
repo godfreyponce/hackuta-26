@@ -33,6 +33,7 @@ const WEAPON_WAIT_MS = 20_000; // spec D.3: Part D guarantees a prefab fallback 
 const QUEUE_POLL_MS = 1_500; // chert/agent/outbound.mjs polls at this rate
 const QUEUE_WAIT_MAX_MS = 120_000; // Chert's 202: "Chert keeps its place for up to 2 minutes"
 const QUEUE_GONE = new Set(['cancelled', 'canceled', 'expired']);
+const QUEUE_TURN_MS = 20_000; // docs.trychert.com/facetime/limits: "The turn lasts 20 seconds." Used when the entry has no turn_until.
 const TRACKS_VISIBLE_WAIT_MS = 3_000; // guess: the server showed the second track about 200 ms late in the fake-Chert e2e
 /** Longest that end() can take; main's hard stop on signals must be longer. */
 export const END_MAX_MS = Math.max(SETUP_WAIT_MS, CREATE_AFTER_CANCEL_MAX_MS, FAREWELL_WAIT_MS) + END_CALL_MAX_MS + CLEANUP_MARGIN_MS;
@@ -306,24 +307,34 @@ export class CallSession {
   /**
    * Busy shared line (live 3). The room and our video stay up while we wait. Chert places the call only when we repeat
    * the create with the same key after our turn comes. Returns null if the session ends first; end() cancels the entry.
+   * Call 5: real Chert answered the turn's repeat with 409 invalid_state. That repeat is retried with the same key until
+   * the turn ends; the same key cannot place a second call.
    */
   private async waitForTurn(entry: QueueEntry, create: () => Promise<Created>): Promise<Exclude<Created, { queue: QueueEntry }> | null> {
     this.queueId = entry.id;
     const giveUpAt = Date.now() + QUEUE_WAIT_MAX_MS;
     let q = entry;
     let shown: number | null | undefined;
+    let turnEndsAt: number | undefined;
     for (;;) {
       if (this.ending) return null;
       if (QUEUE_GONE.has(q.state)) { warn('chert_queue_gone', { queueId: q.id, state: q.state }); throw new ChertError(0, 'line_busy'); }
       if (q.state === 'waiting') {
+        turnEndsAt = undefined;
         if (q.position !== shown) { shown = q.position; log('chert_queued', { queueId: q.id, position: q.position }); this.status('dialing', `line_busy_${q.position ?? 'unknown'}`); }
       } else {
-        log('chert_queue_turn', { queueId: q.id, state: q.state, waitedMs: Date.now() - this.dialedAt });
-        const next = await create();
-        if (!('queue' in next)) { this.status('dialing'); return next; }
-        q = next.queue;
+        turnEndsAt ??= q.turnUntil ?? Date.now() + QUEUE_TURN_MS;
+        log('chert_queue_turn', { queueId: q.id, state: q.state, waitedMs: Date.now() - this.dialedAt, turnLeftMs: turnEndsAt - Date.now() });
+        const next = await create().catch((e: unknown) => {
+          const refused = e instanceof ChertError && e.status === 409 && e.code === 'invalid_state';
+          if (!refused || Date.now() + QUEUE_POLL_MS >= turnEndsAt!) throw e;
+          warn('chert_queue_turn_refused', { queueId: q.id, turnLeftMs: turnEndsAt! - Date.now() });
+          return null;
+        });
+        if (next && !('queue' in next)) { this.status('dialing'); return next; }
+        if (next) q = next.queue;
       }
-      if (Date.now() > giveUpAt) { warn('chert_queue_wait_over', { queueId: q.id, waitedMs: Date.now() - this.dialedAt }); throw new ChertError(0, 'line_busy'); }
+      if (Date.now() > Math.max(giveUpAt, turnEndsAt ?? 0)) { warn('chert_queue_wait_over', { queueId: q.id, waitedMs: Date.now() - this.dialedAt }); throw new ChertError(0, 'line_busy'); }
       await sleep(QUEUE_POLL_MS);
       if (this.ending) return null;
       q = await getQueueEntry(q.id).catch((e) => { warn('chert_queue_poll_failed', { error: errText(e) }); return q; });
