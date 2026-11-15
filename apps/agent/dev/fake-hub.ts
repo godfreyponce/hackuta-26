@@ -14,6 +14,7 @@ const FRIEND = { id: 'friend-1', name: 'Godfrey', phoneE164: process.env.OUTBOUN
 const log = (event: string, f: Record<string, unknown> = {}) => console.log(JSON.stringify({ t: new Date().toISOString(), src: 'fake-hub', event, ...f }));
 
 let agent: WebSocket | null = null;
+const agents = new Set<WebSocket>();
 const webs = new Map<string, Set<WebSocket>>();
 const forgeCalls = new Map<string, number>();
 const forgeMiss = new Set<string>(); // sessions whose forge calls all return no_object (POST /_forge-miss)
@@ -140,6 +141,12 @@ const server = createServer(async (req, res) => {
     }
     if (url.pathname.startsWith('/fake-chert/')) return await fakeChert(req.method ?? 'GET', url.pathname.slice('/fake-chert'.length), req, json);
     if (req.method === 'GET' && url.pathname === '/api/health') return json(200, { ok: true, mongo: false, agentConnected: !!agent });
+    // The real game (apps/web) in live mode needs a player and a friend. The real server keeps them in MongoDB; here every friend
+    // is FRIEND, so the call always goes to OUTBOUND_TO whatever number the game's setup screen took.
+    const friendPublic = { friendId: FRIEND.id, name: FRIEND.name, phoneMasked: `•••${FRIEND.phoneE164.slice(-4)}` };
+    if (req.method === 'POST' && url.pathname === '/api/players') return json(200, { playerId: randomBytes(12).toString('hex') });
+    if (req.method === 'POST' && url.pathname === '/api/friends') return json(200, friendPublic);
+    if (req.method === 'GET' && url.pathname === '/api/friends') return json(200, [friendPublic]);
     if (req.method === 'POST' && url.pathname === '/api/sessions') {
       const sessionId = randomBytes(6).toString('hex');
       return json(200, { sessionId, gameRoom: `game-${sessionId}` });
@@ -185,14 +192,16 @@ wss.on('connection', (ws, req) => {
   if (role === 'agent') {
     if (url.searchParams.get('key') !== AGENT_SHARED_SECRET) { ws.close(4401, 'bad key'); return; }
     agent = ws;
-    log('agent_connected');
+    agents.add(ws);
+    log('agent_connected', { agents: agents.size });
     ws.on('message', (raw) => {
       const m = JSON.parse(raw.toString()) as { type: string; sessionId: string };
       if (m.type === 'hello') return;
       log('agent->web', { type: m.type, sid: m.sessionId });
       toWeb(m.sessionId, raw.toString());
     });
-    ws.on('close', () => { if (agent === ws) agent = null; log('agent_disconnected'); });
+    // Step 3: a short-lived second agent took the slot and left, and the hub forgot the first agent, still connected.
+    ws.on('close', () => { agents.delete(ws); if (agent === ws) agent = [...agents].at(-1) ?? null; log('agent_disconnected', { agents: agents.size }); });
     return;
   }
   const sid = url.searchParams.get('sessionId');
