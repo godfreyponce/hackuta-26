@@ -349,6 +349,43 @@ async function liveQueueExpired(): Promise<void> {
   await g.close();
 }
 
+async function liveQueueFailed(): Promise<void> {
+  out('scenario', { name: 'live: Chert marks our queue entry failed, the agent stops at once (coord 17 review #2)' });
+  const { createCount: before, queue: oldQueue } = await fakeLast();
+  await post('/fake-chert/_next', { lineBusy: true });
+  const g = await openGame();
+  g.send('call.request', { friendId: 'friend-1' });
+  check('create queued by Chert', !!(await newQueue(oldQueue?.id)));
+  await post('/fake-chert/_queue', { state: 'failed' });
+  check('fails with line_busy (coord 17 review #2)', await waitFor(() => g.msgs.some((m) => m.type === 'call.status' && m.state === 'failed' && m.reason === 'line_busy'), 6_000), g.msgs.filter((m) => m.type === 'call.status'));
+  const { queue, createCount } = await fakeLast();
+  check('no create sent to a failed entry (coord 17 review #2)', queue!.rejected === 0, queue!.rejected);
+  check('no call placed', createCount === before, createCount - before);
+  check('no FaceTime room left behind', !(await roomExists(`ft-${g.sid}-1`)));
+  await g.close();
+}
+
+/** The 120 s wait runs out while the turn's create is in flight; Chert placed the call, then answered 409 (coord 17 review #1). */
+async function liveTurnPlacedAfterWaitOver(): Promise<void> {
+  out('scenario', { name: 'live: the turn\'s create outlasts the 120 s wait and Chert placed the call, the agent adopts and ends it (coord 17 review #1, about 2 min)' });
+  const { createCount: before, queue: oldQueue } = await fakeLast();
+  await post('/fake-chert/_next', { lineBusy: true });
+  const g = await openGame();
+  g.send('call.request', { friendId: 'friend-1' });
+  check('create queued by Chert', !!(await newQueue(oldQueue?.id)));
+  await sleep(116_000); // counted from the 202, so the 6 s reply always lands past the agent's 120 s
+  await post('/fake-chert/_queue', { state: 'ready', turnMs: 2_000, placeThenRejectMs: 6_000 });
+  await sleep(10_000);
+  check('the placed call is adopted, no failure shown (coord 17 review #1)', !g.has('call.status', 'failed'), g.msgs.filter((m) => m.type === 'call.status'));
+  check('one call placed', (await fakeLast()).createCount === before + 1, (await fakeLast()).createCount - before);
+  g.send('call.end');
+  check('ends', await waitFor(() => g.has('call.status', 'ended'), 15_000));
+  await sleep(1_000);
+  check('the adopted call is ended with POST /end (coord 17 review #1)', (await fakeLast()).call!.endPosts === 1, (await fakeLast()).call!.endPosts);
+  check('no FaceTime room left behind', !(await roomExists(`ft-${g.sid}-1`)));
+  await g.close();
+}
+
 async function liveTurnRejectedOnce(): Promise<void> {
   out('scenario', { name: 'live: the turn\'s repeat create gets 409 invalid_state, a retry in the same turn places the call (call 5)' });
   const { createCount: before, queue: oldQueue } = await fakeLast();
@@ -493,10 +530,12 @@ if (health.mode === 'mock-call') {
   await liveQueuedCall();
   await liveQueueCancelled();
   await liveQueueExpired();
+  await liveQueueFailed();
   await liveTurnRejectedOnce();
   await liveTurnRejectedAlways();
   await liveTurnPlacedReplyLost('placed');
   await liveTurnPlacedReplyLost('lostReply');
+  await liveTurnPlacedAfterWaitOver();
   await liveEndDuringCreate();
   await liveStatusEnd();
   await liveFailedEnd();

@@ -32,7 +32,7 @@ const WEB_GONE_GRACE_MS = 10_000; // guess: long enough for a page reload to rej
 const WEAPON_WAIT_MS = 20_000; // spec D.3: Part D guarantees a prefab fallback by 15 s
 const QUEUE_POLL_MS = 1_500; // chert/agent/outbound.mjs polls at this rate
 const QUEUE_WAIT_MAX_MS = 120_000; // Chert's 202: "Chert keeps its place for up to 2 minutes"
-const QUEUE_GONE = new Set(['cancelled', 'canceled', 'expired']);
+const QUEUE_GONE = new Set(['cancelled', 'canceled', 'expired', 'failed']); // docs.trychert.com/facetime/limits names failed
 const TRACKS_VISIBLE_WAIT_MS = 3_000; // guess: the server showed the second track about 200 ms late in the fake-Chert e2e
 /** Longest that end() can take; main's hard stop on signals must be longer. */
 export const END_MAX_MS = Math.max(SETUP_WAIT_MS, CREATE_AFTER_CANCEL_MAX_MS, FAREWELL_WAIT_MS) + END_CALL_MAX_MS + CLEANUP_MARGIN_MS;
@@ -346,10 +346,16 @@ export class CallSession {
           warn('chert_queue_turn_failed_after_placing', { queueId: q.id, error: errText(e) });
           return adopt(placed);
         });
-        if (next && !('queue' in next)) { this.status('dialing'); return next; }
+        if (next && !('queue' in next)) { if (!this.ending) this.status('dialing'); return next; }
         if (next) { refusal = undefined; q = next.queue; }
       }
-      if (Date.now() > Math.max(giveUpAt, turnEndsAt ?? 0)) { warn('chert_queue_wait_over', { queueId: q.id, waitedMs: Date.now() - this.dialedAt }); throw refusal ?? new ChertError(0, 'line_busy'); }
+      if (Date.now() > Math.max(giveUpAt, turnEndsAt ?? 0)) {
+        // A turn's create that ran past the end may still have placed the call; that call is ours to end.
+        const placed = q.callId ?? (await getQueueEntry(q.id).catch(() => null))?.callId;
+        if (placed) return adopt(placed);
+        warn('chert_queue_wait_over', { queueId: q.id, waitedMs: Date.now() - this.dialedAt });
+        throw refusal ?? new ChertError(0, 'line_busy');
+      }
       await sleep(QUEUE_POLL_MS);
       if (this.ending) return null;
       q = await getQueueEntry(q.id).catch((e) => { warn('chert_queue_poll_failed', { error: errText(e) }); return q; });
