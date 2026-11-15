@@ -85,3 +85,23 @@ test('a small color shift on a yellow, cyan or dark object does not key it out',
     assert.equal(await opaqueIn(await keyOutPaint(orig, cut), 206, 106, 100, 300), 100 * 300, JSON.stringify(o));
   }
 });
+
+test('faint remnants of the removed hand and small scraps are cut away, the object stays', async () => {
+  const brown = { r: 120, g: 70, b: 30 };
+  const orig = await sharp(await solid(512, 512, { r: 255, g: 255, b: 255 })).composite([
+    { input: await solid(40, 180, brown), left: 236, top: 56 },
+    { input: await solid(40, 180, brown), left: 236, top: 276 },
+    { input: await solid(120, 100, { r: 200, g: 150, b: 120 }), left: 276, top: 200 },
+  ]).png().toBuffer();
+  const cut = await sharp(await solid(512, 512, { r: 0, g: 0, b: 0, alpha: 0 })).composite([
+    { input: await solid(40, 180, brown), left: 236, top: 56 },
+    { input: await solid(40, 180, brown), left: 236, top: 276 },
+    { input: await solid(120, 100, { r: 210, g: 210, b: 210, alpha: 60 / 255 }), left: 276, top: 200 },
+    { input: await solid(6, 6, { r: 230, g: 230, b: 230 }), left: 300, top: 320 },
+  ]).png().toBuffer();
+  const keyed = await keyOutPaint(orig, cut);
+  assert.equal(await opaqueIn(keyed, 276, 200, 120, 100), 0);
+  assert.equal(await opaqueIn(keyed, 300, 320, 6, 6), 0);
+  assert.equal(await opaqueIn(keyed, 236, 56, 40, 180), 40 * 180);
+  assert.equal(await opaqueIn(keyed, 236, 276, 40, 180), 40 * 180);
+});

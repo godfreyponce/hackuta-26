@@ -79,5 +79,37 @@ export async function keyOutPaint(original: Buffer, cut: Buffer): Promise<Buffer
     const darkOpaque = data[p + 3]! >= 128 && data[p + 1]! < PAINT_MIN_G;
     if (isGreen(data[p]!, data[p + 1]!, data[p + 2]!) && !darkOpaque && !isGreen(o[q]!, o[q + 1]!, o[q + 2]!, SHIFT_SLACK)) data.fill(255, p, p + 3).fill(0, p + 3, p + 4);
   }
+  dropRemnants(data, info.width, info.height);
   return sharp(data, { raw: { width: info.width, height: info.height, channels: 4 } }).png().toBuffer();
+}
+
+// Measured on 4 keyed cutouts: object parts were 13k px and up, stray scraps 27 px and under.
+const MIN_PART_OF_LARGEST = 0.01;
+
+/**
+ * remove-background leaves the hand's place as faint pixels (alpha under 128) and small scraps; Fast 3D built them into a grey chunk at the grip.
+ * Clear every pixel under alpha 128, then every opaque island under 1% of the largest one, to transparent white.
+ */
+function dropRemnants(data: Buffer, W: number, H: number): void {
+  const clear = (i: number) => data.fill(255, i * 4, i * 4 + 3).fill(0, i * 4 + 3, i * 4 + 4);
+  for (let i = 0; i < W * H; i++) if (data[i * 4 + 3]! < 128) clear(i);
+  const label = new Int32Array(W * H).fill(-1);
+  const parts: number[][] = [];
+  for (let s = 0; s < W * H; s++) {
+    if (label[s] !== -1 || data[s * 4 + 3] === 0) continue;
+    const part = [s], stack = [s];
+    label[s] = parts.length;
+    while (stack.length) {
+      const p = stack.pop()!, x = p % W;
+      for (const n of [x > 0 ? p - 1 : -1, x < W - 1 ? p + 1 : -1, p - W, p + W]) {
+        if (n < 0 || n >= W * H || label[n] !== -1 || data[n * 4 + 3] === 0) continue;
+        label[n] = parts.length;
+        part.push(n);
+        stack.push(n);
+      }
+    }
+    parts.push(part);
+  }
+  const largest = parts.reduce((m, p) => Math.max(m, p.length), 0);
+  for (const part of parts) if (part.length < largest * MIN_PART_OF_LARGEST) part.forEach(clear);
 }
