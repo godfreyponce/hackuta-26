@@ -92,6 +92,12 @@ export interface Enemy {
   bleedUntil: number;
   /** last stagger (anti stun-lock) */
   staggerT: number;
+  /** when he took his ring slot (flank waiters move to a free inner slot after 1.2 s) */
+  ringT: number;
+  /** a hard clash beat his guard aside until — counts as an opening */
+  guardBeatenUntil: number;
+  staggerCause: '' | 'throat';
+  neckWoundFrom: number;
   /** guard zone he's holding against your blade (reads where it's heading) */
   guard: { zone: GuardZone; setAt: number; nextReactAt: number };
   guardPose: [number, number, number];
@@ -134,6 +140,8 @@ export interface HitInfo {
   /** stroke commitment: tip travel (m) over the last 120 ms and its heading change (deg) */
   strokeLen?: number;
   strokeTurn?: number;
+  /** a blade you aren't driving (guard / parked / bouncing): it touches, it never severs */
+  noCut?: boolean;
 }
 
 export type HitKind = 'flesh' | 'glance' | 'blocked' | 'shield' | 'kill';
@@ -155,6 +163,8 @@ export interface EnemyArrow { pos: THREE.Vector3; vel: THREE.Vector3; prev: THRE
 export interface EnemyHooks {
   /** current wave (1..3) — sets attack turns and archetype skill */
   wave(): number;
+  /** the player's view yaw (rad, + = turned left) — wooers only strike from where he can see them */
+  playerYaw?(): number;
   /** the player's held blades: point and its velocity (world) — what the wooers' guards read */
   playerBlades(): { tip: THREE.Vector3; vel: THREE.Vector3 }[];
   /** Antinous changes phase (2: shield dropped + calls suitors, 3: desperate) */
@@ -265,7 +275,7 @@ export class EnemyManager {
       dead: false, diedAt: 0, ring: null, attack: null, nextAttackAt: 0, spot: null, lastHit: new Map(), spawnT: this.t,
       name: boss ? 'Antinous' : undefined, pinned: false, feastSeed: Math.random() * 10, forward: new THREE.Vector3(0, 0, 1),
       charging: false, blockTimes: [], flinch: { t: -9, dir: new THREE.Vector3(), amount: 0 }, bleedUntil: 0, gibs: [], staggerT: -9, throatBleedUntil: 0, neckWoundUntil: 0,
-      guard: { zone: 'none', setAt: -9, nextReactAt: 0 }, guardPose: [0.32, 0.24, 0.7], riposteDir: null, chainLeft: 0, chainAt: 0, chainDir: null, lastFeintT: -9, bossPhase: 1, bossBrokeInPhase: 0,
+      guard: { zone: 'none', setAt: -9, nextReactAt: 0 }, ringT: 0, guardBeatenUntil: 0, staggerCause: '', neckWoundFrom: 0, guardPose: [0.32, 0.24, 0.7], riposteDir: null, chainLeft: 0, chainAt: 0, chainDir: null, lastFeintT: -9, bossPhase: 1, bossBrokeInPhase: 0,
     };
     if (kind === 'archer') {
       const side = Math.random() < 0.5 ? -1 : 1;
@@ -421,7 +431,7 @@ export class EnemyManager {
       const d = Math.hypot(e.pos.x - sx, e.pos.z - sz);
       if (d < bestD) { bestD = d; best = k; }
     }
-    if (best >= 0) { e.ring = best; this.ringOwner[best] = e.id; e.nextAttackAt = Math.max(e.nextAttackAt, this.t + rand(0.25, 0.7)); }
+    if (best >= 0) { e.ring = best; this.ringOwner[best] = e.id; e.ringT = this.t; e.nextAttackAt = Math.max(e.nextAttackAt, this.t + rand(0.25, 0.7)); }
   }
 
   /** Skill per archetype (combat research): guard chance/react time, feints, combos, wind-up. */
@@ -433,7 +443,7 @@ export class EnemyManager {
       const ph = e.bossPhase;
       r = { pGuard: 0.75, react: ph >= 3 ? 0.17 : 0.2, pFeint: ph >= 2 ? 0.35 : 0.2, pCombo: 0.6, maxCombo: ph >= 2 ? 3 : 2, windup: ph >= 2 ? 0.65 : 0.8 };
     } else if (e.kind === 'archer') r = { pGuard: 0.2, react: 0.5, pFeint: 0, pCombo: 0, maxCombo: 0, windup: 0.9 };
-    else if (w <= 1) r = { pGuard: 0.4, react: 0.42, pFeint: 0, pCombo: 0, maxCombo: 0, windup: 0.95 };          // reveler
+    else if (w <= 1) r = { pGuard: 0.4, react: 0.42, pFeint: 0, pCombo: 0, maxCombo: 0, windup: 1.05 };          // reveler (wave 1 teaches)
     else if (e.look.shield !== 'none' || e.look.armor === 'muscle') r = { pGuard: 0.7, react: 0.34, pFeint: 0.15, pCombo: 0.2, maxCombo: 1, windup: 0.8 }; // hoplite
     else r = { pGuard: 0.55, react: 0.3, pFeint: w >= 3 ? 0.25 : 0.18, pCombo: w >= 3 ? 0.3 : 0.2, maxCombo: 1, windup: w >= 3 ? 0.75 : 0.8 }; // swordsman
     if (easy) { r.windup += 0.15; r.react += 0.15; r.pFeint = 0; }
@@ -447,6 +457,8 @@ export class EnemyManager {
     let n = 0;
     for (const o of this.list) if (o !== e && !o.dead && o.kind !== 'boss' && (o.state === 'windup' || o.state === 'strike')) n++;
     if (e.kind !== 'boss' && n >= turns) return false;
+    // only from where you can see him: a flank slot more than ~35° off your view waits (or moves in, below)
+    if (e.ring !== null && e.kind !== 'archer' && Math.abs(RING_ANGLES[e.ring] + (this.hooks.playerYaw?.() ?? 0)) > 0.62) return false;
     const planned = this.t + this.arche(e).windup + 0.12;
     for (const o of this.list) if (o !== e && o.attack && !o.attack.resolved && Math.abs(o.attack.impactAt - planned) < 0.4) return false;
     return this.t - this.lastImpactAt > 0.2;
@@ -494,7 +506,7 @@ export class EnemyManager {
     }
   }
 
-  private setState(e: Enemy, s: EState, dur = 0) { e.state = s; e.stateT = 0; e.stateDur = dur; }
+  private setState(e: Enemy, s: EState, dur = 0) { e.state = s; e.stateT = 0; e.stateDur = dur; e.staggerCause = ''; }
 
   private updateAI(e: Enemy, dt: number, head: THREE.Vector3) {
     const a = e.anim;
@@ -580,6 +592,11 @@ export class EnemyManager {
     if (e.look.shield !== 'none' && e.shieldHp > 0 && !e.severed.has(P.LArmL)) a.armL = [1.15, 0.05, 1.3];
 
     const atRing = e.ring !== null && target && Math.hypot(e.pos.x - target.x, e.pos.z - target.z) < 0.4;
+    // a flank waiter who can't strike from there moves in to a free inner slot
+    if (e.ring !== null && e.kind !== 'archer' && (e.state === 'wait' || e.state === 'approach') && this.t - e.ringT > 1.2
+      && Math.abs(RING_ANGLES[e.ring] + (this.hooks.playerYaw?.() ?? 0)) > 0.62) {
+      for (const k of [2, 1, 3]) if (this.ringOwner[k] === null) { this.ringOwner[e.ring] = null; e.ring = k; this.ringOwner[k] = e.id; e.ringT = this.t; break; }
+    }
     // step in during the first part of the wind-up
     if ((e.state === 'windup' || e.state === 'strike') && target && e.kind !== 'archer') {
       const k = 1 - Math.exp(-7 * dt);
@@ -779,15 +796,15 @@ export class EnemyManager {
     } else e.chainLeft = 0;
     // the damage arc shows the side the blade came from (its lane), exaggerated off the player's eye line
     const from = _v3.subVectors(at.lane, head).multiply(_v2.set(2.6, 1, 1)).add(head);
-    // per-wave blow damage (10 / 13 / 15), fists half; Antinous 22 (30 unblockable)
-    const base = e.kind === 'boss' ? (at.unblockable ? 30 : 22) : [10, 13, 15][Math.min(2, this.hooks.wave() - 1)] * (e.armed ? 1 : 0.5);
+    // per-wave blow damage (7 / 10 / 12 — wave 1 teaches), fists half; Antinous 22 (30 unblockable)
+    const base = e.kind === 'boss' ? (at.unblockable ? 30 : 22) : [7, 10, 12][Math.min(2, this.hooks.wave() - 1)] * (e.armed ? 1 : 0.5);
     switch (o) {
       case 'perfect':
-        this.addPosture(e, 40);
+        this.addPosture(e, 40, true);
         if (e.state !== 'broken') this.setState(e, 'stagger', 0.9);
         break;
       case 'beat':
-        this.addPosture(e, 25);
+        this.addPosture(e, 25, true);
         if (e.state !== 'broken') this.setState(e, 'recoil', 0.5);
         break;
       case 'block':
@@ -812,8 +829,10 @@ export class EnemyManager {
     e.attack = null;
   }
 
-  private addPosture(e: Enemy, amt: number) {
+  private addPosture(e: Enemy, amt: number, breaker = false) {
     e.posture = Math.min(100, e.posture + amt);
+    // Antinous breaks only through deflects / chambers / hard clashes — hacking at him caps at 95
+    if (e.kind === 'boss' && !breaker) e.posture = Math.min(e.posture, 95);
     e.postureT = this.t;
     // Antinous breaks at most once per phase — deflects and chambers are the way in, not hacking at him
     if (e.kind === 'boss' && e.bossBrokeInPhase === e.bossPhase) e.posture = Math.min(e.posture, 95);
@@ -826,11 +845,25 @@ export class EnemyManager {
     }
   }
 
+  /** Your blade met his (not a chamber): it costs him posture and knocks his guard; a hard clash beats it aside. */
+  onClash(e: Enemy, v: number) {
+    const ss = this.hooks.speedScale();
+    const k = clamp((v - 4 * ss) / (8 * ss), 0, 1);
+    if (v < 4 * ss) return;
+    this.addPosture(e, (6 + 14 * k) * (e.kind === 'boss' ? 0.5 : 1), v >= 12 * ss);
+    if (v >= 12 * ss) {
+      e.guard.zone = 'none'; e.guard.nextReactAt = this.t + 0.5; e.guardBeatenUntil = this.t + 0.5;
+      const at = e.attack;
+      if (e.state === 'windup' && at && 1 - (at.impactAt - this.t) / Math.max(0.1, at.windup) < 0.6) { at.impactAt += 0.15; at.startT += 0.15; }
+      combatLog({ kind: 'beatAside', id: e.id, v: +v.toFixed(2) });
+    }
+  }
+
   /** Player blade struck the wooer's sword during his wind-up: the attack is cancelled (chamber). */
   chamber(e: Enemy, point: THREE.Vector3) {
     if (e.state !== 'windup' || !e.attack) return false;
     e.attack = null;
-    this.addPosture(e, 20);
+    this.addPosture(e, 20, true);
     if ((e.state as EState) !== 'broken') this.setState(e, 'recoil', 0.45);
     this.fx.contact(point, _v.copy(this.hooks.playerHead()).sub(point), null, 6, 'clash');
     audio.clashEdge(0.75, audio.pan(point));
@@ -1083,14 +1116,18 @@ export class EnemyManager {
       if (severPart === null && this.lastNeckNearMiss) {
         dmg *= 1.8 / this.zoneMult(info.part, arm.neck);
         e.throatBleedUntil = this.t + 6;
-        e.neckWoundUntil = this.t + 8;
-        if (e.state !== 'broken') { e.attack = null; this.setState(e, 'stagger', 0.7); }
+        e.neckWoundUntil = this.t + 9; // (the weakened neck counts from 1 s after the gash — no instant follow-up)
+        e.neckWoundFrom = this.t + 1;
+        if (e.state !== 'broken' && !(e.kind === 'boss' && e.bossPhase === 1)) { e.attack = null; this.setState(e, 'stagger', 0.7); e.staggerCause = 'throat'; }
         this.fx.blood(info.point, info.dir, 14);
         combatLog({ kind: 'throatCut', speed: +(info.contactSpeed ?? info.speed).toFixed(2) });
       }
     }
     // Antinous can't be one-shot by any single blow (bombs, forged gifts): each costs him ≤ 22% — phases play out
     if (e.kind === 'boss' && !broken) dmg = Math.min(dmg, e.maxHp * 0.22);
+    // no one-shots: a hit that doesn't take a limb or the head costs a wooer ≤ 45% (melee) / 70% (thrown) of his life
+    if (e.kind !== 'boss' && !broken && severPart === null && info.source !== 'arrow' && info.source !== 'bomb')
+      dmg = Math.min(dmg, e.maxHp * (info.source === 'thrown' ? 0.7 : 0.45));
     res.damage = dmg;
     e.hp -= dmg;
     // Antinous: phase 2 at 60% (the gilded shield drops, he calls for help), phase 3 at 30% (desperate)
@@ -1190,6 +1227,7 @@ export class EnemyManager {
    */
   private cutCheck(e: Enemy, info: HitInfo, k: number): number | null {
     this.lastNeckNearMiss = false;
+    if (info.noCut) return null;
     const ss = this.hooks.speedScale();
     const L = e.look;
     const v = info.contactSpeed ?? info.speed;
@@ -1217,8 +1255,9 @@ export class EnemyManager {
         const flank = toPlayer.dot(e.forward) < Math.cos(THREE.MathUtils.degToRad(50));
         const atk = e.attack;
         const progress = e.state === 'windup' && atk ? 1 - (atk.impactAt - this.t) / Math.max(0.1, atk.windup) : 0;
-        const opening = corpse || flank || progress >= 0.6 || ['strike', 'stagger', 'recoil', 'broken', 'maimed', 'recover', 'down', 'getup'].includes(e.state);
-        const need = NECK_V * ss * k * (this.t < e.neckWoundUntil ? 0.7 : 1);
+        const offBalance = ['strike', 'stagger', 'recoil', 'broken', 'maimed', 'recover', 'down', 'getup'].includes(e.state) && !(e.state === 'stagger' && e.staggerCause === 'throat');
+        const opening = corpse || flank || progress >= 0.6 || offBalance || (e.kind !== 'boss' && this.t < e.guardBeatenUntil);
+        const need = NECK_V * ss * k * (this.t < e.neckWoundUntil && this.t >= e.neckWoundFrom ? 0.7 : 1);
         if (across && committed) {
           if (opening && v >= need) return P.Head;
           // no opening (he's square to you, guarding) or not quite fast enough: a throat gash instead
@@ -1242,7 +1281,7 @@ export class EnemyManager {
   }
 
   private zoneMult(part: number, neck: boolean) {
-    if (neck) return 1.8;
+    if (neck) return 1.35;
     if (part === P.Head) return 1.5;
     if (part === P.Torso || part === P.Pelvis) return 1;
     return 0.6;

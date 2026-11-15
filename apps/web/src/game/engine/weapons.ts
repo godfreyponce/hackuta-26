@@ -72,6 +72,8 @@ export interface WeaponHooks {
   onArrowsSpent?(): void;
   /** the hand the mouse is driving (keyboard/mouse), or null */
   drivenHand?(): Hand | null;
+  /** keyboard/mouse cut cap for a held blade: max strike speed from the cursor, and whether this blade is driven */
+  cutCap?(hand: Hand): { vCap: number; driven: boolean } | null;
   onChamber(w: WeaponEnt, at: THREE.Vector3): void;
   hitstop(ms: number): void;
   shake(v: number): void;
@@ -900,6 +902,14 @@ export class WeaponManager {
   }
 
   private tryHit(w: WeaponEnt, a: THREE.Vector3, b: THREE.Vector3, speed: number, source: HitInfo['source'], dir: THREE.Vector3, dt: number) {
+    // ONE cutting rule (keyboard/mouse): a held blade can't strike harder than your hand moved it — the cap is
+    // 1 + 1.4 × the cursor's commanded point speed; a blade you aren't driving (guard, parked, bouncing, just
+    // picked up) only touches and never severs. Replaces the old timers that could be bypassed.
+    let cap: { vCap: number; driven: boolean } | null = null;
+    if (w.state === 'held' && w.hand && source === 'melee') {
+      cap = this.hooks.cutCap?.(w.hand) ?? null;
+      if (cap) speed = Math.min(speed, cap.vCap, 16);
+    }
     // gameplay blade is 0.12 m longer than the visual one (research: forgiving reach)
     const axis = _v3.subVectors(b, a);
     const len = axis.length();
@@ -922,6 +932,7 @@ export class WeaponManager {
           if (intent && this.enemies.chamber(clash.e, clash.point)) { this.hooks.onChamber(w, clash.point); return; }
           const I = Math.min(1, Math.max(0, (speed - 1.5) / 10.5));
           this.fx.contact(clash.point, dir.clone().negate(), clash.bladeDir, speed, speed >= 2 ? 'clash' : 'block');
+          this.enemies.onClash(clash.e, speed);
           audio.clashEdge(I, audio.pan(clash.point));
           this.hooks.onRecoil(w.hand ?? 'right', dir, 0.1, 150);
           return;
@@ -934,12 +945,6 @@ export class WeaponManager {
     const last = w.hitCd.get(key) ?? -1;
     if (this.realT - last < 0.25) return;
     w.hitCd.set(key, this.realT);
-    if (source === 'melee' && this.realT - this.guardChangeT < 0.25) return;
-    // a blade that has just been picked up (it flies to the hand) never cuts on arrival
-    if (w.state === 'held' && this.realT - (w.attachT ?? -9) < 0.2) return;
-    // the parked off-hand blade (not the one the mouse drives) only touches — it blocks, it doesn't cut
-    const driven = this.hooks.drivenHand?.() ?? null;
-    if (w.state === 'held' && driven && w.hand && w.hand !== driven) speed = Math.min(speed, 1.4);
     const zone = this.enemies.zoneOf(hit.part);
     // arrows: damage follows the draw (60 m/s full draw → the old 22 m/s cap; a tap → about a third)
     let relSpeed = source === 'arrow' ? Math.min(22, speed * 0.367) : Math.min(speed, 32);
@@ -954,6 +959,7 @@ export class WeaponManager {
       const cur = new THREE.Vector3().copy(w.center).lerp(w.tip, reach);
       const prev = new THREE.Vector3().copy(w.prevCenter).lerp(w.prevTip, reach);
       contactSpeed = prev.lengthSq() > 0 ? cur.distanceTo(prev) / dt : speed;
+      if (cap) contactSpeed = Math.min(contactSpeed, cap.vCap, 16);
       relSpeed = Math.min(Math.max(contactSpeed, speed * 0.6 * reach), 32); // damage follows the contact point too
       const hs = this.speedHist.get(w.id) ?? [];
       const recent = hs.filter((h) => this.realT - h.t <= 0.12);
@@ -971,7 +977,7 @@ export class WeaponManager {
       amount: 0, zone, part: hit.part, point: hit.point, dir: dir.clone(), speed: relSpeed, sharp: w.spec.sharp,
       source, impulse: relSpeed * w.spec.massKg * (w.cls === 'blunt' || w.cls === 'shield' ? 14 : 7) + 40, weaponEntId: w.id,
       bladeAxis: w.cls === 'arrow' ? dir.clone() : axis.clone(), massKg: w.spec.massKg * (w.state === 'held' ? HELD_MULT : 1), classDamage: w.spec.damage,
-      bladeA: a.clone(), bladeB: b.clone(), contactFrac, contactSpeed, strokeLen, strokeTurn,
+      bladeA: a.clone(), bladeB: b.clone(), contactFrac, contactSpeed, strokeLen, strokeTurn, noCut: !!cap && !cap.driven,
     };
     if (w.cls === 'bomb' && w.state === 'free') { this.detonate(w); return; }
     const res = this.enemies.damage(hit.enemy, info);
