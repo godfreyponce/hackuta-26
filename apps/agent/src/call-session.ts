@@ -6,7 +6,7 @@ import {
 import { AccessToken, RoomServiceClient } from 'livekit-server-sdk';
 import {
   ChertError, chertEventKind, CREATE_AFTER_CANCEL_MAX_MS, createCall, endCall, endConfirmed, END_CALL_MAX_MS, getCallStatus, getEvents,
-  isQueuedStatus, terminalStatus, type ChertEvent,
+  isQueuedStatus, queuedNameAfter202, startsRingClock, terminalStatus, type ChertEvent,
 } from './chert.ts';
 import type { CallState, GameEvent, ServerToAgent, WeaponSpawn } from './contracts/protocol.ts';
 import { env } from './env.ts';
@@ -68,8 +68,10 @@ export class CallSession {
   private setup: Promise<void> | null = null;
   private bridgeReadyAt = 0;
   private dialedAt = 0;
-  private allocatedAt = 0; // when Chert took the call off the shared-line queue
+  private allocatedAt = 0; // when Chert took the call off the shared-line queue; the call cap counts from it
+  private ringStartedAt = 0; // first dialing or ringing status or event; the no-answer clock counts from it
   private statusAt202: string | undefined;
+  private queuedNameUnknown = false; // a 202 with no status: the first polled status names the queue
   private lastStatus: string | undefined;
   private chertSaidEnded = false; // a later POST /end may get a 4xx for a call that is already over
   private timers: NodeJS.Timeout[] = [];
@@ -267,6 +269,7 @@ export class CallSession {
     }, `${this.keyBase}-create`, () => !!this.ending);
     this.callId = id;
     if (queued) this.statusAt202 = status;
+    this.queuedNameUnknown = queued && !status;
     log('chert_call_created', { callId: id, queued, ms: Date.now() - this.dialedAt });
     await noteActiveCall(id, `${this.keyBase}-end`).catch(() => {});
     if (this.ending) {
@@ -308,7 +311,9 @@ export class CallSession {
       ]);
       if (this.ending) return;
       if (status !== undefined && status !== this.lastStatus) { this.lastStatus = status; log('chert_status', { status }); }
+      if (status && this.queuedNameUnknown) { this.queuedNameUnknown = false; this.statusAt202 = queuedNameAfter202(status); }
       if (status && !this.allocatedAt) this.checkQueue(status);
+      if (status && startsRingClock(status, this.statusAt202)) this.startRingClock(`status:${status}`);
       for (const ev of events) {
         if (seen.has(ev.id)) continue;
         seen.add(ev.id);
@@ -318,23 +323,28 @@ export class CallSession {
       }
       const ended = status ? terminalStatus(status) : null;
       if (ended) { this.chertSaidEnded = true; void this.end(ended === 'failed' ? 'chert_failed' : 'remote_ended', ended, { quick: true }); return; }
-      if (this.allocatedAt && !this.bridgeReadyAt && Date.now() - this.allocatedAt > ANSWER_TIMEOUT_MS) { await this.end('no_answer', 'failed'); return; }
+      if (this.ringStartedAt && !this.bridgeReadyAt && Date.now() - this.ringStartedAt > ANSWER_TIMEOUT_MS) { await this.end('no_answer', 'failed'); return; }
       await sleep(POLL_MS);
     }
   }
 
-  /** While the call waits on the shared line, the no-answer clock has not started. */
+  private startRingClock(via: string): void {
+    if (this.ringStartedAt) return;
+    this.ringStartedAt = Date.now();
+    log('chert_ring_clock_started', { via, msAfterDial: this.ringStartedAt - this.dialedAt });
+  }
+
   private checkQueue(status: string): void {
     if (isQueuedStatus(status, this.statusAt202)) return;
     this.allocatedAt = Date.now();
     log('chert_call_allocated', { status, queuedMs: this.allocatedAt - this.dialedAt });
   }
 
-  /** Allocation is decided only by checkQueue: event names are partly guessed, and a queued event must not start the clock. */
+  /** Allocation is decided only by checkQueue: event names are partly guessed, and a queued event must not start the call cap. */
   private onChertEvent(ev: ChertEvent): void {
     switch (chertEventKind(ev.type)) {
       case 'ready': this.onBridgeReady(ev.type); break;
-      case 'ringing': if (this.state === 'dialing') this.status('ringing'); break;
+      case 'ringing': if (startsRingClock(ev.type)) this.startRingClock(`event:${ev.type}`); if (this.state === 'dialing') this.status('ringing'); break;
       case 'no_video': this.say('cantSee', PRIORITY.scan); break;
       case 'ended': this.chertSaidEnded = true; void this.end(ev.reason ?? 'remote_ended', 'ended', { quick: true }); break;
       case 'failed': this.chertSaidEnded = true; void this.end(ev.reason ?? 'chert_failed', 'failed', { quick: true }); break;

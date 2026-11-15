@@ -17,7 +17,7 @@ The Chert FaceTime agent. It joins two LiveKit rooms per call: the game room (`g
 
 ## Live mode
 
-Set `AGENT_MODE=live` plus `CHERT_FACETIME_TOKEN`, `CHERT_PROJECT_ID`, `CHERT_LINE_ID`. The fake hub dials `OUTBOUND_TO`. Each test call costs Chert minutes (5 min per call, 50 min per day). Our line is shared with other teams, so POST /calls sends `when_busy: 'queue'`; a 202 means queued, and the 60 s no-answer clock and the call deadline start when Chert allocates the call. Ctrl-C ends the call through Chert; a second Ctrl-C quits at once.
+Set `AGENT_MODE=live` plus `CHERT_FACETIME_TOKEN`, `CHERT_PROJECT_ID`, `CHERT_LINE_ID`. The fake hub dials `OUTBOUND_TO`. Each test call costs Chert minutes (5 min per call, 50 min per day). Our line is shared with other teams, so POST /calls sends `when_busy: 'queue'`; a 202 means queued. The call deadline counts from when Chert allocates the call; the 60 s no-answer clock starts at the first dialing or ringing status or event. Ctrl-C ends the call through Chert; a second Ctrl-C quits at once.
 
 ## Files
 

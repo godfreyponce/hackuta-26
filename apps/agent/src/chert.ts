@@ -63,9 +63,11 @@ export async function createCall(c: CreateCall, idempotencyKey: string, cancelle
   for (let attempt = 0; ; attempt++) {
     try {
       const { status, body: res } = await req('/calls', { method: 'POST', headers: headers({ 'idempotency-key': idempotencyKey }), body });
-      const r = res as { data?: { id?: string; status?: string }; error?: { code?: string } | string; code?: string };
+      const r = res as { data?: { id?: string; status?: string }; id?: string; status?: string; error?: { code?: string } | string; code?: string };
       logRaw('chert_create_raw', { status, body: res });
-      if ((status === 201 || status === 202 || status === 200) && r.data?.id) return { id: r.data.id, queued: status === 202, status: r.data.status };
+      // Only the 201 envelope (id under data) was seen in the dry run; a 202 may put the id at the top.
+      const call = r.data?.id ? r.data : r;
+      if ((status === 201 || status === 202 || status === 200) && call.id) return { id: call.id, queued: status === 202, status: call.status };
       const code = (typeof r.error === 'object' ? r.error?.code : r.error) ?? r.code ?? 'unknown';
       if (status >= 400 && status < 500) throw new ChertError(status, code);
       throw new Error(`chert ${status} ${code}`);
@@ -85,6 +87,14 @@ export async function createCall(c: CreateCall, idempotencyKey: string, cancelle
  */
 export const isQueuedStatus = (status: string, statusAt202?: string): boolean => /queue/i.test(status) || status === statusAt202;
 
+const RINGING = /ring|dial|alert/i;
+
+/** The no-answer clock starts when the phone is dialed (the dry run showed `dialing`), not at the first non-queued status: a queued name may lack "queue". */
+export const startsRingClock = (status: string, statusAt202?: string): boolean => !isQueuedStatus(status, statusAt202) && RINGING.test(status);
+
+/** A 202 may carry no status. Then the first polled status is the queued name, unless the phone is already ringing. */
+export const queuedNameAfter202 = (firstPolled: string): string | undefined => RINGING.test(firstPolled) ? undefined : firstPolled;
+
 const ENDED = new Set(['ended', 'completed', 'cancelled', 'canceled']);
 const FAILED = new Set(['failed', 'declined']);
 
@@ -98,7 +108,7 @@ export function chertEventKind(type: string): 'ready' | 'ringing' | 'no_video' |
   if (name === 'remote_video_unavailable') return 'no_video';
   if (FAILED.has(name)) return 'failed';
   if (ENDED.has(name)) return 'ended';
-  if (/ring|dial|alert/i.test(type)) return 'ringing';
+  if (RINGING.test(type)) return 'ringing';
   return 'other';
 }
 

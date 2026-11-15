@@ -1,7 +1,7 @@
 // Chert REST client: when_busy queue (1d078dd), 202 = queued, failure reasons from events (review #5).
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
-import { chertEventKind, createCall, endCall, endConfirmed, getEvents, isQueuedStatus, terminalStatus } from '../src/chert.ts';
+import { chertEventKind, createCall, endCall, endConfirmed, getEvents, isQueuedStatus, queuedNameAfter202, startsRingClock, terminalStatus } from '../src/chert.ts';
 
 const realFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = realFetch; });
@@ -53,6 +53,31 @@ test('only a queued status means still queued (review 2 #4)', () => {
 test('the status the 202 reported still means queued, whatever its name', () => {
   assert.equal(isQueuedStatus('allocating', 'allocating'), true);
   assert.equal(isQueuedStatus('dialing', 'allocating'), false);
+});
+
+test('the no-answer clock waits through queued names without "queue" and starts at dialing (coord review 2225471 #1)', () => {
+  const firstRing = (statuses: string[], statusAt202?: string) => statuses.findIndex((s) => startsRingClock(s, statusAt202));
+  assert.equal(firstRing(['waiting', 'pending', 'dialing', 'active']), 2);
+  assert.equal(firstRing(['pending', 'allocating', 'dialing']), 2);
+  assert.equal(firstRing(['allocating', 'ringing'], 'allocating'), 1);
+  assert.equal(firstRing(['queued_for_dialing', 'alerting']), 1);
+});
+
+test('a queued event name with a dial word does not start the no-answer clock (own reviewer #1)', () => {
+  for (const t of ['call.dial_queued', 'queued_for_dialing']) assert.equal(startsRingClock(t), false, t);
+  assert.equal(startsRingClock('call.ringing'), true);
+});
+
+test('after a 202 with no status, the first polled status is the queued name, so the call cap waits too (own reviewer #2)', () => {
+  const statuses = ['waiting', 'waiting', 'allocating', 'dialing', 'active'];
+  const queuedName = queuedNameAfter202(statuses[0]!);
+  assert.equal(statuses.findIndex((s) => !isQueuedStatus(s, queuedName)), 2);
+  assert.equal(queuedNameAfter202('dialing'), undefined);
+});
+
+test('a 202 with the id outside data still gives the call id (coord review 2225471 N2)', async () => {
+  stubFetch(() => Response.json({ id: 'c9', status: 'waiting' }, { status: 202 }));
+  assert.deepEqual(await createCall(call, 'key-9'), { id: 'c9', queued: true, status: 'waiting' });
 });
 
 test('informational events that merely contain an end word do not end the call (review 3 #2)', () => {
