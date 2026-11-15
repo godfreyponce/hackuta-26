@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import type { WeaponClass } from '@ithaca/shared';
 import { PREFAB_BUILDERS } from '../game/engine/weaponGeo';
+import { dressWeapon } from '../game/engine/weaponSkins';
 
 const loader = new GLTFLoader();
 const cache = new Map<string, Promise<THREE.Object3D>>();
@@ -29,6 +30,7 @@ function Model({ url, cls, speed }: { url: string; cls: WeaponClass; speed: numb
     let alive = true;
     load(url).catch(() => load(`/prefabs/${cls}.glb`)).catch(() => PREFAB_BUILDERS[cls]()).then((o) => {
       if (!alive) return;
+      dressWeapon(o); // prefab parts get the textured bronze / wood / leather skins (forged models keep their own)
       const box = new THREE.Box3().setFromObject(o);
       const size = box.getSize(new THREE.Vector3());
       const c = box.getCenter(new THREE.Vector3());
