@@ -67,6 +67,7 @@ const send = (type, extra = {}) => {
 };
 
 $('#start').onclick = async () => {
+  $('#start').disabled = true; // a second click while the first is in flight joined the room twice
   const s = await (await fetch('/api/sessions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ playerId: 'dev' }) })).json();
   sid = s.sessionId;
   const tok = await (await fetch('/api/livekit/token', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sessionId: sid }) })).json();
