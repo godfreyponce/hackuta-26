@@ -217,7 +217,12 @@ export class Tracker {
     if (config.handRoi > 0) {
       // One model download for the three crop instances. Created one at a time: more than two in parallel
       // can fail with "ModuleFactory not set" (each instance loads its own wasm module).
-      this.handModel ??= new Uint8Array(await (await fetch(`${base}/hand_landmarker.task`)).arrayBuffer());
+      try {
+      if (!this.handModel) {
+        const res = await fetch(`${base}/hand_landmarker.task`);
+        if (!res.ok) throw new Error(`hand model ${res.status}`);
+        this.handModel = new Uint8Array(await res.arrayBuffer());
+      }
       const buf = this.handModel;
       const mk = (runningMode: 'VIDEO' | 'IMAGE') =>
         HandLandmarker.createFromOptions(fileset, {
@@ -232,6 +237,12 @@ export class Tracker {
       this.handVid.right = await mk('VIDEO');
       this.handImg = await mk('IMAGE');
       for (const h of HANDS) this.crop[h] ??= makeCropCanvas();
+      } catch (err) {
+        // the crops are an upgrade: losing them must not drag pose onto the CPU — stay on full-frame hands
+        console.warn('[motion] hand crops unavailable, using full-frame hand detection', err);
+        for (const h of HANDS) { this.handVid[h]?.close(); this.handVid[h] = null; }
+        this.handImg?.close(); this.handImg = null;
+      }
     }
     this.stats.delegate = delegate;
   }
@@ -408,7 +419,7 @@ export class Tracker {
         delete found[drop];
       }
     }
-    this.reseed(v, pose, ts, W, H, found);
+    this.reseed(v, pose, ts, W, H, found, only);
     const out: RawHand[] = [];
     for (const side of HANDS) {
       const h = found[side];
@@ -425,10 +436,11 @@ export class Tracker {
    * run. Every RESEED_EVERY frames, look for it on the full frame; a hit seeds the last-hand ROI, so the next
    * frames crop around it.
    */
-  private reseed(v: HTMLVideoElement, pose: RawLandmark[], ts: number, W: number, H: number, found: Partial<Record<Hand, RawHand>>): void {
+  private reseed(v: HTMLVideoElement, pose: RawLandmark[], ts: number, W: number, H: number, found: Partial<Record<Hand, RawHand>>, only: Hand | null = null): void {
     if (!this.hands || this.frameNo % RESEED_EVERY !== 0) return;
     const need = HANDS.filter(
       (s) =>
+        (!only || s === only) && // a side skipped this frame (alternating crops) isn't filled in: its grip didn't run
         !found[s] &&
         ts - this.roi[s].lastT >= RESEED_AFTER_MS &&
         (pose[POSE_HAND[s].wrist]?.visibility ?? 0) < config.handRoiMinWristVis,
@@ -506,10 +518,16 @@ export class Tracker {
     if (this.stats.width !== this.video.videoWidth) this.updateResolution();
     const threshold = this.opts.downgradeBelowFps;
     const degraded = this.stats.handsEveryOtherFrame || this.stats.handsAlternate;
-    if (threshold > 0 && !degraded && now - this.startedAt > 3000) {
+    // the rate frames really arrive at: a camera that reports 60 but delivers 30 (dim light) mustn't halve the budget
+    const camFps = Math.min(this.stream?.getVideoTracks()[0]?.getSettings().frameRate || 30, this.stats.fps || 30);
+    if (this.stats.handsAlternate) {
+      // recover: when both crops would fit comfortably again (pose + 2 hand crops < 60% of a frame) for 5 windows
+      const full = (this.stats.msPose ?? 0) + 2 * (this.stats.msHands ?? 0);
+      this.slowWindows = full < (0.6 * 1000) / camFps ? this.slowWindows + 1 : 0;
+      if (this.slowWindows >= 5) { this.stats.handsAlternate = false; this.slowWindows = 0; console.info('[motion] both hand crops every frame again'); }
+    } else if (threshold > 0 && !degraded && now - this.startedAt > 3000) {
       // Only when WE are the bottleneck: a Mac camera delivers 30 fps however fast detection is, and degrading
       // then costs hand rate for nothing.
-      const camFps = this.stream?.getVideoTracks()[0]?.getSettings().frameRate || 30;
       const processingBound = this.stats.msPerFrame > (0.8 * 1000) / camFps;
       this.slowWindows = this.stats.fps < threshold && processingBound ? this.slowWindows + 1 : 0;
       if (this.slowWindows >= 3) {

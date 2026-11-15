@@ -183,6 +183,8 @@ export class GripTracker {
       if (g.lostSince >= 0) {
         g.lastLostFrom = g.lostSince;
         g.lastLostTo = t;
+        // back after a long loss: old debounce counts are stale evidence (one closed frame 2 s ago + one now ≠ a fist)
+        if (t - g.lostSince > 500) g.above = g.below = 0;
       }
       g.lostSince = -1;
 

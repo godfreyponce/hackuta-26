@@ -310,7 +310,9 @@ export class Mapper {
 
     // The pose wrist score is low on a hand held toward the camera or in front of the body, exactly where the
     // hand model still sees it: a fresh, confident hand detection keeps the hand visible.
-    const handSeen = !!hd && b.handFresh[h] && hd.score >= 0.5;
+    // a side whose crop didn't run this frame (alternating crops, hands-every-other-frame) keeps the last verdict
+    // instead of flickering invisible and resetting its filters (velocity read 0 → throws released at 0 m/s)
+    const handSeen = !!hd && hd.score >= 0.5 && (b.handFresh[h] || (!b.handRan[h] && this.wasVisible[h]));
     if (b.wristVis[h] < config.wristMinVisibility && !handSeen) {
       this.loseHand(h, state);
       return;

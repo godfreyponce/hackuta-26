@@ -529,9 +529,7 @@ export class WeaponManager {
   }
   /** a loose weapon still flying or tumbling (> 1.5 m/s) — a webcam hand never re-targets what it just threw */
   private inFlight(w: WeaponEnt) {
-    if (w.state !== 'free') return false;
-    const v = w.body.linvel();
-    return v.x * v.x + v.y * v.y + v.z * v.z > 2.25;
+    return w.state === 'free' && w.speed > 1.5; // poststep keeps a free weapon's speed
   }
   /** a weapon already flying into this hand (point-and-grip pull or Telemachus' gift) */
   incomingTo(side: Hand) { return this.list.some((w) => w.state === 'incoming' && w.incoming?.toHand === side); }
@@ -638,7 +636,7 @@ export class WeaponManager {
   nearestForHand(h: HandView): WeaponEnt | null {
     let best: WeaponEnt | null = null, bestScore = Infinity;
     for (const w of this.list) {
-      if ((w.state !== 'racked' && w.state !== 'free') || w.cls === 'arrow' || w.cls === 'bow') continue;
+      if ((w.state !== 'racked' && w.state !== 'free') || w.cls === 'arrow' || w.cls === 'bow' || this.inFlight(w)) continue;
       const gp = this.gripWorld(w, _v);
       const d = gp.distanceTo(h.pos);
       if (w.state === 'free' && d > 2.5) continue;

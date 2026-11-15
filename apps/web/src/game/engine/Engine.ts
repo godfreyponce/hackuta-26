@@ -34,6 +34,8 @@ export interface EngineCallbacks {
 
 export interface PostState { sat: number; chroma: number; flash: number; letterbox: number; heal: number; exposure: number; verdigris: number }
 
+/** webcam hold-to-take: grip level that counts as a fist (Part C's latch is 0.65; a relaxed hand reads 0.5–0.6) */
+const LEVEL_GRIP = 0.65;
 const FIXED = 1 / 60;
 /** W7 safety net (webcam): ?autoarm=1 pulls a xiphos to an empty-handed player with a wooer close. Off by default. */
 const AUTO_ARM = typeof location !== 'undefined' && new URLSearchParams(location.search).get('autoarm') === '1';
@@ -138,6 +140,10 @@ export class Engine {
   private freshAt: Record<Hand, number> = { left: -9, right: -9 };
   private lostAt: Record<Hand, number> = { left: -9, right: -9 };
   private backAt: Record<Hand, number> = { left: -9, right: -9 };
+  /** how long the reacquire glide may run for each hand (0 = no glide: it was only a flicker) */
+  private glideFor: Record<Hand, number> = { left: 0, right: 0 };
+  /** a webcam release the flicker filter swallowed (so the next re-grip isn't read as "HANDS FULL") */
+  private ignoredRelAt: Record<Hand, number> = { left: -9, right: -9 };
   private wasLive: Record<Hand, boolean> = { left: false, right: false };
   private unnockT = 0;
   private unarmedT = 0;
@@ -290,7 +296,12 @@ export class Engine {
       kbPull: () => true,
       drivenHand: () => (isKeyboardMouse(this.input) ? this.input.mode.activeHand : null),
       cutCap: (hand) => {
-        if (!isKeyboardMouse(this.input)) return null;
+        if (!isKeyboardMouse(this.input)) {
+          // webcam: a hand drifting to rest or gliding back in isn't swinging — its blade only touches
+          const hv = this.handViews[hand];
+          if (!hv.visible || this.realT - this.backAt[hand] < this.glideFor[hand]) return { vCap: 1.2, driven: false };
+          return null;
+        }
         const intent = this.input.intentOf(hand);
         // a W lunge is deliberate: a touch that bounced the blade while the point lined up doesn't take the stab away
         const driven = intent === 'driven' || (intent === 'kicked' && this.input.thrustV > 1.5);
@@ -398,8 +409,9 @@ export class Engine {
           // the weapon stays; a real throw (≥ 4 m/s) always goes
           const sp = Math.hypot(e.vel.x, e.vel.y, e.vel.z);
           const held = this.weapons.heldBy(e.hand);
-          if (this.weapons.incomingTo(e.hand)) break;
-          if (held && held.attachT !== undefined && this.weapons.realT - held.attachT < 0.35 && sp < 4) break;
+          if (this.weapons.incomingTo(e.hand)) { this.ignoredRelAt[e.hand] = this.realT; break; }
+          if (held && held.attachT !== undefined && this.weapons.realT - held.attachT < 0.35 && sp < 4) { this.ignoredRelAt[e.hand] = this.realT; break; }
+          if (held) this.takeCd[e.hand] = this.realT + 0.4; // a throw: this hand doesn't grab back what it just let go
         }
         const v = this.bodyToWorldDir(new THREE.Vector3(e.vel.x, e.vel.y, e.vel.z));
         // webcam throws: the speed is good but the direction is 35–56° off (Part C) — steer toward the wooer you meant
@@ -442,7 +454,7 @@ export class Engine {
     if (W.heldBy(side)) {
       // a re-closed fist around what you hold just re-confirms the grip; a full pair of hands pointed at more says so
       const other: Hand = side === 'right' ? 'left' : 'right';
-      if (W.heldBy(other) && W.coneTarget(this.eye, hv.pos, null)) this.refuse('full');
+      if (W.heldBy(other) && this.realT - this.ignoredRelAt[side] > 1 && W.coneTarget(this.eye, hv.pos, null)) this.refuse('full');
       return;
     }
     // the bow: pointed at (closer in angle than any other target) it is taken up in the LEFT hand, only while that
@@ -540,14 +552,14 @@ export class Engine {
       if (t && t.state !== 'racked' && t.state !== 'free') t = null;
       this.target[side] = t;
       if (hs.visible && fresh && hs.grip < 0.4) this.levelArmed[side] = true;
-      const closed = free && hs.visible && fresh && hs.grip >= 0.5;
+      const closed = free && hs.visible && fresh && hs.grip >= LEVEL_GRIP;
       this.gripT[side] = closed ? this.gripT[side] + realDt : 0;
       if (closed && this.gripT[side] >= 0.12 && this.levelArmed[side] && !W.drawing && !W.holds('bow') && this.target[side]) {
         this.takeFor(side, 'level');
       }
     }
     // Part C cancels a nocked arrow without an event (left arm dropped): let the draw go too
-    const flags = dbg.getDebugGestures?.();
+    const flags = W.drawing ? dbg.getDebugGestures?.() : undefined;
     if (W.drawing && flags && !flags.nocked) {
       this.unnockT += realDt;
       if (this.unnockT > 0.25) { W.drawing = false; this.unnockT = 0; }
@@ -1033,7 +1045,8 @@ export class Engine {
       hv.visible = hs.visible;
       if (hs.visible !== this.wasLive[side]) {
         this.wasLive[side] = hs.visible;
-        if (hs.visible) this.backAt[side] = this.realT; else this.lostAt[side] = this.realT;
+        if (hs.visible) { this.backAt[side] = this.realT; this.glideFor[side] = this.realT - this.lostAt[side] > 0.4 ? 0.3 : 0; }
+        else this.lostAt[side] = this.realT;
       }
       if (hs.visible) {
         const tgt = this.handTarget[side].set(hs.pos.x, hs.pos.y, hs.pos.z).applyAxisAngle(new THREE.Vector3(0, 1, 0), this.yaw).add(this.eye);
@@ -1041,7 +1054,8 @@ export class Engine {
         this.recoilOff[side].multiplyScalar(Math.exp(-realDt / 0.15));
         const prev = hv.pos.clone();
         // webcam reacquire: the hand glides in from where it rested (no teleport, and the jump is no punch)
-        const back = this.tracked && this.realT - this.backAt[side] < 0.15;
+        let back = this.tracked && this.realT - this.backAt[side] < this.glideFor[side];
+        if (back && hv.pos.distanceTo(tgt) < 0.05) { this.glideFor[side] = 0; back = false; } // arrived
         // parried → input damped; during hitstop the hand that landed the blow sticks in the target and catches up after
         const rate = this.realT < this.dampUntil[side] ? 10 : this.realT < this.handStickUntil ? 6 : back ? 12 : 42;
         hv.pos.lerp(tgt, 1 - Math.exp(-rate * realDt)); // ≈0.5/frame at 60 fps, hides jitter
