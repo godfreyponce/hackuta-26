@@ -11,7 +11,7 @@ import {
 import type { CallState, GameEvent, ServerToAgent, WeaponSpawn } from '@ithaca/shared';
 import { env } from './env.ts';
 import type { Hub } from './hub.ts';
-import { pick, type LineKey } from './lines.ts';
+import { friendTitle, pick, prepareFriendLines, type LineKey } from './lines.ts';
 import { clearActiveCall, noteActiveCall } from './recovery.ts';
 import { errText, log, maskPhone, warn } from './log.ts';
 import { Mixer } from './mixer.ts';
@@ -130,7 +130,9 @@ export class CallSession {
   private async setUp(): Promise<void> {
     this.status('dialing');
     log('call_start', { sid: this.sid, friend: this.friend.name, phone: maskPhone(this.friend.phoneE164), ftRoom: this.ftRoom, mode: env.AGENT_MODE });
+    const friendLines = prepareFriendLines(this.friend.name); // the greeting names the friend; a miss streams it live
     await this.joinGameRoom();
+    await friendLines; // before the phone room: a bridge that joined while this ran would greet uncached, then go back to ringing
     if (this.ending) return;
     await this.joinFtRoom();
     if (this.ending) return;
@@ -211,7 +213,7 @@ export class CallSession {
     const lp = this.ft.localParticipant!;
     const videoTrack = LocalVideoTrack.createVideoTrack('agent-video', this.video.source);
     const audioTrack = LocalAudioTrack.createAudioTrack('quartermaster-audio', this.mixer.source);
-    await this.video.start(this.friend.name);
+    await this.video.start(friendTitle(this.friend.name));
     this.mixer.start(); // silence until bridge_ready
     await lp.publishTrack(videoTrack, new TrackPublishOptions({ source: TrackSource.SOURCE_CAMERA, simulcast: false }));
     await lp.publishTrack(audioTrack, new TrackPublishOptions({ source: TrackSource.SOURCE_MICROPHONE }));
@@ -408,7 +410,7 @@ export class CallSession {
   private onBridgeReady(via: string): void {
     if (this.bridgeReadyAt || this.ending) return;
     this.bridgeReadyAt = Date.now();
-    const g = pick('greeting');
+    const g = pick('greeting', this.friend.name);
     void this.narrator.sayNow(g.text, PRIORITY.greeting, g.pcm);
     log('greeting_started', { via, msAfterBridgeReady: Date.now() - this.bridgeReadyAt, cached: !!g.pcm });
     this.status('connected');
@@ -420,7 +422,7 @@ export class CallSession {
   }
 
   private say(key: LineKey, priority: number): void {
-    const l = pick(key);
+    const l = pick(key, this.friend.name);
     this.narrator.say(l.text, priority, l.pcm);
   }
 
@@ -452,7 +454,7 @@ export class CallSession {
 
   private friendKill(e: GameEvent): void {
     const name = this.lastWeapon?.objectName ?? e.data?.weaponName;
-    if (name) this.narrator.say(`Your ${name} just flattened a suitor. Ha!`, PRIORITY.trickshot);
+    if (name) this.narrator.say(`Your ${name} just flattened one of his men. Ha!`, PRIORITY.trickshot);
   }
 
   /** Every request gets a scan.status reply. A request during a scan repeats the current state. */
@@ -492,7 +494,7 @@ export class CallSession {
     this.awaitingWeapon = false;
     if (this.weaponTimer) clearTimeout(this.weaponTimer);
     if (!this.bridgeReadyAt) return;
-    this.narrator.say(`The ${w.displayName} is in his hands!`, PRIORITY.weapon);
+    this.narrator.say(`The ${w.displayName} is in Adam's hands!`, PRIORITY.weapon);
     if (fromOurScan) this.scanStatus('done', { objectName: w.objectName, displayName: w.displayName });
   }
 
@@ -515,7 +517,7 @@ export class CallSession {
       // Once POST /calls has started, wait for its whole retry run: a late reply is the only way to learn the call id.
       await Promise.race([this.setup?.catch(() => {}), sleep(this.dialedAt ? CREATE_AFTER_CANCEL_MAX_MS : SETUP_WAIT_MS)]);
       if (this.bridgeReadyAt && !opts.quick) {
-        const f = pick('farewell');
+        const f = pick('farewell', this.friend.name);
         await Promise.race([this.narrator.sayNow(f.text, PRIORITY.greeting, f.pcm), sleep(FAREWELL_WAIT_MS)]);
       }
       if (this.callId) log('chert_end', { status: (endStatus = await this.endChert()) });

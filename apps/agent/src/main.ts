@@ -7,7 +7,7 @@ import { CallSession, END_MAX_MS } from './call-session.ts';
 import type { ServerToAgent } from '@ithaca/shared';
 import { env } from './env.ts';
 import { Hub } from './hub.ts';
-import { ensureGreeting, greetingReady, prerenderLines } from './lines.ts';
+import { ensureLines, linesReady, prerenderLines } from './lines.ts';
 import { errText, log, warn } from './log.ts';
 import { recoverLeftovers } from './recovery.ts';
 
@@ -29,7 +29,7 @@ const hub = new Hub((m: ServerToAgent) => {
       hub.send({ type: 'call.status', sessionId: m.sessionId, state: 'ended', reason: 'no_active_call' });
       return;
     }
-    if (active || !greetingReady()) {
+    if (active || !linesReady()) {
       hub.send({ type: 'call.status', sessionId: m.sessionId, state: 'failed', reason: active ? 'line_busy' : 'tts_not_ready' });
       return;
     }
@@ -53,7 +53,7 @@ function startHealthServer(): void {
     const url = new URL(req.url ?? '/', 'http://localhost');
     const json = (code: number, body: unknown) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
     if (url.pathname === '/health') {
-      return json(200, { ok: true, mode: env.AGENT_MODE, chert: env.AGENT_MODE === 'live' ? env.CHERT_API_BASE : null, hub: hub.connected, greetingReady: greetingReady(), call: active ? { sid: active.sid, state: active.state } : null });
+      return json(200, { ok: true, mode: env.AGENT_MODE, chert: env.AGENT_MODE === 'live' ? env.CHERT_API_BASE : null, hub: hub.connected, linesReady: linesReady(), call: active ? { sid: active.sid, state: active.state } : null });
     }
     if (env.AGENT_MODE === 'mock-call' && url.pathname === '/dev/fake-phone') {
       res.writeHead(200, { 'content-type': 'text/html' });
@@ -91,6 +91,6 @@ process.on('unhandledRejection', (e) => { warn('unhandled_rejection', { error: e
 
 log('agent_starting', { mode: env.AGENT_MODE, chert: env.AGENT_MODE === 'live' ? env.CHERT_API_BASE : null, voice: env.ELEVENLABS_VOICE_ID, model: env.ELEVENLABS_MODEL_ID });
 await Promise.all([prerenderLines(), recoverLeftovers()]);
-if (!greetingReady()) { warn('greeting_not_cached_calls_refused'); void ensureGreeting(); }
+if (!linesReady()) { warn('lines_not_cached_calls_refused'); void ensureLines(); }
 hub.connect();
 startHealthServer();

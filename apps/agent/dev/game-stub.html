@@ -19,7 +19,7 @@
 <h3>Game stub: plays Part A for the agent (friend-view + player-mic)</h3>
 <div><button id="start">Start (session + room + WS)</button> <span id="status">idle</span></div>
 <div>
-  <button data-send="call.request">Call Telemachus</button>
+  <button data-send="call.request">Call friend</button>
   <button data-send="call.end">End call</button>
   <button data-send="scan.request">Ask for a weapon</button>
   <label><input type="checkbox" id="mic" checked> mic on (push-to-talk T)</label>
@@ -50,7 +50,7 @@ const logEl = $('#log');
 const log = (...a) => { logEl.textContent += new Date().toLocaleTimeString() + ' ' + a.join(' ') + '\n'; logEl.scrollTop = 1e9; };
 let sid = null, ws = null, room = null, micTrack = null, t0 = performance.now();
 
-// Fake game picture: moving "suitors" so the relay is visibly live.
+// Fake game picture: moving enemies so the relay is visibly live.
 const cv = $('#cv'), g = cv.getContext('2d');
 setInterval(() => {
   const t = (performance.now() - t0) / 1000;

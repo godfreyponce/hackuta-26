@@ -9,7 +9,7 @@ import { WebSocketServer, type WebSocket } from 'ws';
 const PORT = 8787;
 const { LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, AGENT_SHARED_SECRET } = process.env;
 if (!LIVEKIT_URL || !LIVEKIT_API_KEY || !LIVEKIT_API_SECRET || !AGENT_SHARED_SECRET) throw new Error('missing env');
-const FRIEND = { id: 'friend-1', name: 'Telemachus', phoneE164: process.env.OUTBOUND_TO || '+15555550123' };
+const FRIEND = { id: 'friend-1', name: 'Godfrey', phoneE164: process.env.OUTBOUND_TO || '+15555550123' };
 
 const log = (event: string, f: Record<string, unknown> = {}) => console.log(JSON.stringify({ t: new Date().toISOString(), src: 'fake-hub', event, ...f }));
 
@@ -134,14 +134,14 @@ const server = createServer(async (req, res) => {
       setTimeout(() => {
         const weapon = {
           weaponId: 'prefab-blunt', glbUrl: '/prefabs/blunt.glb', weaponClass: 'blunt', objectName: 'frying pan',
-          displayName: 'Pan of Telemachus', friendName: FRIEND.name, fallback: true,
+          displayName: 'Pan of Godfrey', friendName: FRIEND.name, fallback: true,
         };
         const msg = env('weapon.spawn', sid, { weapon });
         toWeb(sid, msg);
         toAgent(msg);
         log('weapon_spawn', { sid });
       }, 2_500);
-      return json(202, { forgeId, objectName: 'frying pan', displayName: 'Pan of Telemachus', weaponClass: 'blunt', quip: 'A frying pan? Bold. I like it. Forging now.' });
+      return json(202, { forgeId, objectName: 'frying pan', displayName: 'Pan of Godfrey', weaponClass: 'blunt', quip: 'A frying pan? Bold. I like it. Forging now.' });
     }
     json(404, { error: 'not_found' });
   } catch (e) {

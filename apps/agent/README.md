@@ -9,7 +9,7 @@ The Chert FaceTime agent. It joins two LiveKit rooms per call: the game room (`g
 3. `pnpm fake-hub` (stand-in for Part D on :8787)
 4. `pnpm dev` (the agent; health on :8788)
 5. Check it headless: `pnpm e2e`. It runs three scenarios (main loop, call.end during setup, web tab killed) and exits 1 on any failed check. Unit tests: `pnpm test`.
-6. Or by hand: open `http://localhost:8787/` (game stub), click Start, then Call Telemachus. Open the URL the agent logs (`/dev/fake-phone?sid=...`) and click Answer.
+6. Or by hand: open `http://localhost:8787/` (game stub), click Start, then Call friend. Open the URL the agent logs (`/dev/fake-phone?sid=...`) and click Answer.
 
 ## With the real server (Part D)
 

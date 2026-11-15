@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { dispose, type VideoFrame } from '@livekit/rtc-node';
-import { LINES } from '../src/lines.ts';
+import { LINES, pick } from '../src/lines.ts';
 import { AGENT_H, AGENT_W, CAPTION_LINGER_MS, CHUNK_MAX_CHARS, captionChunks, drawCaption, GAME_BOTTOM, keyWord, renderCaption, SPEECH_CHARS_PER_S, VideoRelay } from '../src/video.ts';
 
 /** Grey frame, caption chunk drawn: bounding box of every changed pixel (the pill), and the count of blue pixels. */
@@ -23,9 +23,9 @@ async function pillBox(chunk: string) {
 }
 
 const SIDE = 16; // the pill must not touch the frame edges
-const quip = 'Behold, the Enchanted Golden Frying Pan of the Western Isles, forged in fire and fury, heavier than it looks and twice as mean as a suitor on a bad day!';
-const longWord = 'Behold the Antidisestablishmentarianismophobicbroomstickofdoom, Telemachus!';
-const TEXTS = [...Object.values(LINES).flat(), quip, longWord, 'W'.repeat(22), 'm'.repeat(22), 'Behold the Megasledgehammer of doom!', 'Your Enchanted Golden Frying Pan of Ithaca just flattened a suitor. Ha!'];
+const quip = 'Behold, the Enchanted Golden Frying Pan of the Western Isles, forged in fire and fury, heavier than it looks and twice as mean as Odysseus on a bad day!';
+const longWord = 'Behold the Antidisestablishmentarianismophobicbroomstickofdoom, Warrior Godfrey!';
+const TEXTS = [...Object.values(LINES).flat(), quip, longWord, 'W'.repeat(22), 'm'.repeat(22), 'Behold the Megasledgehammer of doom!', 'Your Enchanted Golden Frying Pan of Ithaca just flattened one of his men. Ha!'];
 
 test('every fixed line and a long forge quip: one short line per chunk, pill whole inside the game, nothing in the bottom bar', async () => {
   for (const text of TEXTS) {
@@ -44,7 +44,7 @@ test('a chunk ends at a phrase break: a chunk never runs on past a sentence end'
     assert.ok(!/[.!?;:,]\s/.test(chunk), `"${chunk}" runs past a phrase break`);
   }
   assert.deepEqual(captionChunks('Two with one throw!'), ['Two with one throw!']);
-  assert.ok(captionChunks(LINES.greeting[0]).includes('Telemachus!'));
+  assert.ok(captionChunks(pick('greeting', 'Godfrey').text).includes('Warrior Godfrey!'));
 });
 
 test('a word that fits on a chunk is never split across two', () => {
@@ -62,7 +62,7 @@ test('the chunks together are the web subtitle text: nothing cut, no ellipsis ad
 
 test('key word: the last word not in NOT_KEY (stand-in for the last noun), drawn in blue', async () => {
   assert.equal(keyWord("Your father's home."), 'home.');
-  assert.equal(keyWord('Telemachus!'), 'Telemachus!');
+  assert.equal(keyWord('Godfrey!'), 'Godfrey!');
   assert.equal(keyWord('Two with one throw!'), 'throw!');
   assert.equal(keyWord('Hold it up to the camera'), 'camera');
   assert.equal(keyWord('A double! Ha!'), 'double!');
@@ -85,7 +85,7 @@ test('agent-video: caption pixels while a line plays, still there just after its
   let last: VideoFrame | null = null;
   relay.source.captureFrame = (f: VideoFrame) => { last = f; };
   const frame = () => Buffer.from(last!.data);
-  await relay.start('Telemachus');
+  await relay.start('Warrior Godfrey');
   await sleep(200);
   const plain = frame();
   try {
@@ -119,7 +119,7 @@ test('agent-video: a long line steps through its chunks by character share of it
   let last: VideoFrame | null = null;
   relay.source.captureFrame = (f: VideoFrame) => { last = f; };
   const frame = () => Buffer.from(last!.data);
-  await relay.start('Telemachus');
+  await relay.start('Warrior Godfrey');
   await sleep(200);
   const plain = frame();
   try {

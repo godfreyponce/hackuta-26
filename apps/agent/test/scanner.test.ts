@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { parseForgeReply } from '../src/scanner.ts';
 
-const d3 = { forgeId: 'f1', objectName: 'frying pan', displayName: 'Pan of Telemachus', weaponClass: 'blunt', quip: 'Forging now.' };
+const d3 = { forgeId: 'f1', objectName: 'frying pan', displayName: 'Pan of Godfrey', weaponClass: 'blunt', quip: 'Forging now.' };
 
 test('202 with forgeId and no detected field is a hit', () => {
   assert.deepEqual(parseForgeReply(202, d3), d3);

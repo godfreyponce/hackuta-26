@@ -193,7 +193,7 @@ export class VideoRelay {
   liveFrames = 0;
 
   async start(friendName: string): Promise<void> {
-    this.card = await titleCard(`Calling ${friendName}…`, 'Odysseus is home. The hall is full of suitors.');
+    this.card = await titleCard(`Calling ${friendName}…`, 'Odysseus is home, and he wants a fight.');
     this.timer = setInterval(() => {
       if (this.card && Date.now() - this.lastLive > LIVE_STALE_MS) this.source.captureFrame(this.withCaption(this.card, true));
     }, 1000 / CARD_FPS);

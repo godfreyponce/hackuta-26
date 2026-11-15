@@ -370,13 +370,13 @@ async function liveFailedEnd(): Promise<void> {
   await g.close();
 }
 
-const health = await (await fetch(`${AGENT}/health`)).json() as { mode: string; chert: string | null; greetingReady?: boolean };
+const health = await (await fetch(`${AGENT}/health`)).json() as { mode: string; chert: string | null; linesReady?: boolean };
 out('agent', health);
 if (health.mode === 'live' && !health.chert?.startsWith(`${HUB}/fake-chert`)) {
   out('refused', { why: 'the agent is live against the real Chert; these scenarios would place real calls. Run `pnpm dev:fake-chert`.' });
   process.exit(1);
 }
-check('/health shows greetingReady (integration #8)', health.greetingReady === true, health.greetingReady);
+check('/health shows linesReady (integration #8)', health.linesReady === true, health.linesReady);
 {
   out('scenario', { name: 'call.end with no call' });
   const g = await openGame();
