@@ -58,4 +58,7 @@ export const LAB_CSS = `
 .ithaca-lab .sliders h3 { font-size: 11px; margin: 8px 0 2px; color: var(--muted); font-weight: 600; }
 .ithaca-lab .sliders .row { margin-top: 8px; display: flex; gap: 6px; }
 .ithaca-lab small { text-transform: none; letter-spacing: 0; font-weight: 400; }
+.ithaca-lab .chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.ithaca-lab .chip { font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+.ithaca-lab .chip.on { background: var(--ok); border-color: var(--ok); color: #08150e; font-weight: 600; }
 `;

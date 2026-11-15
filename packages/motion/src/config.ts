@@ -58,6 +58,26 @@ export const DEFAULT_CONFIG = {
   requestHoldMs: 800,
   requestCooldownMs: 4000,
   requestMinVisibility: 0.3,
+
+  // ── swing / block / drink / bow (C.5) ──
+  swingSpeed: 2.2,
+  swingRearmSpeed: 1.0,
+  swingMinGrip: 0.5,
+  /** Hands within this of eye height (m). */
+  blockFaceDist: 0.35,
+  /** |forward.y| below this = forearm roughly horizontal. */
+  blockMaxForearmSlope: 0.6,
+  blockHoldMs: 150,
+  blockEndMs: 200,
+  drinkMouthDist: 0.12,
+  drinkHoldMs: 600,
+  bowElbowAngle: 150,
+  /** Left wrist must be at least this far forward (game z). */
+  bowWristForwardZ: -0.4,
+  bowNockDist: 0.15,
+  bowMinDraw: 0.2,
+  /** Left arm may drop this long before a nocked arrow is cancelled. */
+  bowCancelMs: 400,
 };
 
 export type MotionConfig = { -readonly [K in keyof typeof DEFAULT_CONFIG]: number };
@@ -114,5 +134,21 @@ export const CONFIG_RANGES: Record<string, Partial<Record<keyof MotionConfig, [n
     requestHoldMs: [200, 2000, 50],
     requestCooldownMs: [0, 10000, 250],
     requestMinVisibility: [0, 1, 0.05],
+  },
+  'Swing / block / drink / bow': {
+    swingSpeed: [0.5, 6, 0.1],
+    swingRearmSpeed: [0.2, 3, 0.1],
+    swingMinGrip: [0, 1, 0.05],
+    blockFaceDist: [0.1, 0.8, 0.01],
+    blockMaxForearmSlope: [0.1, 1, 0.05],
+    blockHoldMs: [0, 600, 10],
+    blockEndMs: [0, 800, 10],
+    drinkMouthDist: [0.04, 0.3, 0.01],
+    drinkHoldMs: [100, 2000, 50],
+    bowElbowAngle: [110, 180, 1],
+    bowWristForwardZ: [-0.8, -0.1, 0.01],
+    bowNockDist: [0.05, 0.4, 0.01],
+    bowMinDraw: [0, 0.8, 0.01],
+    bowCancelMs: [0, 1500, 50],
   },
 };

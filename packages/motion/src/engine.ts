@@ -2,7 +2,7 @@
 // so the live controller, the replay controller and unit tests all share it.
 import type { InputEvent, PlayerInputState } from '@ithaca/shared';
 import { config } from './config';
-import { Gestures } from './gestures';
+import { Gestures, type DetectorFlags } from './gestures';
 import { GripTracker } from './grip';
 import { HANDS, Mapper, type Body } from './mapping';
 import { copy3 } from './math';
@@ -153,6 +153,21 @@ export class Engine {
   /** In-flight hold gesture (call_sign / request_weapon / drink) for A's progress ring. */
   getPendingGesture(): PendingGesture | null {
     return this.state.tracking === 'off' ? null : this.gestures.pending(this.state.t);
+  }
+
+  detectorFlags(): DetectorFlags {
+    const d = this.gestures.debug;
+    return {
+      gripL: this.grip.isGripping('left'),
+      gripR: this.grip.isGripping('right'),
+      blockPose: d.blockPose,
+      blocking: this.gestures.isBlocking,
+      bowArm: d.leftArmExtended,
+      nocked: d.nocked,
+      phoneShape: d.callShape.left || d.callShape.right,
+      nearEar: d.callNearEar.left || d.callNearEar.right,
+      armsUp: d.armsUp,
+    };
   }
 
   get visibility(): number {

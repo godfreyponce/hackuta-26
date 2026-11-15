@@ -50,6 +50,8 @@ export function mountMotionLab(root: HTMLElement, opts: MotionLabOptions = {}): 
       <aside>
         <h2>Game space</h2>
         <canvas class="space"></canvas>
+        <h2>Detectors</h2>
+        <div class="chips" data-k="flags"></div>
         <h2>PlayerInputState</h2>
         <pre data-k="state"></pre>
         <h2>Events <button data-a="clear" class="small">clear</button></h2>
@@ -78,6 +80,7 @@ export function mountMotionLab(root: HTMLElement, opts: MotionLabOptions = {}): 
   const errorEl = badge('error');
   const spaceCv = q<HTMLCanvasElement>('canvas.space');
   const ring = q<HTMLElement>('.ring');
+  const flagsEl = badge('flags');
   buildSliders(q<HTMLElement>('.sliders'));
 
   let controller: LabController | null = null;
@@ -184,6 +187,10 @@ export function mountMotionLab(root: HTMLElement, opts: MotionLabOptions = {}): 
     if (now - lastReadout > 100) {
       lastReadout = now;
       updateBadges();
+      const flags = controller?.getDebugGestures?.();
+      flagsEl.innerHTML = flags
+        ? Object.entries(flags).map(([k, v]) => `<span class="chip${v ? ' on' : ''}">${k}</span>`).join('')
+        : '';
       const st = controller?.getState();
       stateEl.textContent = st ? JSON.stringify(st, round2, 1) : '';
     }

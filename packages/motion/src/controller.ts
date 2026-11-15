@@ -1,6 +1,7 @@
 import type { InputController, PlayerInputState } from '@ithaca/shared';
 import { config } from './config';
 import { Engine } from './engine';
+import type { DetectorFlags } from './gestures';
 import type { Body } from './mapping';
 import { loadProfile } from './profile';
 import { Tracker } from './tracker';
@@ -25,6 +26,8 @@ export interface MotionDebug {
   getDebugHands(): RawHand[];
   /** Derived skeleton in game space (joints, assigned hands). */
   getDebugBody(): Body | null;
+  /** Per-detector live flags (block pose, bow arm, phone shape, …). */
+  getDebugGestures(): DetectorFlags;
 }
 
 export interface MotionController extends InputController, MotionDebug {
@@ -71,5 +74,6 @@ export function createMotionController(opts: MotionControllerOptions = {}): Moti
     getDebugHands: () => tracker.getLastHands(),
     getDebugBody: () => engine.body,
     getPendingGesture: () => engine.getPendingGesture(),
+    getDebugGestures: () => engine.detectorFlags(),
   };
 }
