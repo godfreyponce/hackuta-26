@@ -37,7 +37,7 @@ exports[`golden: passing moves and calibration are unchanged > dodge left / righ
 
 exports[`golden: passing moves and calibration are unchanged > drink 1`] = `
 [
-  "17 grab right",
+  "0 grab right",
   "400 swing right 17.851 -0.224,0.971,-0.085",
   "1017 drink right",
   "1400 swing right 17.851 0.224,-0.971,0.085",
@@ -58,16 +58,16 @@ exports[`golden: passing moves and calibration are unchanged > request weapon 1`
 
 exports[`golden: passing moves and calibration are unchanged > right + left grab/release 1`] = `
 [
-  "367 grab right",
-  "783 release right",
-  "1200 grab left",
-  "1583 release left",
+  "300 grab right",
+  "717 release right",
+  "1133 grab left",
+  "1533 release left",
 ]
 `;
 
 exports[`golden: passing moves and calibration are unchanged > sword swing 1`] = `
 [
-  "17 grab right",
+  "0 grab right",
   "633 swing right 2.260 -0.977,0.000,-0.213",
 ]
 `;

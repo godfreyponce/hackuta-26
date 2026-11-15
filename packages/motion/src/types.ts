@@ -1,5 +1,6 @@
 // Raw tracker output (also the recording format) and C-specific extras that sit
 // on top of the shared InputController contract.
+import type { Hand } from '@ithaca/shared';
 
 /** Same shape as MediaPipe's Landmark / NormalizedLandmark, so results pass through without copying. */
 export interface RawLandmark {
@@ -14,9 +15,14 @@ export interface RawHand {
   image: RawLandmark[];
   /** 21 hand-world landmarks (meters, hand-centered), or null. */
   world: RawLandmark[] | null;
-  /** MediaPipe handedness label. It assumes a mirrored image, so on raw webcam frames it is swapped. */
+  /**
+   * MediaPipe handedness label. On these un-mirrored webcam frames it names the player's own hand
+   * ('Left' = the player's left hand); checked against the nearest pose wrist on the fixtures (490/496).
+   */
   label: 'Left' | 'Right';
   score: number;
+  /** Set by the pose-guided crop path: which pose wrist's crop found this hand. Old recordings have none. */
+  side?: Hand;
 }
 
 /** One tracker frame. `hands === null` means the hand model was skipped this frame (perf mode). */
@@ -25,6 +31,8 @@ export interface RawFrame {
   poseWorld: RawLandmark[] | null;
   poseImage: RawLandmark[] | null;
   hands: RawHand[] | null;
+  /** Sides whose hand crop was not run this frame (alternating L/R perf mode): they keep their last result. */
+  skippedHands?: Hand[];
 }
 
 export interface Recording {
@@ -51,6 +59,18 @@ export interface TrackerStats {
   height: number;
   handsEveryOtherFrame: boolean;
   error: string | null;
+  /** Pose model time per frame, ms, smoothed. */
+  msPose?: number;
+  /** Hand model time per frame (crops + retries, or the full-frame model), ms, smoothed. */
+  msHands?: number;
+  /** Same-frame IMAGE retries after a crop missed, during the last second. */
+  roiRetries?: number;
+  /** Per side, over the last second: frames with the pose wrist visible (≥ 0.5) where the hand model found that hand. */
+  handHitRate?: Record<Hand, number>;
+  /** Hands come from pose-guided crops this frame (config.handRoi > 0 and a pose). */
+  handRoi?: boolean;
+  /** Perf mode with crops: the left and right crops run on alternate frames. */
+  handsAlternate?: boolean;
 }
 
 export interface PendingGesture {

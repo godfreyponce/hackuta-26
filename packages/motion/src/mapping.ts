@@ -30,6 +30,8 @@ export class Body {
   t = 0;
   /** Seconds since previous frame (clamped). */
   dt = 1 / 60;
+  /** Video width / height of the current frame (hand image landmarks are normalized per axis). */
+  aspect = 16 / 9;
   /** Aspect-corrected image points (units of image height). Valid when ok. */
   readonly img: Vec2[] = Array.from({ length: 33 }, () => v2());
   /** Image shoulder width (image-height units) and meters per image unit at the shoulders. */
@@ -51,6 +53,8 @@ export class Body {
   readonly hand = perHand<RawHand | null>(() => null);
   /** True if the hand model ran this frame and found this hand. */
   readonly handFresh = perHand(() => false);
+  /** True if the hand model ran for this side this frame (false on skipped / alternate frames). */
+  readonly handRan = perHand(() => false);
   /** Aspect-corrected palm center in image space (valid when hand[side]). */
   readonly palmImg = perHand(() => v2());
   /** Upper arm / forearm image length ÷ shoulder width (for calibration + depth). */
@@ -110,11 +114,14 @@ export class Mapper {
     aspect: number,
     profile: Profile,
     state: PlayerInputState,
+    skippedHands?: readonly Hand[],
   ): Body {
     const b = this.body;
+    for (const h of HANDS) b.handRan[h] = !!hands && !skippedHands?.includes(h);
     b.dt = this.lastT < 0 ? 1 / 60 : clamp((t - this.lastT) / 1000, 1 / 240, 0.1);
     this.lastT = t;
     b.t = t;
+    b.aspect = aspect;
     this.aspect = aspect;
 
     if (!poseImage || !poseWorld || poseImage.length < 33 || poseWorld.length < 33) {
@@ -125,7 +132,7 @@ export class Mapper {
         b.handFresh[h] = false;
         this.loseHand(h, state);
       }
-      if (hands) this.assignHands(hands, null);
+      if (hands) this.assignHands(hands, null, skippedHands);
       return b;
     }
     b.ok = true;
@@ -179,7 +186,7 @@ export class Mapper {
     }
 
     this.updateBody(profile, state);
-    if (hands) this.assignHands(hands, poseImage);
+    if (hands) this.assignHands(hands, poseImage, skippedHands);
     else for (const h of HANDS) b.handFresh[h] = false;
 
     for (const h of HANDS) this.updateHand(h, profile, state, aspect);
@@ -222,29 +229,46 @@ export class Mapper {
 
   /**
    * C.2: associate detected hands with pose wrists (nearest wrist in image space).
-   * Fixes handedness flips; falls back to MediaPipe's label, which is mirrored on raw webcam frames.
+   * Hands from the pose-guided crops carry `side` and are taken as is. Otherwise: nearest pose wrist, falling
+   * back to MediaPipe's label, which names the player's own hand on these un-mirrored frames ('Left' = left;
+   * checked on the fixtures: 490 of 496 labels match the nearest pose wrist on the same side).
    */
-  private assignHands(hands: RawHand[], poseImage: RawLandmark[] | null): void {
+  private assignHands(hands: RawHand[], poseImage: RawLandmark[] | null, skipped?: readonly Hand[]): void {
+    const b = this.body;
+    const prevL = b.hand.left, prevR = b.hand.right;
+    this.assignFresh(hands, poseImage);
+    // A side whose crop was not run this frame keeps its last result (not fresh), like a skipped frame.
+    if (skipped) {
+      if (skipped.includes('left') && !b.handFresh.left) b.hand.left = prevL;
+      if (skipped.includes('right') && !b.handFresh.right) b.hand.right = prevR;
+    }
+  }
+
+  private assignFresh(hands: RawHand[], poseImage: RawLandmark[] | null): void {
     const b = this.body;
     b.hand.left = b.hand.right = null;
     b.handFresh.left = b.handFresh.right = false;
-    const bySwappedLabel = (hd: RawHand): Hand => (hd.label === 'Left' ? 'right' : 'left');
+    const byLabel = (hd: RawHand): Hand => (hd.label === 'Left' ? 'left' : 'right');
     const put = (h: Hand, hd: RawHand) => {
       b.hand[h] = hd;
       b.handFresh[h] = true;
     };
+    if (hands.length && hands.every((hd) => hd.side)) {
+      for (const hd of hands) put(hd.side as Hand, hd);
+      return;
+    }
     const h0 = hands[0], h1 = hands[1];
     if (!h0) return;
     if (!poseImage) {
-      put(bySwappedLabel(h0), h0);
-      if (h1 && !b.hand[bySwappedLabel(h1)]) put(bySwappedLabel(h1), h1);
+      put(byLabel(h0), h0);
+      if (h1 && !b.hand[byLabel(h1)]) put(byLabel(h1), h1);
       return;
     }
     const d = (hd: RawHand, h: Hand) => dist2(this.handWristImg(hd, tmpA), b.img[POSE_IDX[h].wrist] as Vec2);
     const maxD = config.assocMaxDist;
     if (!h1) {
       const dl = d(h0, 'left'), dr = d(h0, 'right');
-      const side: Hand = Math.min(dl, dr) > maxD ? bySwappedLabel(h0) : dl < dr ? 'left' : 'right';
+      const side: Hand = Math.min(dl, dr) > maxD ? byLabel(h0) : dl < dr ? 'left' : 'right';
       put(side, h0);
       return;
     }
@@ -284,7 +308,10 @@ export class Mapper {
       b.palmImg[h].y = py / 5;
     }
 
-    if (b.wristVis[h] < config.wristMinVisibility) {
+    // The pose wrist score is low on a hand held toward the camera or in front of the body, exactly where the
+    // hand model still sees it: a fresh, confident hand detection keeps the hand visible.
+    const handSeen = !!hd && b.handFresh[h] && hd.score >= 0.5;
+    if (b.wristVis[h] < config.wristMinVisibility && !handSeen) {
       this.loseHand(h, state);
       return;
     }

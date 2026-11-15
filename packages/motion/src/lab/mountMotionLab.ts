@@ -43,6 +43,7 @@ export function mountMotionLab(root: HTMLElement, opts: MotionLabOptions = {}): 
       <span class="badge" data-k="fps">– fps</span>
       <span class="badge" data-k="ms">– ms</span>
       <span class="badge" data-k="res">–</span>
+      <span class="badge" data-k="roi" hidden>–</span>
       <span class="badge" data-k="tracking">off</span>
       <span class="badge" data-k="vis">vis –</span>
       <span class="badge" data-k="calibrated">uncalibrated</span>
@@ -318,10 +319,34 @@ export function mountMotionLab(root: HTMLElement, opts: MotionLabOptions = {}): 
     if (frame.poseImage) {
       drawSkeleton(ctx2d, frame.poseImage, POSE_EDGES, w, h, COLOR.pose, lw, 0.5);
     }
+    const rois = controller?.getDebugRois?.();
+    if (rois) {
+      ctx2d.save();
+      ctx2d.setLineDash([lw * 4, lw * 3]);
+      ctx2d.lineWidth = lw;
+      ctx2d.font = `${Math.round(lw * 7)}px system-ui, sans-serif`;
+      for (const side of ['left', 'right'] as const) {
+        const r = rois[side];
+        if (!r) continue;
+        const color = side === 'left' ? COLOR.left : COLOR.right;
+        ctx2d.strokeStyle = color;
+        // Rects are in source-video px, the same space as this canvas.
+        ctx2d.strokeRect(r.x0, r.y0, r.size, r.size);
+        ctx2d.fillStyle = color;
+        // The stage is CSS-mirrored (selfie view): flip the label back so it reads, at the rect's on-screen top-left.
+        ctx2d.save();
+        ctx2d.translate(r.x0 + r.size - lw * 2, r.y0 + lw * 8);
+        ctx2d.scale(-1, 1);
+        ctx2d.fillText(side === 'left' ? 'L crop' : 'R crop', 0, 0);
+        ctx2d.restore();
+      }
+      ctx2d.restore();
+    }
     const hands = controller?.getDebugHands?.() ?? frame.hands ?? [];
     for (const hand of hands) {
-      // Raw label is mirrored: MediaPipe "Left" on an un-mirrored image is the player's right.
-      const color = hand.label === 'Left' ? COLOR.right : COLOR.left;
+      // Crop hands carry their side; otherwise MediaPipe's label names the player's own hand on these frames.
+      const left = hand.side ? hand.side === 'left' : hand.label === 'Left';
+      const color = left ? COLOR.left : COLOR.right;
       drawSkeleton(ctx2d, hand.image, HAND_EDGES, w, h, color, lw, 0);
     }
   }
@@ -333,9 +358,22 @@ export function mountMotionLab(root: HTMLElement, opts: MotionLabOptions = {}): 
     badge('delegate').dataset.level = s?.delegate === 'GPU' ? 'ok' : s?.delegate === 'CPU' ? 'warn' : '';
     badge('fps').textContent = s ? `${s.fps.toFixed(0)} fps` : '– fps';
     badge('fps').dataset.level = !s || !s.fps ? '' : s.fps >= 40 ? 'ok' : s.fps >= 30 ? 'warn' : 'bad';
-    badge('ms').textContent = s ? `${s.msPerFrame.toFixed(1)} ms` : '– ms';
-    badge('ms').dataset.level = !s || !s.msPerFrame ? '' : s.msPerFrame <= 6 ? 'ok' : s.msPerFrame <= 12 ? 'warn' : 'bad';
-    badge('res').textContent = s?.width ? `${s.width}×${s.height}${s.handsEveryOtherFrame ? ' · hands ½' : ''}` : '–';
+    badge('ms').textContent = s
+      ? `${s.msPerFrame.toFixed(1)} ms${s.msPose !== undefined && s.msHands !== undefined && s.msPerFrame ? ` (pose ${s.msPose.toFixed(1)} · hands ${s.msHands.toFixed(1)})` : ''}`
+      : '– ms';
+    // Budget: a 30 fps camera gives 33 ms per frame; the perf fallback starts at 0.8 of that.
+    badge('ms').dataset.level = !s || !s.msPerFrame ? '' : s.msPerFrame <= 20 ? 'ok' : s.msPerFrame <= 26.7 ? 'warn' : 'bad';
+    badge('res').textContent = s?.width
+      ? `${s.width}×${s.height}${s.handsEveryOtherFrame ? ' · hands ½' : ''}${s.handsAlternate ? ' · hands L/R alt' : ''}`
+      : '–';
+    const roiB = badge('roi');
+    const hr = s?.handHitRate;
+    roiB.hidden = !s || s.handRoi === undefined;
+    if (s && hr) {
+      roiB.textContent = `${s.handRoi ? 'hand crops' : 'full frame'} · hit L ${(hr.left * 100).toFixed(0)}% R ${(hr.right * 100).toFixed(0)}% · retries ${s.roiRetries ?? 0}/s`;
+      const lo = Math.min(hr.left, hr.right);
+      roiB.dataset.level = !s.fps ? '' : lo >= 0.9 ? 'ok' : lo >= 0.6 ? 'warn' : 'bad';
+    }
     const tracking = st?.tracking ?? 'off';
     badge('tracking').textContent = tracking;
     badge('tracking').dataset.level = tracking === 'ok' ? 'ok' : tracking === 'off' ? '' : tracking === 'lost' ? 'bad' : 'warn';

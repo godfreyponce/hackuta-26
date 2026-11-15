@@ -100,8 +100,8 @@ function makeHand(side: 'left' | 'right', wrist: P3, elbow: P3, spec: HandSpec):
   }
   const image = local.map(([x, y, z]) => toImage([wrist[0] + x, wrist[1] + y, wrist[2] + z]));
   const world = local.map(([x, y, z]) => ({ x: -x, y: -y, z, visibility: 1 }));
-  // MediaPipe handedness assumes a mirrored image: the player's right hand is labeled "Left".
-  return { image, world, label: side === 'right' ? 'Left' : 'Right', score: 0.95 };
+  // On un-mirrored webcam frames MediaPipe's label names the player's own hand (fixtures: 490/496).
+  return { image, world, label: side === 'left' ? 'Left' : 'Right', score: 0.95 };
 }
 
 /** Runs frames at a fixed rate starting at t0; returns the last t. */

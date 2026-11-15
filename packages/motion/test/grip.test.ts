@@ -82,4 +82,85 @@ describe('grip (C.4)', () => {
     expect(e.grip.isGripping('right')).toBe(true);
     expect(types(events)).not.toContain('release');
   });
+
+  // ── M1: the latch can't deadlock ──
+  const FIST: FrameSpec = { hands: { right: { curl: 1 } } };
+  const OPEN: FrameSpec = { hands: { right: { curl: 0 } } };
+
+  it('resyncGrip(keep=false) with a fist held: one release, then exactly one grab within 2 hand frames', () => {
+    const { e, events, push } = engine();
+    let t = run(push, 400, FIST);
+    expect(types(events).filter((x) => x === 'grab')).toHaveLength(1);
+    events.length = 0;
+    e.resyncGrip({ left: false, right: false });
+    expect(events).toEqual([{ type: 'release', hand: 'right', vel: { x: 0, y: 0, z: 0 } }]);
+    expect(e.grip.isGripping('right')).toBe(false);
+    events.length = 0;
+    for (let i = 0; i < 2; i++, t += 33) push(frame(t, FIST));
+    expect(events).toEqual([{ type: 'grab', hand: 'right' }]);
+    run(push, 600, FIST, t);
+    expect(events).toEqual([{ type: 'grab', hand: 'right' }]);
+  });
+
+  it('resyncGrip(keep=true) keeps the latch: no events, and the next open hand releases', () => {
+    const { e, events, push } = engine();
+    const t = run(push, 400, FIST);
+    events.length = 0;
+    e.resyncGrip({ left: false, right: true });
+    expect(events).toEqual([]);
+    expect(e.grip.isGripping('right')).toBe(true);
+    run(push, 300, OPEN, t);
+    expect(types(events)).toEqual(['release']);
+  });
+
+  it('resyncGrip(keep=true) on an open hand the game holds a weapon in: releases on the next open frames', () => {
+    const { e, events, push } = engine();
+    const t = run(push, 300, OPEN);
+    e.resyncGrip({ left: false, right: true });
+    run(push, 200, OPEN, t);
+    expect(types(events)).toEqual(['release']);
+  });
+
+  it('50% hand dropout: an open hand still releases within 3 hand frames', () => {
+    const { e, events, push } = engine();
+    let t = run(push, 400, FIST);
+    events.length = 0;
+    // A weakly-open reading (norm ~0.16: past gripOff but not the one-frame gripStrongOff), every other
+    // hand frame missed. A miss used to reset the debounce, so this never released.
+    const halfOpen: FrameSpec = { hands: { right: { curl: 0.2 } } };
+    let handFrames = 0;
+    while (!events.length && handFrames < 12) {
+      push(frame(t, handFrames % 2 === 0 ? halfOpen : { hands: {} }));
+      t += 33;
+      handFrames++;
+    }
+    expect(types(events)).toEqual(['release']);
+    expect(handFrames).toBeLessThanOrEqual(3);
+    expect(e.grip.isGripping('right')).toBe(false);
+  });
+
+  it('a hand lost while gripping stays latched (no timeout) until it is seen open', () => {
+    const { e, events, push } = engine();
+    let t = run(push, 400, FIST);
+    t = run(push, 3000, { hands: {} }, t);
+    expect(e.grip.isGripping('right')).toBe(true);
+    run(push, 200, OPEN, t);
+    expect(types(events)).toEqual(['grab', 'release']);
+  });
+
+  it('alternate L/R frames: the skipped side holds its grip state', () => {
+    const { e, events, push } = engine();
+    let t = run(push, 400, { hands: { right: { curl: 1 }, left: { curl: 0 } } });
+    for (let i = 0; i < 30; i++, t += 33) {
+      const f = frame(t, { hands: { right: { curl: 1 }, left: { curl: 0 } } });
+      // Only one side's crop runs per frame.
+      const side = i % 2 ? 'left' : 'right';
+      f.hands = (f.hands ?? []).filter((h) => (h.label === 'Left' ? 'left' : 'right') === side);
+      f.skippedHands = [side === 'left' ? 'right' : 'left'];
+      push(f);
+    }
+    expect(e.grip.isGripping('right')).toBe(true);
+    expect(types(events)).toEqual(['grab']);
+  });
 });
+
