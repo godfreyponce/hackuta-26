@@ -185,6 +185,9 @@ export class CallSession {
     this.game.on(RoomEvent.Disconnected, (r) => { if (!this.ending) warn('game_room_disconnected', { reason: r }); });
     await this.game.connect(env.LIVEKIT_URL, await mint(AGENT_GAME_IDENTITY, this.gameRoomName, '2h'), { autoSubscribe: true, dynacast: false });
     log('game_room_joined', { room: this.gameRoomName });
+    // The laptop's face box plays this and moves the mouth to it. Cosmetic: a failed publish must not end the call.
+    void this.game.localParticipant!.publishTrack(LocalAudioTrack.createAudioTrack('quartermaster-voice', this.mixer.voice), new TrackPublishOptions({ source: TrackSource.SOURCE_MICROPHONE }))
+      .then(() => log('qm_voice_published'), (e) => warn('qm_voice_publish_failed', { error: errText(e) }));
   }
 
   private async joinFtRoom(): Promise<void> {

@@ -1,4 +1,4 @@
-// Stand-in for Part D's server on :8787, for mock-call development only.
+// Stand-in for Part D's server on :8787 (FAKE_HUB_PORT), for mock-call development only.
 // Routes WS messages per the spec 4.1 hub table, mints game-room tokens, and fakes /api/forge.
 import { randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
@@ -6,7 +6,7 @@ import { createServer, type IncomingMessage } from 'node:http';
 import { AccessToken, RoomServiceClient } from 'livekit-server-sdk';
 import { WebSocketServer, type WebSocket } from 'ws';
 
-const PORT = 8787;
+const PORT = Number(process.env.FAKE_HUB_PORT || 8787);
 const { LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, AGENT_SHARED_SECRET } = process.env;
 if (!LIVEKIT_URL || !LIVEKIT_API_KEY || !LIVEKIT_API_SECRET || !AGENT_SHARED_SECRET) throw new Error('missing env');
 const FRIEND = { id: 'friend-1', name: 'Godfrey', phoneE164: process.env.OUTBOUND_TO || '+15555550123' };

@@ -1,4 +1,5 @@
 // The one-voice rule (spec B.5): one 48 kHz mono AudioSource, 10 ms frames, out = tts + mic x g.
+// A second source, voice, carries the TTS alone for the game room's face box (never the player's own mic).
 import { AudioFrame, AudioSource, AudioStream, type RemoteTrack } from '@livekit/rtc-node';
 import { errText, warn } from './log.ts';
 
@@ -10,10 +11,21 @@ const GATE_DBFS = -45;
 const attackCoef = 1 - Math.exp(-1 / (0.03 * RATE));
 const releaseCoef = 1 - Math.exp(-1 / (0.25 * RATE));
 
+export function mixFrame(tts: Float32Array, mic: Int16Array, gain: number, target: number): { out: Int16Array; voice: Int16Array; gain: number } {
+  const out = new Int16Array(tts.length);
+  for (let i = 0; i < tts.length; i++) {
+    gain += (target - gain) * (target < gain ? attackCoef : releaseCoef);
+    const x = (tts[i]! + mic[i]! * gain) / 32768;
+    out[i] = Math.round(Math.tanh(x) * 32767);
+  }
+  return { out, voice: Int16Array.from(tts), gain };
+}
+
 type Clip = { chunks: Int16Array[]; pos: number; streaming: boolean; done: () => void; cancelled: boolean };
 
 export class Mixer {
   readonly source: AudioSource;
+  readonly voice: AudioSource;
   private clips: Clip[] = [];
   private mic = new Int16Array(0);
   private micStream: AudioStream | null = null;
@@ -23,6 +35,7 @@ export class Mixer {
   constructor() {
     // Small native queue so a greeting starts within ~100 ms of play(), not behind a second of silence.
     this.source = new AudioSource(RATE, 1, 100);
+    this.voice = new AudioSource(RATE, 1, 100);
   }
 
   /** Starts pushing frames (silence until something plays). */
@@ -85,7 +98,7 @@ export class Mixer {
     this.running = false;
     this.interrupt();
     this.disableMic();
-    await this.source.close();
+    await Promise.all([this.source.close(), this.voice.close()]);
   }
 
   private pushMic(data: Int16Array): void {
@@ -133,15 +146,13 @@ export class Mixer {
     while (this.running) {
       const { pcm: tts, active } = this.takeTts(FRAME);
       const mic = this.takeMic(FRAME);
-      const target = active ? DUCK_GAIN : 1;
-      const out = new Int16Array(FRAME);
-      for (let i = 0; i < FRAME; i++) {
-        this.gain += (target - this.gain) * (target < this.gain ? attackCoef : releaseCoef);
-        const x = (tts[i]! + mic[i]! * this.gain) / 32768;
-        out[i] = Math.round(Math.tanh(x) * 32767);
-      }
+      const { out, voice, gain } = mixFrame(tts, mic, this.gain, active ? DUCK_GAIN : 1);
+      this.gain = gain;
       try {
-        await this.source.captureFrame(new AudioFrame(out, RATE, 1, FRAME));
+        await Promise.all([
+          this.source.captureFrame(new AudioFrame(out, RATE, 1, FRAME)),
+          this.voice.captureFrame(new AudioFrame(voice, RATE, 1, FRAME)),
+        ]);
       } catch (e) {
         if (this.running) warn('mixer_capture_failed', { error: errText(e) });
         return;

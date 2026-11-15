@@ -26,6 +26,7 @@ export async function recoverLeftovers(): Promise<void> {
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code !== 'ENOENT') warn('recover_call_failed', { error: errText(e) });
   }
+  if (env.AGENT_SKIP_ROOM_CLEANUP === '1') return log('skipped_stale_ft_room_cleanup');
   try {
     const rs = new RoomServiceClient(env.LIVEKIT_URL.replace(/^wss:/, 'https:'), env.LIVEKIT_API_KEY, env.LIVEKIT_API_SECRET);
     const stale = (await rs.listRooms()).filter((r) => r.name.startsWith('ft-'));
