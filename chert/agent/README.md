@@ -1,3 +1,5 @@
+> **Dry-run prototype.** This folder is from before the monorepo. If it has `armory.mjs`, that listens on port 8787 like `apps/server`. Do not run both: both start with no error, and the prototype quietly takes the `localhost` traffic. The real agent is `apps/agent`. The game sends its messages only to `apps/server` (spec 4.1).
+
 # Chert video agent (camera test)
 
 A voice and video agent for FaceTime Video calls through Chert. The caller holds up
