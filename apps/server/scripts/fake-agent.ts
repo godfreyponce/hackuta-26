@@ -32,7 +32,7 @@ ws.on('message', (raw) => {
     send(sid, { type: 'narration', text: 'Hold something up to your camera!', priority: 90 });
   } else if (m.type === 'weapon.spawn') {
     send(sid, { type: 'scan.status', state: 'done', objectName: m.weapon.objectName, displayName: m.weapon.displayName });
-    send(sid, { type: 'narration', text: `The ${m.weapon.displayName} is in his hands!`, priority: 80 });
+    send(sid, { type: 'narration', text: `${m.weapon.displayName} is in his hands!`, priority: 80 });
   } else if (m.type === 'game.event' && m.event.kind === 'player_pinned') {
     send(sid, { type: 'narration', text: "He's pinned! Find him a weapon, quick!", priority: 70 });
   }
