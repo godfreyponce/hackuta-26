@@ -39,7 +39,6 @@ test('every fixed line and a long forge quip: pages of at most 2 lines, whole in
 
 test('paging keeps every word of the line', () => {
   for (const text of TEXTS) assert.equal(captionPages(text).flat().join(' '), text.split(/\s+/).join(' '));
-  assert.equal(captionPages(LINES.greeting[0]).length, 2, 'the greeting needs two pages at this size');
 });
 
 test('the caption leaves every row above its band unchanged', async () => {

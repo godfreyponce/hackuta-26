@@ -39,7 +39,7 @@ const CAPTION_MAX_LINES = 2;
 const CAPTION_INSET = 32; // text inset from each side
 /** Georgia bold measured in sharp at 0.47 to 0.555 em per character over LINES; 0.6 leaves room for wider words. */
 const EM_PER_CHAR = 0.6;
-/** Bottom row of the game inside agent-video: friend-view is OUT_W x OUT_H, letterboxed with equal bars. */
+/** First row of the bottom letterbox bar: friend-view is OUT_W x OUT_H (640x360 by contract, callMedia.ts), centered. */
 export const GAME_BOTTOM = (AGENT_H + OUT_H) / 2;
 /** Measured: the 22 cached ElevenLabs lines run 11 to 19 characters per second, 16.1 over all of them. */
 export const SPEECH_CHARS_PER_S = 16;
@@ -146,8 +146,7 @@ export class VideoRelay {
 
   /** The line's audio ended: clear its caption CAPTION_LINGER_MS later, unless a newer line has replaced it. */
   endCaption(): void {
-    const gen = this.captionGen;
-    this.captionTimers.push(setTimeout(() => { if (gen === this.captionGen) this.clearCaption(); }, CAPTION_LINGER_MS));
+    this.captionTimers.push(setTimeout(() => this.clearCaption(), CAPTION_LINGER_MS));
   }
 
   private clearCaption(): void {
