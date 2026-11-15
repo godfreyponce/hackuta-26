@@ -279,6 +279,7 @@ export function engineCallbacks(): EngineCallbacks {
       useApp.getState().go('results');
     },
     requestCall: () => requestCall(),
+    callLive: () => isCallLive(useApp.getState().call.state),
     requestWeapon: () => requestWeapon(),
     pinnedPrompt: (show) => setHud({ pinnedPrompt: show && !isCallLive(useApp.getState().call.state) }),
     tracking: (s) => useApp.setState({ tracking: s }),

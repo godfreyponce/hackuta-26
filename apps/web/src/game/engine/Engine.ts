@@ -27,6 +27,8 @@ export interface EngineCallbacks {
   slowmo(on: boolean, trick?: TrickshotKind, weaponName?: string): void;
   matchEnd(r: { victory: boolean; score: number; kills: number; durationMs: number; trickshots: Record<TrickshotKind, number>; bestCombo: number; wave: number; forgedKills: Record<string, number> }): void;
   requestCall(): void;
+  /** true while the call is dialing, ringing or connected */
+  callLive(): boolean;
   requestWeapon(): void;
   pinnedPrompt(show: boolean): void;
   tracking(state: PlayerInputState['tracking']): void;
@@ -402,9 +404,15 @@ export class Engine {
 
   setCallActive(v: boolean) { this.callActive = v; if (v) this.cb.pinnedPrompt(false); }
 
+  /** Owner ask: the body tracker's drink (hand to mouth) is easier to hit than call_sign, so with no call it places one.
+   *  The keyboard's E stays a drink. */
+  private drinkPlacesCall(e: InputEvent) {
+    return e.type === 'drink' && this.input?.kind !== 'keyboard_mouse' && !this.weapons.drawing && !this.blocking && !this.cb.callLive();
+  }
+
   private onInput(e: InputEvent) {
     if (this.paused || this.mode !== 'match') {
-      if (e.type === 'call_sign') this.cb.requestCall();
+      if (e.type === 'call_sign' || this.drinkPlacesCall(e)) this.cb.requestCall();
       return;
     }
     switch (e.type) {
@@ -459,8 +467,10 @@ export class Engine {
         break;
       }
       case 'drink':
+        if (this.weapons.drink(e.hand)) break; // a potion kept after the call ends still heals
+        if (this.drinkPlacesCall(e)) this.cb.requestCall();
         // the body tracker can read a drink during a bow draw or a block (Part C): only the keyboard's E gets a reply
-        if (!this.weapons.drink(e.hand) && this.input?.kind === 'keyboard_mouse') this.cb.toast({ kind: 'info', title: 'NOTHING TO DRINK', sub: 'Ask Telemachus for a bottle' }, 1200);
+        else if (this.input?.kind === 'keyboard_mouse') this.cb.toast({ kind: 'info', title: 'NOTHING TO DRINK', sub: 'Ask Telemachus for a bottle' }, 1200);
         break;
       case 'call_sign': this.cb.requestCall(); break;
       case 'request_weapon': this.cb.requestWeapon(); break;
