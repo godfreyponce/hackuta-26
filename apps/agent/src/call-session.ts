@@ -25,7 +25,6 @@ const ANSWER_TIMEOUT_MS = 60_000;
 const FRIEND_CAM_LOG_MS = 10_000;
 const MUST_GO_BEFORE_MS = 20_000;
 const FAREWELL_WAIT_MS = 3_000;
-const AUTO_SCAN_AFTER_PIN_MS = 5_000;
 const SETUP_WAIT_MS = 10_000; // guess: the LiveKit connects before POST /calls starts
 const CLEANUP_MARGIN_MS = 3_000; // guess: disconnects plus deleteRoom
 const WEB_GONE_GRACE_MS = 10_000; // guess: long enough for a page reload to rejoin
@@ -413,7 +412,13 @@ export class CallSession {
     if (this.bridgeReadyAt || this.ending) return;
     this.bridgeReadyAt = Date.now();
     const g = pick('greeting', this.friend.name);
-    void this.narrator.sayNow(g.text, PRIORITY.greeting, g.pcm);
+    this.scanRequested = false; // a request before now got not_connected
+    // The pin that started the call is why we called: the greeting asks for a weapon, then the scan starts (owner).
+    void this.narrator.sayNow(g.text, PRIORITY.greeting, g.pcm).then(() => {
+      if (this.ending || this.autoScanUsed) return;
+      this.autoScanUsed = true;
+      if (!this.scanRequested && !this.scanner.scanning) void this.runScan();
+    });
     log('greeting_started', { via, msAfterBridgeReady: Date.now() - this.bridgeReadyAt, cached: !!g.pcm });
     this.status('connected');
     if (this.playerMic) this.mixer.enableMic(this.playerMic);
@@ -437,11 +442,8 @@ export class CallSession {
       case 'health_low': this.say('healthLow', PRIORITY.danger); break;
       case 'boss_spawn': this.say('bossSpawn', PRIORITY.danger); break;
       case 'player_pinned':
-        this.say('pinned', PRIORITY.danger);
-        if (this.autoScanUsed) break;
-        this.autoScanUsed = true;
-        this.scanRequested = false;
-        this.timers.push(setTimeout(() => { if (!this.scanRequested && !this.scanner.scanning) void this.runScan(); }, AUTO_SCAN_AFTER_PIN_MS));
+        // "Pinned again ... another weapon" only once a weapon came and no ask is open; the first pin started the call.
+        if (this.lastWeapon && !this.scanner.scanning && !this.awaitingWeapon) this.say('pinned', PRIORITY.danger);
         break;
       case 'trickshot':
         if (e.data?.trickshot === 'pin') this.say('pin', PRIORITY.trickshot);

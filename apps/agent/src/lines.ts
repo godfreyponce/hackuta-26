@@ -2,12 +2,15 @@
 import { log, warn, errText } from './log.ts';
 import { renderCached, TtsHttpError } from './tts.ts';
 
-/** Story v2 (owner): Odysseus is home, armed for war, and comes to fight Adam, the player. {friend} becomes friendTitle(name). */
+/**
+ * Story v2 (owner OK, Sun Nov 15): Odysseus suits up and fights Adam, the player. The friend is not on the call from the
+ * start: Adam is pinned, so the Quartermaster calls them, and the greeting asks for the weapon. {friend} becomes friendTitle(name).
+ */
 export const LINES = {
-  greeting: ["{friend}! Odysseus is home, and he's armed for war. He's after Adam. Stay close; I'll call when Adam needs steel."],
-  matchStart: ['Here they come. Steady now.', 'Odysseus is moving. Here he comes.'],
+  greeting: ['{friend}! Sorry to pull you away. Odysseus suited up for war, and he has Adam pinned. What weapon can you bring him?'],
+  matchStart: ['Here they come. Steady now.'],
   waveStart: ['Another wave. Here they come.', 'More of his men at the doors!'],
-  pinned: ["Adam's pinned! {friend}, what weapon can you bring him?", 'Odysseus has Adam cornered! {friend}, find him a weapon!'],
+  pinned: ["Adam's pinned again! {friend}, find him another weapon!"], // a later pin: the first one started the call
   healthLow: ["Adam's bleeding badly. Hurry, {friend}.", "Adam can't take much more of this."],
   scanLooking: [
     'Hold something up to your camera. A broom, a pan, anything! Keep it steady.',

@@ -73,7 +73,7 @@ test('letterbox takes I420 input and pillarboxes a portrait frame', () => {
 test('the title card fits any allowed friend name inside the frame', async () => {
   const SIDE = 16;
   for (const name of ['Bo', 'Godfrey', 'Maximilian Alexander', 'W'.repeat(40), 'Ana\u2694\uFE0F\u{1F600}']) {
-    const f = await titleCard(`Calling Warrior ${name}…`, 'Odysseus is home, and he wants a fight.');
+    const f = await titleCard(`Calling Warrior ${name}…`, 'Odysseus has Adam pinned.');
     const bg = px(f, 0, 0);
     for (let y = 0; y < AGENT_H; y++) for (let s = 0; s < SIDE; s++) {
       assert.deepEqual(px(f, s, y), bg, `${name}: text at x ${s}, y ${y}`);
