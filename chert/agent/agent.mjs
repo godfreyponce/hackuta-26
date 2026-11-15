@@ -98,6 +98,13 @@ const agent = defineAgent({
     await ctx.room.localParticipant.publishTrack(track, { source: TrackSource.SOURCE_CAMERA });
     const timer = setInterval(() => { void render(); push(); }, 1000 / OUT_FPS);
     const renderStats = setInterval(() => { log('out_fps', { rendered_per_s: +(rendered / 5).toFixed(1) }); rendered = 0; }, 5000);
+    // Registered before waiting for the caller: a room that closes with no caller must still stop the video.
+    ctx.addShutdownCallback(async () => {
+      stopped = true;
+      clearInterval(timer); clearInterval(renderStats);
+      await track.close();
+      await source.close();
+    });
 
     const caller = await ctx.waitForParticipant();
     log('caller_joined', { identity: caller.identity });
@@ -172,12 +179,8 @@ const agent = defineAgent({
     };
 
     ctx.addShutdownCallback(async () => {
-      stopped = true;
-      clearInterval(timer); clearInterval(renderStats);
       ctx.room.off(RoomEvent.TrackSubscribed, onTrack);
       await session.close();
-      await track.close();
-      await source.close();
       log('call_done');
     });
     await session.start({
