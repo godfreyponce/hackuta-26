@@ -31,6 +31,19 @@ export const DEFAULT_CONFIG = {
   assocMaxDist: 0.25,
   lostHandConfidence: 0.4,
   maxExtrapolateMs: 50,
+
+  // ── grip (C.4) ──
+  gripOn: 0.65,
+  gripOff: 0.35,
+  /** Consecutive frames past a threshold before grab/release fires. */
+  gripFrames: 2,
+  gripMinCutoff: 4,
+  /** Hand lost but wrist still tracked: hold the last grip this long, then treat a closed hand as gripping. */
+  gripHoldMs: 300,
+  /** release.vel = mean velocity over this window … */
+  releaseWindowMs: 80,
+  /** … ending this long before the release fired (compensates grip-filter lag). */
+  releaseLagMs: 0,
 };
 
 export type MotionConfig = { -readonly [K in keyof typeof DEFAULT_CONFIG]: number };
@@ -66,5 +79,14 @@ export const CONFIG_RANGES: Record<string, Partial<Record<keyof MotionConfig, [n
     wristMinVisibility: [0, 1, 0.05],
     assocMaxDist: [0.05, 0.6, 0.01],
     maxExtrapolateMs: [0, 100, 5],
+  },
+  Grip: {
+    gripOn: [0.3, 0.95, 0.01],
+    gripOff: [0.05, 0.7, 0.01],
+    gripFrames: [1, 6, 1],
+    gripMinCutoff: [0.5, 15, 0.5],
+    gripHoldMs: [0, 1000, 50],
+    releaseWindowMs: [16, 250, 4],
+    releaseLagMs: [0, 150, 4],
   },
 };

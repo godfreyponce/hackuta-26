@@ -54,6 +54,10 @@ export class Body {
   /** Upper arm / forearm image length ÷ shoulder width (for calibration + depth). */
   readonly upperImgRatio = perHand(() => 0);
   readonly foreImgRatio = perHand(() => 0);
+  /** Raw finger curls (index, middle, ring, pinky), thumb extension, mean curl — filled by GripTracker. */
+  readonly curls = perHand(() => [0, 0, 0, 0]);
+  readonly thumbExt = perHand(() => 0);
+  readonly gripRaw = perHand(() => 0);
 
   /** Image distance → meters (approx, at shoulder depth). */
   meters(a: Vec2, b: Vec2): number {

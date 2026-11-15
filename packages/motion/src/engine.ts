@@ -2,6 +2,7 @@
 // so the live controller, the replay controller and unit tests all share it.
 import type { InputEvent, PlayerInputState } from '@ithaca/shared';
 import { config } from './config';
+import { GripTracker } from './grip';
 import { HANDS, Mapper, type Body } from './mapping';
 import { copy3 } from './math';
 import { neutralState } from './neutral';
@@ -29,6 +30,7 @@ export class Engine {
   private lastFrameWall = 0;
 
   readonly mapper = new Mapper();
+  readonly grip = new GripTracker();
   private readonly listeners = new Set<Listener>();
   private poseLostSince = -1;
   private poseBackSince = -1;
@@ -51,6 +53,8 @@ export class Engine {
     };
   }
 
+  private readonly emitFn = (e: InputEvent): void => this.emit(e);
+
   emit(e: InputEvent): void {
     for (const cb of this.listeners) {
       try {
@@ -68,6 +72,7 @@ export class Engine {
     this.poseLostSince = this.poseBackSince = -1;
     this.state.tracking = 'lost';
     this.mapper.reset();
+    this.grip.reset();
   }
 
   end(): void {
@@ -79,7 +84,8 @@ export class Engine {
     this.lastFrame = frame;
     this.lastFrameWall = wallNow;
     this.updateTracking(frame);
-    this.mapper.update(frame.poseImage, frame.poseWorld, frame.hands, frame.t, this.aspect, this.profile, this.state);
+    const body = this.mapper.update(frame.poseImage, frame.poseWorld, frame.hands, frame.t, this.aspect, this.profile, this.state);
+    this.grip.update(body, frame.hands === null, this.profile, this.state, this.emitFn);
     this.state.t = frame.t;
   }
 
