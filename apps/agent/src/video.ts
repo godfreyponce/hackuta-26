@@ -4,24 +4,31 @@ import { errText, log, warn } from './log.ts';
 
 export const OUT_W = 640;
 export const OUT_H = 360;
+/**
+ * agent-video size. Call 3: FaceTime showed our 640x360 frame cut to about 3:2 (source x 51..588 on the iPhone and in
+ * the Mac self-view), so we send 3:2 and letterbox the game inside it. 640 wide keeps the usual friend-view unscaled;
+ * 428 is 640/1.5 rounded up to a multiple of 4 (libwebrtc rounds sizes down to multiples of 4).
+ */
+export const AGENT_W = 640;
+export const AGENT_H = 428;
 const CARD_FPS = 15;
 const LIVE_STALE_MS = 1_000; // show the card again if friend-view stops this long
 
 async function titleCard(title: string, subtitle: string): Promise<VideoFrame> {
   const esc = (s: string) => s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]!);
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${OUT_W}" height="${OUT_H}">
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${AGENT_W}" height="${AGENT_H}">
     <rect width="100%" height="100%" fill="#140d07"/>
     <text x="50%" y="40%" text-anchor="middle" font-family="Georgia, serif" font-size="30" fill="#c9a24a">THE QUARTERMASTER</text>
     <text x="50%" y="58%" text-anchor="middle" font-family="Georgia, serif" font-size="40" font-weight="bold" fill="#f3e6c4">${esc(title)}</text>
     <text x="50%" y="74%" text-anchor="middle" font-family="Georgia, serif" font-size="24" fill="#a89878">${esc(subtitle)}</text>
   </svg>`;
   const raw = await sharp(Buffer.from(svg)).ensureAlpha().raw().toBuffer();
-  return new VideoFrame(new Uint8Array(raw), OUT_W, OUT_H, VideoBufferType.RGBA);
+  return new VideoFrame(new Uint8Array(raw), AGENT_W, AGENT_H, VideoBufferType.RGBA);
 }
 
-/** Feeds agent-video: a title card until friend-view frames arrive, then passes them through. */
+/** Feeds agent-video: a title card until friend-view frames arrive, then those frames letterboxed to 3:2. */
 export class VideoRelay {
-  readonly source = new VideoSource(OUT_W, OUT_H);
+  readonly source = new VideoSource(AGENT_W, AGENT_H);
   private card: VideoFrame | null = null;
   private lastLive = 0;
   private timer: NodeJS.Timeout | null = null;
@@ -45,7 +52,7 @@ export class VideoRelay {
         for await (const { frame } of stream) {
           this.lastLive = Date.now();
           this.liveFrames++;
-          this.source.captureFrame(frame);
+          this.source.captureFrame(letterbox(frame, AGENT_W, AGENT_H));
         }
       } catch (e) {
         warn('friend_view_ended', { error: errText(e) });
@@ -82,4 +89,25 @@ export function cropRgba(f: VideoFrame, crop: [number, number, number, number]):
     out.set(rgba.data.subarray(s, s + w * 4), y * w * 4);
   }
   return new VideoFrame(out, w, h, VideoBufferType.RGBA);
+}
+
+/** Fits a frame whole inside outW x outH, centered on black (nearest pixel; the edge pixels map to the edges). */
+export function letterbox(f: VideoFrame, outW: number, outH: number): VideoFrame {
+  const src = f.type === VideoBufferType.RGBA ? f : f.convert(VideoBufferType.RGBA);
+  const { width: w, height: h } = src;
+  const wide = w * outH >= h * outW;
+  const gw = wide ? outW : Math.round((outH * w) / h);
+  const gh = wide ? Math.round((outW * h) / w) : outH;
+  const left = (outW - gw) >> 1, top = (outH - gh) >> 1;
+  const out = new Uint8Array(outW * outH * 4);
+  for (let y = 0; y < gh; y++) {
+    const sy = gh > 1 ? Math.round((y * (h - 1)) / (gh - 1)) : 0;
+    const row = sy * w * 4, o = ((top + y) * outW + left) * 4;
+    if (gw === w) { out.set(src.data.subarray(row, row + w * 4), o); continue; }
+    for (let x = 0; x < gw; x++) {
+      const s = row + (gw > 1 ? Math.round((x * (w - 1)) / (gw - 1)) : 0) * 4;
+      out[o + x * 4] = src.data[s]!; out[o + x * 4 + 1] = src.data[s + 1]!; out[o + x * 4 + 2] = src.data[s + 2]!; out[o + x * 4 + 3] = 255;
+    }
+  }
+  return new VideoFrame(out, outW, outH, VideoBufferType.RGBA);
 }

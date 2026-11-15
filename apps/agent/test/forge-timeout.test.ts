@@ -18,7 +18,7 @@ const server = createServer((req, res) => {
   }, delayMs));
 });
 
-type Forge = { forge(jpeg: Buffer): Promise<{ forgeId: string } | null> };
+type Forge = { forge(jpeg: Buffer): Promise<{ hit: { forgeId: string } | null }> };
 let scanner: Forge;
 const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
 
@@ -40,5 +40,5 @@ test('forge calls carry x-session-id, which the server rate limit keys on (apps/
 // If the agent gives up first, the server still forges and spawns a weapon the Quartermaster never announces.
 test('a forge reply that takes the server worst case is still a hit', { timeout: SERVER_WORST_MS + 10_000 }, async () => {
   delayMs = SERVER_WORST_MS;
-  assert.equal((await scanner.forge(JPEG))?.forgeId, 'f1');
+  assert.equal((await scanner.forge(JPEG)).hit?.forgeId, 'f1');
 });

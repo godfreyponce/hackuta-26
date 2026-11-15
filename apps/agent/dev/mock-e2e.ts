@@ -77,7 +77,7 @@ async function openGame() {
 /** The phone side: joins the FaceTime room as the bridge and publishes the caller's camera and mic. */
 async function openPhone(url: string, token: string) {
   const room = new Room();
-  const s = { joinedAt: 0, firstVoiceAt: 0, agentVideoFrames: 0, rms: [] as number[] };
+  const s = { joinedAt: 0, firstVoiceAt: 0, agentVideoFrames: 0, agentVideoSize: '', rms: [] as number[] };
   room.on(RoomEvent.TrackSubscribed, (track: RemoteTrack, pub: RemoteTrackPublication) => {
     out('phone_sub', { name: pub.name });
     if (pub.name === 'quartermaster-audio') void (async () => {
@@ -90,7 +90,7 @@ async function openPhone(url: string, token: string) {
         if (n === 50) { s.rms.push(Math.round(acc / n)); acc = 0; n = 0; }
       }
     })();
-    if (pub.name === 'agent-video') void (async () => { for await (const _ of new VideoStream(track)) s.agentVideoFrames++; })();
+    if (pub.name === 'agent-video') void (async () => { for await (const { frame } of new VideoStream(track)) { s.agentVideoFrames++; s.agentVideoSize = `${frame.width}x${frame.height}`; } })();
   });
   // Solid frames that change shade (noise averages to one gray at 64x64), so the scanner's diff check passes.
   const cam = new VideoSource(1280, 720);
@@ -135,6 +135,9 @@ async function mockMainLoop(): Promise<void> {
   await sleep(9_000); // let the greeting finish
   check('greeting under 1 s after join', phone.s.firstVoiceAt > 0 && phone.s.firstVoiceAt - phone.s.joinedAt < 1_000, phone.s.firstVoiceAt ? phone.s.firstVoiceAt - phone.s.joinedAt : null);
   check('agent video reaches the phone', phone.s.agentVideoFrames > 0, phone.s.agentVideoFrames);
+  // Call 3: FaceTime cut our 16:9 frame to about 3:2, losing about 8% at each side. A 3:2 frame keeps the whole game.
+  const [vw, vh] = phone.s.agentVideoSize.split('x').map(Number);
+  check('agent video is 3:2 (call 3)', !!vw && !!vh && Math.abs(vw / vh - 1.5) < 0.02, phone.s.agentVideoSize);
   check('friend-cam and friend-audio relayed', g.tracks.includes('friend-cam') && g.tracks.includes('friend-audio'), g.tracks);
   check('friend-cam frames reach the game and are not black (live 1 #2)', g.friendCam.frames > 10 && g.friendCam.maxMean > 20, g.friendCam);
 

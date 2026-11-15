@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
 import { dispose, VideoBufferType, VideoFrame } from '@livekit/rtc-node';
-import { cropRgba, relayable } from '../src/video.ts';
+import { AGENT_H, AGENT_W, cropRgba, letterbox, relayable } from '../src/video.ts';
 
 const SIZES = [[1280, 720], [960, 540], [640, 360], [480, 270], [320, 180], [160, 90]] as const;
 const CROPS: Array<[number, number, number, number]> = [[0.08, 0.12, 0.92, 0.88], [0.32, 0.09, 0.68, 0.8]];
@@ -23,6 +23,49 @@ test('a tiny frame (WebRTC sent 8x8 when the caller republished) is not relayed:
   assert.equal(relayable(tiny), false);
   const live = cropRgba(new VideoFrame(new Uint8Array(1280 * 720 * 4), 1280, 720, VideoBufferType.RGBA), [0.32, 0.09, 0.68, 0.8]);
   assert.equal(relayable(live), true);
+});
+
+// Call 3: FaceTime showed agent-video cropped to about 3:2 (the phone and the Mac self-view both cut the 640x360 game
+// to source x 51..588, about 8% off each side). A 3:2 frame with the game letterboxed inside keeps every game pixel.
+test('agent-video is 3:2 with a size libwebrtc keeps (multiple of 4)', () => {
+  assert.ok(Math.abs(AGENT_W / AGENT_H - 1.5) < 0.01, `${AGENT_W}x${AGENT_H}`);
+  assert.equal(AGENT_W % 4, 0);
+  assert.equal(AGENT_H % 4, 0);
+});
+
+/** RGBA frame with a red left column, a blue right column, a green top row and a white bottom row on grey. */
+function marked(w: number, h: number, i420 = false): VideoFrame {
+  const d = new Uint8Array(w * h * 4).fill(128);
+  const put = (x: number, y: number, c: number[]) => d.set([...c, 255], (y * w + x) * 4);
+  for (let y = 0; y < h; y++) { put(0, y, [255, 0, 0]); put(w - 1, y, [0, 0, 255]); }
+  for (let x = 1; x < w - 1; x++) { put(x, 0, [0, 255, 0]); put(x, h - 1, [255, 255, 255]); }
+  const f = new VideoFrame(d, w, h, VideoBufferType.RGBA);
+  return i420 ? f.convert(VideoBufferType.I420) : f;
+}
+const px = (f: VideoFrame, x: number, y: number) => Array.from(f.data.subarray((y * f.width + x) * 4, (y * f.width + x) * 4 + 3));
+
+test('letterbox keeps the whole game frame: all four edges visible, black bars outside', () => {
+  for (const [w, h] of [[640, 360], [1280, 720], [480, 270], [320, 180]] as const) {
+    const out = letterbox(marked(w, h), AGENT_W, AGENT_H);
+    assert.equal(out.width, AGENT_W); assert.equal(out.height, AGENT_H);
+    assert.equal(out.data.length, AGENT_W * AGENT_H * 4);
+    const mid = AGENT_H >> 1;
+    assert.deepEqual(px(out, 0, mid), [255, 0, 0], `${w}x${h} left edge`);
+    assert.deepEqual(px(out, AGENT_W - 1, mid), [0, 0, 255], `${w}x${h} right edge`);
+    const gameH = Math.round((AGENT_W * h) / w), top = (AGENT_H - gameH) >> 1;
+    assert.deepEqual(px(out, AGENT_W >> 1, 0), [0, 0, 0], `${w}x${h} top bar`);
+    assert.deepEqual(px(out, AGENT_W >> 1, AGENT_H - 1), [0, 0, 0], `${w}x${h} bottom bar`);
+    assert.deepEqual(px(out, AGENT_W >> 1, top), [0, 255, 0], `${w}x${h} first game row`);
+    assert.deepEqual(px(out, AGENT_W >> 1, top + gameH - 1), [255, 255, 255], `${w}x${h} last game row`);
+    assert.equal(out.convert(VideoBufferType.I420).width, AGENT_W);
+  }
+});
+
+test('letterbox takes I420 input and pillarboxes a portrait frame', () => {
+  const out = letterbox(marked(360, 640, true), AGENT_W, AGENT_H);
+  assert.equal(out.width, AGENT_W); assert.equal(out.height, AGENT_H);
+  assert.deepEqual(px(out, 0, AGENT_H >> 1), [0, 0, 0]);
+  assert.deepEqual(px(out, AGENT_W - 1, AGENT_H >> 1), [0, 0, 0]);
 });
 
 after(() => dispose());

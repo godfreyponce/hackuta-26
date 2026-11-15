@@ -30,6 +30,10 @@ export function parseForgeReply(status: number, raw: unknown): Detected | null {
 export class CallerScanner {
   private latest: VideoFrame | null = null;
   private prevThumb: Buffer | null = null;
+  // After no_object, send one unchanged picture again: Gemini missed a clearly held mug in 5 of 23 call 3 frames, at
+  // random. Only once, so frozen video or an empty hand does not cost a forge call every tick.
+  private retrySame = false;
+  private sentSame = false;
   private saved = 0;
   private active = false;
 
@@ -51,6 +55,7 @@ export class CallerScanner {
     if (this.active) return null;
     this.active = true;
     this.prevThumb = null;
+    this.retrySame = false;
     const t0 = Date.now();
     try {
       while (this.active && Date.now() - t0 < WINDOW_MS) {
@@ -60,8 +65,9 @@ export class CallerScanner {
         if (frame) {
           const jpeg = await this.prepare(frame);
           if (jpeg) {
-            const hit = await this.forge(jpeg);
+            const { hit, reason } = await this.forge(jpeg);
             if (hit) return hit;
+            this.retrySame = reason === 'no_object' && !this.sentSame;
           }
         }
         await new Promise((r) => setTimeout(r, Math.max(0, TICK_MS - (Date.now() - tickStart))));
@@ -78,17 +84,21 @@ export class CallerScanner {
     const c = cropRgba(frame, env.callerCrop);
     const img = () => sharp(Buffer.from(c.data), { raw: { width: c.width, height: c.height, channels: 4 } });
     const thumb = await img().resize(64, 64, { fit: 'fill' }).greyscale().raw().toBuffer();
+    this.sentSame = false;
     if (this.prevThumb) {
       let diff = 0;
       for (let i = 0; i < thumb.length; i++) diff += Math.abs(thumb[i]! - this.prevThumb[i]!);
-      if (diff / (thumb.length * 255) < MIN_CHANGE) return null; // same picture as last time
+      if (diff / (thumb.length * 255) < MIN_CHANGE) { // same picture as last time
+        if (!this.retrySame) return null;
+        this.sentSame = true;
+      }
     }
     this.prevThumb = thumb;
     // Blur check (Laplacian variance) left out: no threshold measured yet.
     return img().resize(1280, 1280, { fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 85 }).toBuffer();
   }
 
-  private async forge(jpeg: Buffer): Promise<Detected | null> {
+  private async forge(jpeg: Buffer): Promise<{ hit: Detected | null; reason?: string }> {
     const form = new FormData();
     form.append('image', new Blob([new Uint8Array(jpeg)], { type: 'image/jpeg' }), 'frame.jpg');
     form.append('sessionId', this.sessionId);
@@ -98,12 +108,13 @@ export class CallerScanner {
       const res = await fetch(`${env.SERVER_HTTP_URL}/api/forge`, { method: 'POST', body: form, headers: { 'x-session-id': this.sessionId }, signal: AbortSignal.timeout(FORGE_TIMEOUT_MS) });
       const body: unknown = await res.json().catch(() => ({}));
       const hit = parseForgeReply(res.status, body);
-      log('forge_reply', { status: res.status, detected: !!hit, reason: (body as { reason?: string }).reason, ms: Date.now() - t0 });
-      if (hit) return hit;
+      const reason = (body as { reason?: string }).reason;
+      log('forge_reply', { status: res.status, detected: !!hit, reason, ms: Date.now() - t0 });
+      return { hit, reason };
     } catch (e) {
       warn('forge_failed', { error: errText(e), ms: Date.now() - t0 });
     }
-    return null;
+    return { hit: null };
   }
 
   /** Saves a few raw caller frames to dev/captures (gitignored) to tune CALLER_CROP. */
