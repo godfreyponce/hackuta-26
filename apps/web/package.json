@@ -1,0 +1,37 @@
+{
+  "name": "@ithaca/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit -p . && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit -p . && tsc --noEmit -p scripts",
+    "prefabs": "tsx scripts/make-prefabs.ts"
+  },
+  "dependencies": {
+    "@dimforge/rapier3d-compat": "0.21.0",
+    "@fontsource-variable/montserrat": "5.3.0",
+    "@fontsource/cinzel": "5.3.0",
+    "@fontsource/cormorant-garamond": "5.3.0",
+    "@ithaca/shared": "workspace:*",
+    "@react-three/fiber": "8.18.0",
+    "postprocessing": "6.39.6",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "three": "0.187.0",
+    "zod": "4.6.7",
+    "zustand": "5.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "@types/react": "18.3.31",
+    "@types/react-dom": "18.3.7",
+    "@types/three": "0.187.0",
+    "@vitejs/plugin-react": "5.2.0",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3",
+    "vite": "7.3.8"
+  }
+}
