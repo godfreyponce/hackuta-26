@@ -2,7 +2,7 @@ import { Fragment, useEffect, useRef, useState } from 'react';
 import { useApp } from '../state/store';
 import { runtime, setupInput } from '../game/runtime';
 import { CALIBRATION_ORDER, type CalibrationStepInfo } from '../input';
-import { Btn, useMenuNav } from './components';
+import { Btn, isBodyInput, useMenuNav } from './components';
 
 const STEPS = [
   // wording follows Part C's checks (packages/motion/src/calibration.ts) so the player does what is measured
@@ -28,6 +28,30 @@ export const KEYMAP: [string, string][] = [
   ['T', 'Push-to-talk toggle · Esc pause'],
 ];
 
+/** Webcam (body) moves — wording and timings follow Part C's detectors (packages/motion/src/gestures.ts, grip.ts).
+ *  `friend` rows only matter when a Telemachus is set up. */
+export const BODY_MOVES: { move: string; does: string; friend?: boolean }[] = [
+  { move: 'Reach + make a fist', does: 'Take a weapon — reach toward it on the table and close your hand; it flies to you' },
+  { move: 'Swing your arm', does: 'Strike — the blade follows your forearm · punch forward to stab' },
+  { move: 'Open your hand', does: 'Let go — mid-swing it flies (throw), at rest you set it down' },
+  { move: 'Both fists by your chin', does: 'Guard — hold them up as a blow lands' },
+  { move: 'Lean left / right', does: 'Dodge · crouch to duck a high cut' },
+  { move: 'Left arm out to the side', does: 'Bow — bring your right fist to your left hand, pull back, open to loose' },
+  { move: 'Fist to your mouth', does: 'Drink a potion (hold ½ s)' },
+  { move: 'Phone sign by your ear', does: 'Thumb and pinky out, hold 1 s — call Telemachus', friend: true },
+  { move: 'Both hands over your head', does: 'Hold 1 s — Telemachus sends a weapon', friend: true },
+];
+
+/** The moves as a two-column key → action list (used on calibration, in the lobby and the pause menu). */
+export function BodyMoves({ friend = true, limit }: { friend?: boolean; limit?: number }) {
+  const rows = BODY_MOVES.filter((m) => friend || !m.friend).slice(0, limit);
+  return (
+    <div className="keys body-moves">
+      {rows.map((m) => <Fragment key={m.move}><span className="move">{m.move}</span><span>{m.does}</span></Fragment>)}
+    </div>
+  );
+}
+
 export function Calibration() {
   const go = useApp((s) => s.go);
   const inputKind = useApp((s) => s.inputKind);
@@ -41,19 +65,33 @@ export function Calibration() {
   const camRef = useRef<HTMLDivElement>(null);
   const ref = useMenuNav<HTMLDivElement>(() => go('setup'));
 
-  const motion = inputKind === 'motion';
+  // ?input=replay drives the same webcam path from a recording: it calibrates and plays like the camera, minus the video
+  const motion = isBodyInput(inputKind);
+  const replay = inputKind === 'replay';
+  const friend = useApp((s) => !!s.friend);
+  const [hasVideo, setHasVideo] = useState(false);
 
   useEffect(() => {
     if (!motion) return;
     const c = runtime.input;
     const host = camRef.current;
-    const video = c?.getDebugVideo?.() ?? null;
-    if (video && host && !host.contains(video)) {
-      video.muted = true;
-      video.playsInline = true;
-      host.prepend(video);
-      void video.play().catch(() => {});
-    }
+    let video: HTMLVideoElement | null = null;
+    // the camera can still be starting when this screen mounts: keep looking for its video for a few seconds
+    const attach = () => {
+      video = c?.getDebugVideo?.() ?? null;
+      if (!video || !host) return false;
+      if (!host.contains(video)) {
+        video.muted = true;
+        video.playsInline = true;
+        host.prepend(video);
+        void video.play().catch(() => {});
+      }
+      setHasVideo(true);
+      return true;
+    };
+    setHasVideo(false);
+    let tries = 0;
+    const poll = attach() ? 0 : window.setInterval(() => { if (attach() || ++tries > 40) window.clearInterval(poll); }, 250);
     const ext = c as unknown as { onCalibrationStep?: (cb: (s: CalibrationStepInfo) => void) => () => void; drawOverlay?: (ctx: CanvasRenderingContext2D, w: number, h: number) => void };
     const off = ext?.onCalibrationStep?.((s) => {
       if (s.index >= 1) setStep(s.index - 1); // C numbers the 4 steps from 1 (0 = done/failed)
@@ -72,8 +110,12 @@ export function Calibration() {
       };
       loop();
     }
-    return () => { off?.(); cancelAnimationFrame(raf); if (video && host?.contains(video)) host.removeChild(video); };
-  }, [motion]);
+    return () => {
+      off?.(); cancelAnimationFrame(raf); window.clearInterval(poll);
+      const v = video as HTMLVideoElement | null;
+      if (v && host?.contains(v)) host.removeChild(v);
+    };
+  }, [motion, inputKind]);
 
   async function run() {
     const c = runtime.input;
@@ -99,13 +141,24 @@ export function Calibration() {
         <Btn variant="link" onClick={() => go('setup')}>← Back</Btn>
         <div className="eyebrow">Calibration</div>
         <div className="spacer" />
-        <span className={`chip ${motion ? 'ok' : 'warn'}`}><span className="dot" />{motion ? 'Motion tracking' : 'Keyboard & mouse'}</span>
+        <span className={`chip ${motion ? 'ok' : 'warn'}`}><span className="dot" />{replay ? 'Recorded motion (replay)' : motion ? 'Motion tracking' : 'Keyboard & mouse'}</span>
       </div>
       <div className="calib">
         {motion ? (
-          <div className="cam" ref={camRef}>
-            <canvas />
-            {status === 'ok' && <div className="placeholder" style={{ position: 'absolute', inset: 'auto 0 12px 0', textAlign: 'center' }}><span className="chip ok"><span className="dot" />Calibrated</span></div>}
+          <div className="col calib-left">
+            <div className="cam" ref={camRef}>
+              <canvas />
+              {!hasVideo && (
+                <div className="cam-note">
+                  {replay ? <><b>Replaying a recorded webcam session</b><span>No live camera — the recording moves your hands.</span></> : <><b>Starting the camera…</b><span>Allow camera access when Chrome asks.</span></>}
+                </div>
+              )}
+              {status === 'ok' && <div className="cam-ok"><span className="chip ok"><span className="dot" />Calibrated</span></div>}
+            </div>
+            <section className="panel moves-panel">
+              <div className="h3">In the hall</div>
+              <BodyMoves friend={friend} limit={5} />
+            </section>
           </div>
         ) : (
           <section className="panel">
@@ -114,7 +167,7 @@ export function Calibration() {
             <div className="keys">
               {KEYMAP.map(([k, v]) => <Fragment key={k}><span className="kbd">{k}</span><span>{v}</span></Fragment>)}
             </div>
-            <p className="muted small" style={{ marginBottom: 0 }}>Point at a weapon on the rack and grip — it flies to your hand.</p>
+            <p className="muted small" style={{ marginBottom: 0 }}>Point at a weapon on the table and click — it flies to your hand. Hold <span className="kbd">Tab</span> to look down at the table.</p>
           </section>
         )}
         <section className="panel col">

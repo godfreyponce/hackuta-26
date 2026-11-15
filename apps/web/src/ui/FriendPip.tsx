@@ -21,7 +21,7 @@ export function FriendPip({ big = false }: { big?: boolean }) {
   }, [el]);
 
   const name = friend?.name ?? 'Telemachus';
-  let msg = 'Not on a call';
+  let msg = friend ? 'Not on a call' : 'No Telemachus yet — add one to call mid-fight';
   if (call === 'dialing' || call === 'ringing') msg = `Calling ${name}…`;
   else if (call === 'connected') msg = netMode === 'mock' ? `${name} is on the line (mock — no video)` : 'Waiting for video…';
   else if (call === 'failed' || call === 'ended') msg = `${name} is away`;
@@ -37,7 +37,7 @@ export function FriendPip({ big = false }: { big?: boolean }) {
           <div>{msg}</div>
         </div>
       )}
-      <span className="name">{name}</span>
+      {friend && <span className="name">{name}</span>}
     </div>
   );
 }
