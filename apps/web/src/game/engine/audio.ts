@@ -6,6 +6,18 @@ type Ctx = AudioContext;
 
 const GONG_RATIOS = [1, 1.47, 2.09, 2.56, 3.18, 4.1];
 
+// ── impact engine: modal synthesis (contact sounds = banks of decaying sine modes; ring time from the
+// material's loss factor τ = 1/(π·f·tanφ); hardness from the contact transient) — research brief §impact
+// bronze xiphos (0.6 m × 6 mm, free-free bar): bending (out-of-plane) and edge-wise (in-plane) modes, Hz
+const XIPHOS_OOP = [801, 1118, 1489, 1912, 2390, 2920, 3502, 4136];
+const XIPHOS_IP = [1323, 2594, 4288, 6403];
+const CUIRASS = [310, 470, 690, 980, 1350, 1820, 2600];
+const HELMET = GONG_RATIOS.map((r) => r * 560);
+const WOOD = [180, 410, 760];
+const RIM = [900, 1450, 2100];
+const db = (d: number) => Math.pow(10, d / 20);
+const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
+
 class Audio {
   ctx: Ctx | null = null;
   master!: GainNode;
@@ -20,6 +32,10 @@ class Audio {
   private pulseTimer: ReturnType<typeof setInterval> | null = null;
   private crackleTimer: ReturnType<typeof setInterval> | null = null;
   rate = 1;            // global pitch factor (slow-mo)
+  /** camera-space pan for a world point (set by the engine): −1 left … +1 right */
+  panOf: ((x: number, y: number, z: number) => number) | null = null;
+  private voices = 0;
+  private lastVoice = new Map<string, number>();
   intensity = 0;       // 0..1 music intensity
   enabled = true;
 
@@ -29,13 +45,15 @@ class Audio {
       const ctx = new AudioContext({ latencyHint: 'interactive' });
       this.ctx = ctx;
       const comp = ctx.createDynamicsCompressor();
-      comp.threshold.value = -14; comp.ratio.value = 4; comp.attack.value = 0.004; comp.release.value = 0.2;
+      comp.threshold.value = -14; comp.ratio.value = 4; comp.attack.value = 0.008; comp.release.value = 0.12; comp.knee.value = 6;
+      const limiter = ctx.createDynamicsCompressor();
+      limiter.threshold.value = -1.5; limiter.ratio.value = 20; limiter.attack.value = 0.001; limiter.release.value = 0.08;
       this.muffle = ctx.createBiquadFilter();
       this.muffle.type = 'lowpass';
       this.muffle.frequency.value = 20000;
       this.master = ctx.createGain();
       this.master.gain.value = 0.8;
-      this.master.connect(this.muffle).connect(comp).connect(ctx.destination);
+      this.master.connect(this.muffle).connect(comp).connect(limiter).connect(ctx.destination);
       this.sfx = ctx.createGain(); this.sfx.connect(this.master);
       this.music = ctx.createGain(); this.music.gain.value = 0.5; this.music.connect(this.master);
       this.amb = ctx.createGain(); this.amb.gain.value = 0.55; this.amb.connect(this.master);
@@ -127,6 +145,234 @@ class Audio {
   }
 
   private ready() { return this.enabled && !!this.ctx && this.ctx.state === 'running'; }
+
+  // ── impact engine ────────────────────────────────────────────────
+  pan(p?: { x: number; y: number; z: number } | null) { return p && this.panOf ? this.panOf(p.x, p.y, p.z) : 0; }
+  /** One impact voice: gain by intensity (−22…0 dB along I^0.7, ±1.5 dB), brightness lowpass, pan, reverb. */
+  private voice(kind: string, I: number, pan: number, reverb: number, trimDb = 0) {
+    if (!this.ready()) return null;
+    const ctx = this.ctx!;
+    const t0 = ctx.currentTime;
+    // anti-flam: the same class within 35 ms just reinforces the last voice
+    const last = this.lastVoice.get(kind) ?? -1;
+    if (t0 - last < 0.035) return null;
+    this.lastVoice.set(kind, t0);
+    if (this.voices >= 10) return null;
+    this.voices++;
+    setTimeout(() => { this.voices = Math.max(0, this.voices - 1); }, 1500);
+    const g = ctx.createGain();
+    g.gain.value = db(-22 + 22 * Math.pow(clamp01(I), 0.7) + trimDb + (Math.random() - 0.5) * 3);
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass'; lp.Q.value = 0.5; lp.frequency.value = Math.min(18000, 2500 * Math.pow(2, 2.8 * clamp01(I)));
+    const pn = ctx.createStereoPanner();
+    pn.pan.value = Math.max(-0.9, Math.min(0.9, pan));
+    g.connect(lp).connect(pn).connect(this.sfx);
+    if (reverb > 0) { const s = ctx.createGain(); s.gain.value = reverb; pn.connect(s).connect(this.reverbSend); }
+    return { dest: g as AudioNode, t0 };
+  }
+  /** a decaying sine mode */
+  private mode(dest: AudioNode, t0: number, f: number, a: number, tau: number, jitter = true) {
+    const ctx = this.ctx!;
+    const o = ctx.createOscillator();
+    o.type = 'sine';
+    o.frequency.value = f * this.rate * (jitter ? 1 + (Math.random() - 0.5) * 0.012 : 1);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0, t0);
+    g.gain.linearRampToValueAtTime(a, t0 + 0.0008);
+    g.gain.setTargetAtTime(0, t0 + 0.0008, tau);
+    o.connect(g).connect(dest);
+    o.start(t0); o.stop(t0 + Math.min(4, 5 * tau) + 0.02);
+  }
+  /** a bank of modes with loss factor tanφ; brighter (energy in high modes) when hit harder */
+  private modes(dest: AudioNode, t0: number, freqs: number[], amps: number[], tanphi: number, I: number, scale = 1, pick = 6) {
+    const idx = freqs.map((_, i) => i).sort(() => Math.random() - 0.5).slice(0, Math.min(pick, freqs.length));
+    for (const i of idx) {
+      const f = freqs[i] * scale;
+      const tilt = Math.pow(f / 2000, -0.8 + 1.1 * clamp01(I));
+      const tau = Math.max(0.015, Math.min(2, 1 / (Math.PI * f * tanphi)));
+      this.mode(dest, t0, f, (amps[i] ?? 0.3) * tilt * (0.75 + Math.random() * 0.5) * 0.35, tau);
+    }
+  }
+  /** contact micro-collisions: noise bursts through a highpass at +0/3/7/12 ms */
+  private tick(dest: AudioNode, t0: number, hp: number, ms: number, A: number) {
+    const ctx = this.ctx!;
+    [0, 3, 7, 12].forEach((dt, k) => {
+      const f = ctx.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = hp; f.Q.value = 0.7;
+      const g = ctx.createGain();
+      const t = t0 + dt / 1000;
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(A * [1, 0.5, 0.3, 0.15][k], t + 0.0005);
+      g.gain.setTargetAtTime(0, t + 0.0005, ms / 3000);
+      this.noise(f, t, ms / 1000 + 0.01);
+      f.connect(g).connect(dest);
+    });
+  }
+  /** pitched body thump (sine sweep) */
+  private thump(dest: AudioNode, t0: number, f0: number, f1: number, ms: number, A: number) {
+    const ctx = this.ctx!;
+    const o = ctx.createOscillator(); o.type = 'sine';
+    o.frequency.setValueAtTime(f0 * this.rate, t0);
+    o.frequency.exponentialRampToValueAtTime(Math.max(20, f1 * this.rate), t0 + ms / 1000);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0, t0); g.gain.linearRampToValueAtTime(A, t0 + 0.002); g.gain.setTargetAtTime(0, t0 + 0.002, ms / 3000);
+    o.connect(g).connect(dest); o.start(t0); o.stop(t0 + ms / 1000 + 0.2);
+  }
+  /** filtered noise burst */
+  private burst(dest: AudioNode, t0: number, type: BiquadFilterType, f: number, q: number, A: number, tau: number, dur = 0.2) {
+    const ctx = this.ctx!;
+    const fl = ctx.createBiquadFilter(); fl.type = type; fl.frequency.value = f * this.rate; fl.Q.value = q;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0, t0); g.gain.linearRampToValueAtTime(A, t0 + 0.002); g.gain.setTargetAtTime(0, t0 + 0.002, tau);
+    this.noise(fl, t0, dur); fl.connect(g).connect(dest);
+  }
+  private duck(db0: number, ms: number) {
+    if (!this.ready()) return;
+    const t0 = this.ctx!.currentTime;
+    for (const bus of [this.music, this.amb]) {
+      const base = bus === this.music ? 0.5 : 0.55;
+      bus.gain.setTargetAtTime(base * db(db0), t0, 0.02);
+      bus.gain.setTargetAtTime(base, t0 + ms / 1000, 0.12);
+    }
+  }
+
+  /** blade meets blade: edge-on-edge ring (enemy blade ×0.93) */
+  clashEdge(I = 0.7, pan = 0, tanphi = 0.0009, trimDb = 0) {
+    const v = this.voice('clash', I, pan, 0.35, trimDb); if (!v) return;
+    const { dest, t0 } = v;
+    this.tick(dest, t0, 3500, 2.5, 0.7);
+    this.modes(dest, t0, XIPHOS_IP, [1, 0.8, 0.55, 0.35], tanphi, I, 1, 4);
+    this.modes(dest, t0, [1489, 1912, 2920, 3502], [0.5, 0.45, 0.35, 0.25], tanphi, I, 1, 4);
+    this.modes(dest, t0, XIPHOS_IP, [0.8, 0.64, 0.44, 0.28], tanphi, I, 0.93, 3);
+    this.burst(dest, t0, 'bandpass', 1800, 1.2, 0.35, 0.012, 0.08);
+    this.thump(dest, t0, 140, 80, 45, 0.25);
+    this.duck(-3, 150);
+  }
+  /** a held guard absorbing a blow, flat on flat */
+  blockFlat(I = 0.6, pan = 0) {
+    const v = this.voice('block', I, pan, 0.3, -4); if (!v) return;
+    const { dest, t0 } = v;
+    this.modes(dest, t0, [537, 801, 1118, 1489, 1912, 2390], [0.8, 1, 0.8, 0.6, 0.4, 0.25], 0.0018, I);
+    this.tick(dest, t0, 2000, 4, 0.5);
+    this.burst(dest, t0, 'bandpass', 900, 1.5, 0.5, 0.018, 0.1);
+    this.thump(dest, t0, 120, 55, 70, 0.6);
+  }
+  /** perfect deflect: long ring, partials locked to the drone's key of D, shimmer beating */
+  parryPerfect(pan = 0) {
+    const v = this.voice('parry', 1, pan, 0.55); if (!v) return;
+    const { dest, t0 } = v;
+    this.tick(dest, t0, 4500, 1.5, 0.9);
+    this.modes(dest, t0, XIPHOS_IP, [1, 0.8, 0.55, 0.35], 0.0005, 1, 1, 4);
+    this.mode(dest, t0, 1174.66, 0.3 * 0.35, 0.9, false);
+    this.mode(dest, t0, 1760, 0.18 * 0.35, 0.7, false);
+    this.mode(dest, t0, 2920, 0.2 * 0.35, 0.5, false);
+    this.mode(dest, t0, 2925.5, 0.2 * 0.35, 0.5, false);
+    this.thump(dest, t0, 70, 42, 120, 0.5);
+    this.duck(-6, 250);
+  }
+  /** sword on a bronze cuirass / greave (damped by padding) — plus the blade's own ring */
+  armourBonk(I = 0.6, pan = 0) {
+    const v = this.voice('armour', I, pan, 0.25); if (!v) return;
+    const { dest, t0 } = v;
+    this.modes(dest, t0, CUIRASS, [1, 0.9, 0.75, 0.6, 0.45, 0.3, 0.2], 0.006, I, 1 + (Math.random() - 0.5) * 0.08, 6);
+    this.modes(dest, t0, XIPHOS_OOP, [0.35, 0.35, 0.35, 0.35, 0.3, 0.3, 0.25, 0.2], 0.0012, I, 1, 4);
+    this.tick(dest, t0, 1500, 3, 0.6);
+    this.thump(dest, t0, 150, 75, 60, 0.55);
+  }
+  /** head hit stopped by the bronze helmet */
+  helmetBell(I = 0.7, pan = 0) {
+    const v = this.voice('helmet', I, pan, 0.35); if (!v) return;
+    const { dest, t0 } = v;
+    this.modes(dest, t0, HELMET, [1, 0.7, 0.6, 0.45, 0.3, 0.2], 0.0025, I);
+    this.tick(dest, t0, 2500, 2, 0.6);
+    this.thump(dest, t0, 200, 110, 40, 0.3);
+  }
+  /** blade on the aspis: wood body + bronze rim */
+  shieldWood(I = 0.6, pan = 0) {
+    const v = this.voice('shield', I, pan, 0.3); if (!v) return;
+    const { dest, t0 } = v;
+    this.modes(dest, t0, WOOD, [1, 0.7, 0.45], 0.02, I, 1, 3);
+    this.modes(dest, t0, RIM, [0.5, 0.35, 0.25], 0.003, I, 1, 3);
+    this.thump(dest, t0, 90, 50, 80, 0.6);
+    this.tick(dest, t0, 1200, 4, 0.4);
+  }
+  /** a glancing scrape along bronze */
+  glanceScrape(I = 0.5, pan = 0) {
+    const v = this.voice('scrape', I, pan, 0.25); if (!v) return;
+    const { dest, t0 } = v;
+    const dur = Math.max(0.08, Math.min(0.2, 0.06 + 0.012 * I * 12));
+    const ctx = this.ctx!;
+    const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 5;
+    bp.frequency.setValueAtTime((900 + 260 * I * 8) * this.rate, t0);
+    bp.frequency.exponentialRampToValueAtTime((900 + 260 * I * 8) * 0.85 * this.rate, t0 + dur);
+    const g = ctx.createGain(); g.gain.setValueAtTime(0, t0); g.gain.linearRampToValueAtTime(0.5, t0 + 0.01); g.gain.setTargetAtTime(0, t0 + dur * 0.6, dur * 0.3);
+    this.noise(bp, t0, dur + 0.1); bp.connect(g).connect(dest);
+    for (const f of [1912, 2594, 3502, 4288]) {
+      const r = ctx.createBiquadFilter(); r.type = 'bandpass'; r.frequency.value = f * this.rate; r.Q.value = 60;
+      const rg = ctx.createGain(); rg.gain.value = 0.5; bp.connect(r).connect(rg).connect(dest);
+    }
+    this.modes(dest, t0, CUIRASS, [1, 0.9, 0.75, 0.6, 0.45, 0.3, 0.2], 0.006, I * 0.6, 1, 4);
+  }
+  /** the missing one: a blade going into a man (slice + wet + meat thump) */
+  fleshCut(I = 0.6, linen = false, pan = 0) {
+    const v = this.voice('flesh', I, pan, 0.1, -2); if (!v) return;
+    const { dest, t0 } = v;
+    const k = 1.25 - 0.5 * clamp01(I);
+    const ctx = this.ctx!;
+    const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 1.8;
+    bp.frequency.setValueAtTime(4500 * (0.8 + 0.4 * I) * this.rate, t0);
+    bp.frequency.exponentialRampToValueAtTime(1600 * this.rate, t0 + 0.06 * k);
+    const sg = ctx.createGain(); sg.gain.setValueAtTime(0, t0); sg.gain.linearRampToValueAtTime(0.55, t0 + 0.002); sg.gain.setTargetAtTime(0, t0 + 0.002, 0.022 * k);
+    this.noise(bp, t0, 0.2); bp.connect(sg).connect(dest);
+    this.burst(dest, t0 + 0.004, 'lowpass', 700 + (Math.random() - 0.5) * 300, 5, 0.4, 0.045 * k, 0.25);
+    this.thump(dest, t0, 170, 70, 70 * k, 0.45);
+    this.burst(dest, t0, 'lowpass', 350, 0.7, 0.3, 0.02, 0.1);
+    if (linen) for (const d of [0, 0.009, 0.017]) this.burst(dest, t0 + d, 'highpass', 2500, 0.7, 0.25, 0.002, 0.02);
+  }
+  /** celery-snap bone: N micro-clicks + low crunch */
+  boneCrunch(N = 5, pan = 0) {
+    const v = this.voice('bone' + N, 1, pan, 0.1); if (!v) return;
+    const { dest, t0 } = v;
+    let t = t0, a = 1;
+    for (let i = 0; i < N; i++) {
+      this.burst(dest, t, 'bandpass', 1800 + Math.random() * 1600, 2.5, a * 0.5, 0.0012, 0.01);
+      t += (3 + Math.random() * 6) / 1000; a *= 0.82;
+    }
+    this.burst(dest, t0, 'lowpass', 500, 0.7, 0.4, 0.03, 0.12);
+  }
+  /** limb comes off */
+  severSound(pan = 0) {
+    this.fleshCut(1, false, pan);
+    this.boneCrunch(5, pan);
+    const v = this.voice('severThump', 1, pan, 0.05); if (v) this.thump(v.dest, v.t0, 110, 50, 90, 0.6);
+  }
+  /** off with his head: cut, neck crunch, dry sub thump, then a pulsing arterial hiss */
+  decap(pan = 0) {
+    this.fleshCut(1, false, pan);
+    setTimeout(() => this.boneCrunch(8, pan), 6);
+    const v = this.voice('decap', 1, pan, 0);
+    if (!v) return;
+    const { dest, t0 } = v;
+    this.thump(dest, t0, 95, 36, 200, 0.85);
+    const ctx = this.ctx!;
+    const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 2200;
+    const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 5000; bp.Q.value = 0.7;
+    const g = ctx.createGain();
+    const start = t0 + 0.07;
+    g.gain.setValueAtTime(0, start);
+    for (let i = 0; i < 32; i++) {
+      const t = start + i * 0.05;
+      g.gain.linearRampToValueAtTime(0.22 * (0.45 + 0.55 * Math.max(0, Math.sin(2 * Math.PI * 2 * i * 0.05))) * (i > 26 ? (32 - i) / 6 : 1), t);
+    }
+    g.gain.linearRampToValueAtTime(0, start + 1.7);
+    this.noise(hp, start, 1.8); hp.connect(bp).connect(g).connect(dest);
+    this.duck(-6, 250);
+  }
+  /** enemy wind-up glint: a short three-mode 'shing', panned by lane */
+  glint(pan = 0) {
+    const v = this.voice('glint', 0.6, pan, 0.3, -14); if (!v) return;
+    this.modes(v.dest, v.t0, [2594, 3502, 4288], [1, 0.8, 0.6], 0.0012, 0.6, 0.93, 3);
+    this.tick(v.dest, v.t0, 5000, 1, 0.3);
+  }
 
   // ── SFX ──────────────────────────────────────────────────────────
   gong(freq = 110, decay = 5, gain = 0.35) {
@@ -257,8 +503,8 @@ class Audio {
 
   heal() { this.lyre([0, 7, 12, 19], 0.07, 330); }
   forgeArrive() { this.gong(196, 4, 0.3); this.lyre([0, 4, 7, 11, 14], 0.06, 392); }
-  parry() { this.metal(1.3, 2100); }
-  block() { this.metal(0.8, 900); this.thunk(0.5); }
+  parry(pan = 0) { this.clashEdge(0.85, pan); }
+  block(pan = 0) { this.blockFlat(0.6, pan); }
   ui(kind: 'move' | 'select' | 'back' = 'move') {
     if (!this.ready()) return;
     if (kind === 'move') this.lyre([0], 0, 660);

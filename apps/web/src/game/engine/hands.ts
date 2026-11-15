@@ -32,16 +32,17 @@ export class Gauntlet {
     const knuckle = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.02, 0.04), matEdge);
     knuckle.position.set(0, 0.07, 0.004);
     this.root.add(knuckle);
-    const bracer = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.043, 0.18, 10, 1, true), mat);
+    // slim vambrace: in first person a fat bracer near the lens swallows the bottom of the screen
+    const bracer = new THREE.Mesh(new THREE.CylinderGeometry(0.043, 0.038, 0.12, 10, 1, true), mat);
     (bracer.material as THREE.MeshStandardMaterial).side = THREE.DoubleSide;
-    bracer.position.set(0, -0.12, -0.004);
+    bracer.position.set(0, -0.095, -0.004);
     this.root.add(bracer);
     const cuff = new THREE.Mesh(new THREE.TorusGeometry(0.047, 0.008, 5, 14), matEdge);
     cuff.rotation.x = Math.PI / 2;
     cuff.position.set(0, -0.04, -0.004);
     this.root.add(cuff);
     const cuff2 = cuff.clone();
-    cuff2.position.y = -0.2;
+    cuff2.position.y = -0.155;
     this.root.add(cuff2);
     const wrap = new THREE.Mesh(new THREE.CylinderGeometry(0.042, 0.042, 0.06, 10), leather);
     wrap.position.set(0, -0.06, -0.004);

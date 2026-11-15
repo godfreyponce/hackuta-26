@@ -113,6 +113,12 @@ export class Engine {
     this.scene = scene;
     this.camera = camera;
     this.cb = cb;
+    // stereo position of impact sounds from where they happen in view
+    const pv = new THREE.Vector3();
+    audio.panOf = (x, y, z) => {
+      pv.set(x, y, z).applyMatrix4(camera.matrixWorldInverse);
+      return Math.max(-1, Math.min(1, pv.x / Math.max(0.5, -pv.z) / 0.7));
+    };
     const mkView = (side: Hand): HandView => ({
       side, pos: new THREE.Vector3(side === 'left' ? -0.26 : 0.24, 1.3, -0.45), quat: new THREE.Quaternion(),
       forward: new THREE.Vector3(0, 0.6, -0.8), up: new THREE.Vector3(side === 'left' ? -1 : 1, 0, 0), vel: new THREE.Vector3(), grip: 0, visible: true,
@@ -149,7 +155,7 @@ export class Engine {
       onAttackStart: () => { audio.grunt(); },
       onSever: (e, part, alive) => this.onSever(e, part, alive),
       onDropWeapon: (kind, pos, q, vel) => { this.weapons.spawnDropped(kind, pos, q, vel); },
-      onArrowBlocked: (pos) => { this.fx.sparks(pos, null, 12); audio.block(); this.addTrauma(0.15); },
+      onArrowBlocked: (pos) => { this.fx.contact(pos, new THREE.Vector3().subVectors(this.eye, pos), null, 8, 'shield'); audio.shieldWood(0.6, audio.pan(pos)); this.addTrauma(0.15); },
       laneOffset: (dir, out) => {
         // where the wooer's blade crosses in front of you (~0.7 m) — the place to put your sword
         const o = dir === 'left' ? out.set(-0.32, -0.02, -0.7) : dir === 'right' ? out.set(0.32, -0.02, -0.7)
@@ -188,8 +194,8 @@ export class Engine {
         void inHand;
       },
       onParry: (pos) => {
-        this.fx.sparks(pos, null, 16, '#fff4d0');
-        audio.parry();
+        this.fx.contact(pos, new THREE.Vector3().subVectors(this.eye, pos), null, 8, 'clash');
+        audio.clashEdge(0.7, audio.pan(pos));
         this.hitstop(60);
         this.scoring.addPoints(50);
         this.cb.toast({ kind: 'info', title: 'PARRY', points: 50 }, 900);
@@ -198,6 +204,7 @@ export class Engine {
       shake: (v) => this.addTrauma(v),
       playerPos: () => this.eye,
       kbPull: () => isKeyboardMouse(this.input),
+      speedScale: () => (this.input?.kind === 'keyboard_mouse' ? 0.65 : 1),
     }, this.hall.staticHandles);
     this.scene.add(this.weapons.group);
 
@@ -712,8 +719,13 @@ export class Engine {
       // empty-handed with no wooer close: glance down at the weapon table so it's in view
       const unarmed = !this.weapons.heldBy('left') && !this.weapons.heldBy('right');
       const near = this.enemies.list.some((en) => !en.dead && en.kind !== 'hero' && en.state !== 'idle' && Math.hypot(en.pos.x - this.eye.x, en.pos.z - this.eye.z) < 2.6);
-      const glance = this.mode === 'match' && unarmed && !near ? 0.3 : 0;
-      this.lookDown = damp(this.lookDown, Math.max(glance, cy < -0.55 ? Math.min(1, (-0.55 - cy) / 0.4) * 0.42 : 0), 5, realDt);
+      // three tiers: empty-handed glance at the table · cursor low = leg tilt · Tab or the very bottom edge = full
+      // glance at the weapon table (the telegraph arcs keep drawing, but the centre wooer's neck leaves the frame)
+      const tab = isKeyboardMouse(this.input) && this.input.glancing;
+      const full = tab || cy < -0.92;
+      const glance = this.mode === 'match' && unarmed && !near ? 0.45 : 0;
+      const target = full ? 0.62 : Math.max(glance, cy < -0.55 ? Math.min(1, (-0.55 - cy) / 0.37) * 0.42 : 0);
+      this.lookDown = damp(this.lookDown, target, full ? 12 : 6, realDt);
       const pitch = -0.1 - this.lookDown + Math.sin(t * 0.7 * Math.PI * 2) * sway * 0.6 + (Math.sin(t * 37) * 0.5 + Math.sin(t * 23) * 0.5) * maxRot * sh;
       const yaw = this.yaw + Math.sin(t * 0.43 * Math.PI * 2) * sway + Math.sin(t * 31 + 1) * maxRot * sh;
       const roll = Math.sin(t * 29 + 2) * maxRot * 0.5 * sh;
@@ -806,9 +818,9 @@ export class Engine {
   private onOutcome(e: Enemy, a: Attack, o: Outcome, at: THREE.Vector3) {
     switch (o) {
       case 'perfect':
-        this.fx.sparks(at, null, 34, '#fff1c4');
+        this.fx.contact(at, new THREE.Vector3().subVectors(this.eye, at), null, 9, 'parry');
         this.fx.gold(at, 14);
-        audio.metal(1.2, 2600); audio.lyre([12], 0, 880);
+        audio.parryPerfect(audio.pan(at));
         this.hitstop(100);
         this.microSlow(0.3, 0.25, 'deflect');
         this.ripple(at, 'gold');
@@ -817,16 +829,16 @@ export class Engine {
         this.tutorial('perfect', 'PERFECT DEFLECT', 'He staggers — strike now', 100);
         break;
       case 'beat':
-        this.fx.sparks(at, null, 14, '#ffd28a');
-        audio.metal(0.9, 2000);
+        this.fx.contact(at, new THREE.Vector3().subVectors(this.eye, at), null, 7, 'beat');
+        audio.clashEdge(0.8, audio.pan(at), 0.001, -2);
         this.hitstop(60); this.kick(0.5); this.ripple(at, 'brass');
         this.addPlayerPosture(5);
         this.tutorial('beat', 'DEFLECTED', 'Meet his blade just before it lands for a perfect deflect');
         break;
       case 'block':
       case 'shield':
-        this.fx.sparks(at, null, 4, '#d8b070');
-        audio.block();
+        this.fx.contact(at, new THREE.Vector3().subVectors(this.eye, at), null, 5, o === 'shield' ? 'shield' : 'block');
+        if (o === 'shield') audio.shieldWood(0.7, audio.pan(at)); else audio.blockFlat(0.7, audio.pan(at));
         this.hitstop(40); this.kick(0.4);
         this.addPlayerPosture(a.windup > 1 ? 35 : 20);
         this.recoil('right', new THREE.Vector3().subVectors(this.eye, at).normalize().negate(), 0.08, 150);
@@ -868,7 +880,6 @@ export class Engine {
     this.recoilOff[hand].copy(dir).multiplyScalar(-dist);
     this.recoilOff[hand].y = Math.abs(this.recoilOff[hand].y) * 0.5;
     this.dampUntil[hand] = this.realT + dampMs / 1000;
-    audio.metal(0.6, 1100);
   }
 
   private kick(deg: number) { this.kickVel += THREE.MathUtils.degToRad(deg) * 16; }

@@ -157,6 +157,162 @@ export class Particles {
 }
 
 /** All FX systems for the scene. */
+/**
+ * Streak sparks (one draw call): instanced camera-facing quads from head to tail = pos − vel·22 ms, white-hot HDR
+ * cooling to orange, gravity + drag, one floor bounce. Bronze is non-sparking, so bronze contacts are short.
+ */
+class StreakSparks {
+  readonly mesh: THREE.Mesh;
+  private cap = 256;
+  private head: Float32Array;
+  private vel: Float32Array;
+  private life: Float32Array; // (t 0..1, alive)
+  private age: Float32Array;
+  private max: Float32Array;
+  private bounced: Uint8Array;
+  private next = 0;
+  private iHead: THREE.InstancedBufferAttribute;
+  private iVel: THREE.InstancedBufferAttribute;
+  private iLife: THREE.InstancedBufferAttribute;
+  constructor() {
+    const g = new THREE.InstancedBufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], 3));
+    g.setAttribute('aSide', new THREE.Float32BufferAttribute([-1, 1, -1, 1], 1));
+    g.setAttribute('aEnd', new THREE.Float32BufferAttribute([0, 0, 1, 1], 1));
+    g.setIndex([0, 1, 2, 2, 1, 3]);
+    this.head = new Float32Array(this.cap * 3);
+    this.vel = new Float32Array(this.cap * 3);
+    this.life = new Float32Array(this.cap * 2);
+    this.age = new Float32Array(this.cap);
+    this.max = new Float32Array(this.cap);
+    this.bounced = new Uint8Array(this.cap);
+    this.iHead = new THREE.InstancedBufferAttribute(this.head, 3).setUsage(THREE.DynamicDrawUsage);
+    this.iVel = new THREE.InstancedBufferAttribute(this.vel, 3).setUsage(THREE.DynamicDrawUsage);
+    this.iLife = new THREE.InstancedBufferAttribute(this.life, 2).setUsage(THREE.DynamicDrawUsage);
+    g.setAttribute('iHead', this.iHead); g.setAttribute('iVel', this.iVel); g.setAttribute('iLife', this.iLife);
+    g.instanceCount = this.cap;
+    const mat = new THREE.ShaderMaterial({
+      transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+      vertexShader: /* glsl */ `
+        attribute float aSide; attribute float aEnd; attribute vec3 iHead; attribute vec3 iVel; attribute vec2 iLife;
+        varying float vT; varying float vEnd; varying float vAlive;
+        void main() {
+          vec3 tailOff = iVel * 0.022;
+          float L = length(tailOff);
+          if (L > 0.25) tailOff *= 0.25 / L;
+          vec3 head = iHead, tail = iHead - tailOff;
+          vec3 p = mix(head, tail, aEnd);
+          vec3 seg = normalize(head - tail + vec3(1e-5, 2e-5, 0.0));
+          vec3 side = normalize(cross(seg, normalize(cameraPosition - p)));
+          p += side * aSide * 0.0055 * (1.0 - aEnd * 0.6);
+          vT = iLife.x; vEnd = aEnd; vAlive = iLife.y;
+          gl_Position = projectionMatrix * viewMatrix * vec4(p, 1.0);
+        }`,
+      fragmentShader: /* glsl */ `
+        varying float vT; varying float vEnd; varying float vAlive;
+        void main() {
+          if (vAlive < 0.5) discard;
+          vec3 c = mix(vec3(3.2, 2.9, 2.2), vec3(2.0, 1.1, 0.35), smoothstep(0.0, 0.35, vT));
+          c = mix(c, vec3(0.5, 0.08, 0.02), smoothstep(0.35, 1.0, vT));
+          gl_FragColor = vec4(c, (1.0 - vT) * (1.0 - vEnd * 0.7));
+        }`,
+    });
+    this.mesh = new THREE.Mesh(g, mat);
+    this.mesh.frustumCulled = false;
+    this.mesh.renderOrder = 7;
+  }
+  emit(pos: THREE.Vector3, axis: THREE.Vector3, cone: number, n: number, speed: number, life: [number, number]) {
+    const t = new THREE.Vector3(), b = new THREE.Vector3(), d = new THREE.Vector3();
+    const a = axis.clone().normalize();
+    t.set(1, 0, 0); if (Math.abs(a.x) > 0.9) t.set(0, 1, 0);
+    b.crossVectors(a, t).normalize(); t.crossVectors(b, a).normalize();
+    for (let k = 0; k < n; k++) {
+      const i = this.next; this.next = (this.next + 1) % this.cap;
+      const th = Math.random() * cone, ph = Math.random() * Math.PI * 2;
+      d.copy(a).multiplyScalar(Math.cos(th)).addScaledVector(t, Math.sin(th) * Math.cos(ph)).addScaledVector(b, Math.sin(th) * Math.sin(ph));
+      const sp = speed * rand(0.6, 1.4);
+      this.head.set([pos.x, pos.y, pos.z], i * 3);
+      this.vel.set([d.x * sp, d.y * sp, d.z * sp], i * 3);
+      this.age[i] = 0; this.max[i] = rand(life[0], life[1]); this.bounced[i] = 0;
+      this.life[i * 2] = 0; this.life[i * 2 + 1] = 1;
+    }
+  }
+  update(dt: number) {
+    const drag = Math.exp(-2.2 * dt);
+    for (let i = 0; i < this.cap; i++) {
+      if (this.life[i * 2 + 1] < 0.5) continue;
+      this.age[i] += dt;
+      if (this.age[i] >= this.max[i]) { this.life[i * 2 + 1] = 0; continue; }
+      const o = i * 3;
+      this.vel[o + 1] -= 9.8 * dt;
+      this.vel[o] *= drag; this.vel[o + 1] *= drag; this.vel[o + 2] *= drag;
+      this.head[o] += this.vel[o] * dt; this.head[o + 1] += this.vel[o + 1] * dt; this.head[o + 2] += this.vel[o + 2] * dt;
+      if (this.head[o + 1] <= 0.01 && !this.bounced[i]) {
+        this.bounced[i] = 1; this.head[o + 1] = 0.01;
+        this.vel[o + 1] = -0.35 * this.vel[o + 1]; this.vel[o] *= 0.6; this.vel[o + 2] *= 0.6;
+      }
+      this.life[i * 2] = this.age[i] / this.max[i];
+    }
+    this.iHead.needsUpdate = true; this.iVel.needsUpdate = true; this.iLife.needsUpdate = true;
+  }
+}
+
+/** Contact flash: 4 pooled star sprites, HDR so they clear the bloom threshold; ≤ 3 full-strength per second. */
+class ClashFlash {
+  readonly group = new THREE.Group();
+  private pool: { s: THREE.Sprite; t: number; life: number; size: number }[] = [];
+  private recent: number[] = [];
+  private clock = 0;
+  constructor() {
+    const c = document.createElement('canvas'); c.width = c.height = 128;
+    const x = c.getContext('2d')!;
+    const g = x.createRadialGradient(64, 64, 0, 64, 64, 64);
+    g.addColorStop(0, 'rgba(255,255,255,1)'); g.addColorStop(0.18, 'rgba(255,240,210,0.8)'); g.addColorStop(1, 'rgba(255,200,120,0)');
+    x.fillStyle = g; x.fillRect(0, 0, 128, 128);
+    x.globalCompositeOperation = 'lighter';
+    for (const [len, w] of [[62, 3], [62, 3], [30, 2], [30, 2]] as const) {
+      x.save(); x.translate(64, 64);
+      x.rotate(len === 62 ? (this.pool.length ? 0 : 0) : Math.PI / 4);
+      const lg = x.createLinearGradient(-len, 0, len, 0);
+      lg.addColorStop(0, 'rgba(255,230,190,0)'); lg.addColorStop(0.5, 'rgba(255,255,255,1)'); lg.addColorStop(1, 'rgba(255,230,190,0)');
+      x.fillStyle = lg; x.fillRect(-len, -w / 2, len * 2, w);
+      x.restore();
+      x.rotate(Math.PI / 2);
+    }
+    const tex = new THREE.CanvasTexture(c);
+    for (let i = 0; i < 4; i++) {
+      const m = new THREE.SpriteMaterial({ map: tex, color: new THREE.Color(4.0, 3.5, 2.6), blending: THREE.AdditiveBlending, depthWrite: false, transparent: true });
+      const s = new THREE.Sprite(m); s.visible = false; s.renderOrder = 8;
+      this.group.add(s);
+      this.pool.push({ s, t: 1, life: 0.07, size: 0.1 });
+    }
+  }
+  fire(pos: THREE.Vector3, size: number) {
+    this.recent = this.recent.filter((t) => this.clock - t < 1);
+    const strength = this.recent.length < 3 ? 1 : 0.3; // photosensitivity: ≤ 3 full flashes per second
+    this.recent.push(this.clock);
+    const p = this.pool.reduce((a, b) => (a.t > b.t ? a : b));
+    p.t = 0; p.size = size; p.life = 0.07;
+    p.s.position.copy(pos);
+    p.s.material.rotation = Math.random() * Math.PI;
+    (p.s.material as THREE.SpriteMaterial).opacity = strength;
+    p.s.visible = true;
+  }
+  update(dt: number) {
+    this.clock += dt;
+    for (const p of this.pool) {
+      if (!p.s.visible) continue;
+      p.t += dt / p.life;
+      if (p.t >= 1) { p.s.visible = false; continue; }
+      const k = (1 - p.t) * (1 - p.t);
+      p.s.scale.setScalar(p.size * (0.7 + 0.3 * k));
+      (p.s.material as THREE.SpriteMaterial).color.setRGB(4.0 * k, 3.5 * k, 2.6 * k);
+    }
+  }
+}
+
+export type ContactKind = 'clash' | 'parry' | 'beat' | 'block' | 'glance' | 'helmet' | 'armour' | 'shield';
+
 export class Fx {
   readonly group = new THREE.Group();
   readonly add: Particles;   // additive: fire, sparks, embers, gold
@@ -170,6 +326,8 @@ export class Fx {
   private tmpV2 = new THREE.Vector3();
   hearth: THREE.Vector3 | null = null;
   braziers: THREE.Vector3[] = [];
+  private streaks = new StreakSparks();
+  private flash = new ClashFlash();
 
   constructor() {
     this.add = new Particles(900, glowTexture(), THREE.AdditiveBlending);
@@ -178,7 +336,31 @@ export class Fx {
     this.smoke.points.renderOrder = 4;
     this.gore = new Particles(500, glowTexture(), THREE.NormalBlending);
     this.gore.points.renderOrder = 4;
-    this.group.add(this.smoke.points, this.gore.points, this.flame.points, this.add.points);
+    this.group.add(this.smoke.points, this.gore.points, this.flame.points, this.add.points, this.streaks.mesh, this.flash.group);
+  }
+
+  /**
+   * Weapon contact: streak sparks in a cone around the contact normal leaning along the slide, plus a star flash.
+   * `v` = relative speed (m/s). Counts/lifetimes per contact kind (research brief).
+   */
+  contact(pos: THREE.Vector3, normal: THREE.Vector3, tangent: THREE.Vector3 | null, v: number, kind: ContactKind) {
+    const axis = this.tmpV2.copy(normal).normalize();
+    if (tangent && tangent.lengthSq() > 1e-6) axis.addScaledVector(this.tmp.copy(tangent).normalize(), kind === 'glance' ? 2.5 : 1.2).normalize();
+    const sp = 0.35 * v + 1.5;
+    const deg = THREE.MathUtils.degToRad;
+    switch (kind) {
+      case 'clash': this.streaks.emit(pos, axis, deg(55), Math.round(12 + 1.5 * Math.min(12, v)), sp, [0.12, 0.35]); this.flash.fire(pos, 0.1 + 0.08 * Math.min(1, v / 10)); break;
+      case 'parry': this.streaks.emit(pos, axis, deg(60), Math.round(rand(45, 60)), sp * 1.3, [0.18, 0.5]); this.flash.fire(pos, 0.22); break;
+      case 'beat': this.streaks.emit(pos, axis, deg(55), Math.round(rand(14, 20)), sp, [0.12, 0.32]); this.flash.fire(pos, 0.12); break;
+      case 'block': this.streaks.emit(pos, axis, deg(50), Math.round(rand(5, 8)), sp * 0.6, [0.08, 0.2]); this.flash.fire(pos, 0.06); break;
+      case 'glance': this.streaks.emit(pos, axis, deg(20), Math.round(rand(6, 12)), sp, [0.1, 0.28]); break;
+      case 'helmet': this.streaks.emit(pos, axis, deg(45), Math.round(rand(8, 12)), sp, [0.1, 0.3]); this.flash.fire(pos, 0.07); break;
+      case 'armour': this.streaks.emit(pos, axis, deg(45), Math.round(rand(4, 6)), sp, [0.08, 0.22]); break;
+      case 'shield':
+        this.streaks.emit(pos, axis, deg(45), Math.round(rand(0, 3)), sp, [0.08, 0.2]);
+        this.smoke.emit(Math.round(rand(6, 10)), { pos, vel: this.tmpV.copy(normal).multiplyScalar(1.6), spread: 1.2, life: [0.4, 0.8], size: [0.02, 0.04], color: '#5a3d22', alpha: 0.9, gravity: 9, drag: 1.5 });
+        break;
+    }
   }
 
   setViewportHeight(px: number) {
@@ -224,6 +406,8 @@ export class Fx {
       }
     }
     this.add.update(dt);
+    this.streaks.update(dt);
+    this.flash.update(dt);
     this.flame.update(ambientDt);
     this.smoke.update(dt);
     this.gore.update(dt);

@@ -21,9 +21,10 @@ export const HALL = {
   columnX: 3.25,
   columnZ: [-4.2, -8.6, -13, -17.4, -21.8],
   // the weapon table in front of Odysseus (centre z, top height, depth, width)
-  rackZ: -0.8,
-  rackTop: 0.8,
-  tableDepth: 0.6,
+  // (shallow & low so it never hides the attackers' knees: z −0.50…−0.95, top 0.74)
+  rackZ: -0.725,
+  rackTop: 0.74,
+  tableDepth: 0.45,
   tableWidth: 1.6,
 };
 

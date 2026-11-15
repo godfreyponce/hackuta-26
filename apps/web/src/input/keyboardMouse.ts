@@ -24,6 +24,8 @@ export interface KeyboardMouseController extends InputController {
   readonly mode: KbMode;
   /** Normalized device coords of the cursor (for the reticle). */
   readonly cursor: { x: number; y: number };
+  /** Tab held: glance down at the weapon table. */
+  readonly glancing: boolean;
   /** The engine reports which hands actually hold a melee weapon (drives the visible-blade "lever" pose). */
   setArmed(hand: Hand, armed: boolean, bladeM?: number, holding?: boolean): void;
 }
@@ -61,6 +63,10 @@ class HandTrack {
   /** holding anything (blade, shield, bow) — grips are sticky */
   holding = false;
   shield = false;
+  /** blade direction + angular velocity (damped angular spring → visible drag, then whip) */
+  bdir = new THREE.Vector3(0.1, 0.25, -1).normalize();
+  omega = new THREE.Vector3();
+  wasArmed = false;
   constructor(p: THREE.Vector3) { this.pos = p.clone(); this.target = p.clone(); this.tip.copy(p).multiplyScalar(2); }
   record(t: number) {
     this.hist.push({ t, x: this.pos.x, y: this.pos.y, z: this.pos.z });
@@ -76,6 +82,26 @@ class HandTrack {
     const dt = (last.t - first.t) / 1000;
     if (dt < 1e-3) return out.set(0, 0, 0);
     return out.set((last.x - first.x) / dt, (last.y - first.y) / dt, (last.z - first.z) / dt);
+  }
+}
+
+const _ax = new THREE.Vector3();
+const _ax2 = new THREE.Vector3();
+/** Angular spring on a unit direction: ω += (wn²·e − 2ζwn·ω)·h, |ω| ≤ wmax, sub-stepped at ≤ 1/120 s. */
+function springBlade(tr: { bdir: THREE.Vector3; omega: THREE.Vector3 }, want: THREE.Vector3, dt: number, wn: number, zeta: number, wmax: number) {
+  let t = Math.min(dt, 0.1);
+  while (t > 1e-5) {
+    const h = Math.min(t, 1 / 120);
+    t -= h;
+    const axis = _ax.crossVectors(tr.bdir, want);
+    const s = axis.length();
+    const ang = Math.atan2(s, tr.bdir.dot(want));
+    if (s > 1e-6) axis.multiplyScalar(ang / s); else axis.set(0, 0, 0);
+    tr.omega.addScaledVector(axis, wn * wn * h).addScaledVector(tr.omega, -2 * zeta * wn * h);
+    const om = tr.omega.length();
+    if (om > wmax) tr.omega.multiplyScalar(wmax / om);
+    const a = Math.min(wmax, tr.omega.length()) * h;
+    if (a > 1e-7) tr.bdir.applyAxisAngle(_ax2.copy(tr.omega).normalize(), a).normalize();
   }
 }
 
@@ -124,6 +150,8 @@ export function createKeyboardMouseController(): KeyboardMouseController {
 
   const tmp = new THREE.Vector3();
   const tmp2 = new THREE.Vector3();
+  const tmp3 = new THREE.Vector3();
+  const tmp4 = new THREE.Vector3();
   const aimDir = new THREE.Vector3();
 
   function rayDir(out: THREE.Vector3) {
@@ -135,6 +163,16 @@ export function createKeyboardMouseController(): KeyboardMouseController {
     const z = out.y * s + out.z * c;
     out.y = y; out.z = z;
     return out.normalize();
+  }
+
+  /** Body-frame point on the camera ray through NDC (x, y) at view depth `depth`. */
+  function ndcPoint(x: number, y: number, depth: number, out: THREE.Vector3) {
+    const t = Math.tan(cam.fovY / 2);
+    out.set(x * t * cam.aspect * depth, y * t * depth, -depth);
+    const c = Math.cos(cam.pitch), s = Math.sin(cam.pitch);
+    const yy = out.y * c - out.z * s, zz = out.y * s + out.z * c;
+    out.y = yy; out.z = zz;
+    return out;
   }
 
   function notifyMode() { modeListeners.forEach((cb) => cb({ ...mode })); }
@@ -173,6 +211,7 @@ export function createKeyboardMouseController(): KeyboardMouseController {
     keys.add(k);
     switch (k) {
       case 'KeyB': setBow(!mode.bow); break;
+      case 'Tab': e.preventDefault(); break; // glance at the weapon table (held)
       case 'Space':
         if (mode.bow) { e.preventDefault(); startDraw(); }
         break;
@@ -309,7 +348,7 @@ export function createKeyboardMouseController(): KeyboardMouseController {
     if (mode.bow && h === 'left') f.copy(rayDir(aimDir));
     else if (tr.shield) f.set(h === 'right' ? -0.12 : 0.12, rmb ? 0.12 : 0.02, -1).normalize(); // aspis face → the enemy
     else if (rmb && !hands.left.shield && !hands.right.shield) f.set(h === 'right' ? -0.92 : 0.92, 0.24, -0.32).normalize();
-    else if (tr.armed && h === mode.activeHand) f.subVectors(tr.tip, tr.pos).normalize();
+    else if (tr.armed && h === mode.activeHand) f.copy(tr.bdir);
     else if (tr.armed) f.set(h === 'right' ? -0.3 : 0.3, 0.8, -0.5).normalize(); // off-hand blade raised to parry
     else if (h === mode.activeHand && !mode.bow) f.subVectors(tr.tip, tr.pos).normalize(); // empty hand reaching
     else {
@@ -365,13 +404,26 @@ export function createKeyboardMouseController(): KeyboardMouseController {
         // W = thrust: drive the point straight out along the line of the blade
         thrust = damp(thrust, keys.has('KeyW') ? 0.34 : 0, keys.has('KeyW') ? 22 : 9, dt);
         const goal = tmp.copy(aimDir).multiplyScalar(reach + 0.45 + lunge + thrust);
-        // critically damped follow (frame-rate independent): the point trails a hair behind the cursor
-        smoothDamp(active.tip, goal, active.tipVel, 0.07, dt);
+        // hand: from a low rest anchor it moves 45% as far as the aim point does (the blade covers the rest),
+        // so it stays in its corner instead of crossing the view; clamped to the arm's reach from the shoulder
+        const side = mode.activeHand === 'right' ? 1 : -1;
+        const hRest = ndcPoint(side * 0.4, -0.6, 0.5, tmp2);
+        const tRest = ndcPoint(side * 0.1, 0.04, reach + 0.45, tmp3);
+        active.target.copy(hRest).addScaledVector(tmp4.copy(goal).sub(tRest), 0.45);
         const sh = SHOULDER[mode.activeHand];
-        const d = tmp2.copy(active.tip).sub(sh);
-        const len = Math.max(0.3, d.length());
-        // hand sits one blade-length back from the point along the shoulder→point line (clamped to the arm)
-        active.target.copy(sh).addScaledVector(d, clamp(len - active.blade, 0.26, 0.62) / len);
+        const off = tmp2.copy(active.target).sub(sh);
+        const ol = off.length();
+        if (ol > 0.66 || ol < 0.3) active.target.copy(sh).addScaledVector(off, clamp(ol, 0.3, 0.66) / Math.max(1e-3, ol));
+        // the blade swings toward the aim point on a damped angular spring: a flick drags it behind the hand,
+        // then it whips through and settles — heavier/longer weapons are slower (Mordhau-style turn cap)
+        const want = tmp3.copy(goal).sub(active.pos).normalize();
+        if (!active.wasArmed) { active.bdir.copy(want); active.omega.set(0, 0, 0); }
+        const wn = clamp(16 * Math.sqrt(0.65 / Math.max(0.3, active.blade)), 7, 19);
+        springBlade(active, want, dt, wn, 0.55, wn > 12 ? 12 : 8);
+        const prev = tmp4.copy(active.tip);
+        active.tip.copy(active.pos).addScaledVector(active.bdir, active.blade);
+        if (dt > 1e-4 && active.wasArmed) active.tipVel.copy(active.tip).sub(prev).multiplyScalar(1 / dt);
+        else active.tipVel.set(0, 0, 0);
       } else {
         // empty hand reaches toward what you point at from the lower corner (the cursor ray does the picking),
         // instead of sitting dead-centre under the reticle where its bracer blocks the view
@@ -396,6 +448,7 @@ export function createKeyboardMouseController(): KeyboardMouseController {
       tr.pos.lerp(tr.target, 1 - Math.exp(-28 * dt));
       tr.record(now);
       writeHand(h, tr);
+      tr.wasArmed = tr.armed && h === mode.activeHand && !mode.bow;
       const speed = tr.armed ? tr.tipVel.length() * 0.6 : tr.vel.length();
       if ((tr.armed || tr.gripping) && tr.swingArmed && speed > 2.2) {
         tr.swingArmed = false;
@@ -410,6 +463,7 @@ export function createKeyboardMouseController(): KeyboardMouseController {
     kind: 'keyboard_mouse',
     mode,
     cursor,
+    get glancing() { return keys.has('Tab'); },
     async start() {
       if (running) return;
       running = true;

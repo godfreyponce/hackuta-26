@@ -65,6 +65,8 @@ export interface WeaponHooks {
   onForgedArrive(w: WeaponEnt, toHand: boolean): void;
   onParry(pos: THREE.Vector3): void;
   onRecoil(hand: Hand, dir: THREE.Vector3, dist: number, dampMs: number): void;
+  /** keyboard/mouse swings are slower than real arms: thresholds × this */
+  speedScale(): number;
   onChamber(w: WeaponEnt, at: THREE.Vector3): void;
   hitstop(ms: number): void;
   shake(v: number): void;
@@ -237,9 +239,10 @@ export class WeaponManager {
   private daggerTimer = 0;
   private spearTimer = 0;
   private shieldTimer = 0;
+  private dualClashT = -9;
   t = 0;
   realT = 0;
-  private speedHist = new Map<number, { t: number; sp: number }[]>();
+  private speedHist = new Map<number, { t: number; sp: number; x: number; y: number; z: number }[]>();
   private nockedArrow = { show: false, tail: new THREE.Vector3(), dir: new THREE.Vector3() };
   private eventQueue: InstanceType<typeof RAPIER.EventQueue>;
 
@@ -338,7 +341,7 @@ export class WeaponManager {
     this.bowTips = { top: bow.tipTop, bottom: bow.tipBottom };
     bw.rackKind = 'bow';
     // standing at the table's right end, string toward you
-    bw.rackPose = { pos: new THREE.Vector3(0.7, 0.66, rz - 0.12), quat: lyingQuat(new THREE.Vector3(0.06, 1, 0), new THREE.Vector3(-0.4, 0, 1)) };
+    bw.rackPose = { pos: new THREE.Vector3(0.6, 0.66, rz - 0.08), quat: lyingQuat(new THREE.Vector3(0.06, 1, 0), new THREE.Vector3(-0.4, 0, 1)) };
     this.rack(bw);
     this.spawnDagger(0);
     this.spawnDagger(1);
@@ -348,15 +351,16 @@ export class WeaponManager {
 
   private daggerSlot(i: number) {
     // hilts at the front edge, blades pointing away and fanned slightly outward
-    const dir = i === 0 ? new THREE.Vector3(-0.08, 0, -1) : new THREE.Vector3(0.1, 0, -1);
-    return { pos: new THREE.Vector3(i === 0 ? 0.02 : 0.24, HALL.rackTop + 0.022, HALL.rackZ + 0.25), quat: lyingQuat(dir, new THREE.Vector3(0, 1, 0)) };
+    // a mirrored pair, hilts at the front edge 0.32 m apart, blades fanned slightly outward
+    const dir = i === 0 ? new THREE.Vector3(-0.12, 0, -1) : new THREE.Vector3(0.12, 0, -1);
+    return { pos: new THREE.Vector3(i === 0 ? -0.16 : 0.16, HALL.rackTop + 0.022, -0.56), quat: lyingQuat(dir, new THREE.Vector3(0, 1, 0)) };
   }
   private spawnShield() {
     const w = this.create('shield', WEAPON_CLASSES.shield, buildAspis(0.8), 'Aspis of Ithaca');
     w.rackKind = 'shield';
     // leaning against the table's left end, face toward Odysseus
     // lying face-up on the left of the table, tipped toward you
-    w.rackPose = { pos: new THREE.Vector3(-0.42, HALL.rackTop + 0.05, HALL.rackZ - 0.02), quat: lyingQuat(new THREE.Vector3(0.1, 1, 0.35), new THREE.Vector3(0, 0, -1)) };
+    w.rackPose = { pos: new THREE.Vector3(-0.52, HALL.rackTop + 0.05, HALL.rackZ - 0.02), quat: lyingQuat(new THREE.Vector3(0.1, 1, 0.35), new THREE.Vector3(0, 0, -1)) };
     this.rack(w);
     return w;
   }
@@ -376,7 +380,7 @@ export class WeaponManager {
     const w = this.create('spear', WEAPON_CLASSES.spear, holder, 'Spear of Ithaca');
     w.rackKind = 'spear';
     // standing against the table's right end beside the bow, point up
-    w.rackPose = { pos: new THREE.Vector3(0.86, 0.9, HALL.rackZ - 0.2), quat: lyingQuat(new THREE.Vector3(-0.08, 1, 0.04), new THREE.Vector3(0, 0, 1)) };
+    w.rackPose = { pos: new THREE.Vector3(0.78, 0.9, HALL.rackZ - 0.12), quat: lyingQuat(new THREE.Vector3(-0.08, 1, 0.04), new THREE.Vector3(0, 0, 1)) };
     this.rack(w);
     return w;
   }
@@ -736,6 +740,19 @@ export class WeaponManager {
   poststep(dt: number, realDt: number, hands: Record<Hand, HandView>) {
     this.t += dt;
     this.realT += realDt;
+    // dual wield: your two blades crossing ring off each other (quieter, no hitstop)
+    const L = this.held.left, R = this.held.right;
+    if (L && R && L.spec.sharp && R.spec.sharp && L.cls !== 'bow' && R.cls !== 'bow' && this.realT - this.dualClashT > 0.2) {
+      const la = new THREE.Vector3().copy(L.center), ra = new THREE.Vector3().copy(R.center);
+      const d2 = segSegDistLocal(la, L.tip, ra, R.tip);
+      const rel = Math.abs(L.speed - R.speed) + Math.min(L.speed, R.speed) * 0.5;
+      if (d2 < (L.radius + R.radius + 0.02) ** 2 && rel > 1.5) {
+        this.dualClashT = this.realT;
+        const at = la.add(L.tip).multiplyScalar(0.5).lerp(ra.add(R.tip).multiplyScalar(0.5), 0.5);
+        this.fx.contact(at, new THREE.Vector3(0, 1, 0), null, rel, 'block');
+        audio.clashEdge(Math.min(1, rel / 10), audio.pan(at), 0.0009, -6);
+      }
+    }
     // collision events (static contacts → ricochet, pin-stick, arrow stick, bomb)
     this.eventQueue.drainCollisionEvents((h1, h2, started) => {
       if (!started) return;
@@ -767,10 +784,10 @@ export class WeaponManager {
         // contact uses the swing's peak tip speed over the last ~60 ms: the (inflated) hit capsule meets the
         // smoothed blade early in the arc, before it is at full speed
         const hist = this.speedHist.get(w.id) ?? [];
-        hist.push({ t: this.realT, sp });
-        while (hist.length && this.realT - hist[0].t > 0.06) hist.shift();
+        hist.push({ t: this.realT, sp, x: w.tip.x, y: w.tip.y, z: w.tip.z });
+        while (hist.length && this.realT - hist[0].t > 0.13) hist.shift();
         this.speedHist.set(w.id, hist);
-        const peak = hist.reduce((m, h) => Math.max(m, h.sp), sp);
+        const peak = hist.reduce((m, h) => (this.realT - h.t <= 0.06 ? Math.max(m, h.sp) : m), sp);
         // slow cuts are never silent: anything above a drift registers (≤1.5 m/s is a touch: tink, no damage)
         if (sp > 0.8 && w.cls !== 'bow') this.tryHit(w, a, b, peak, 'melee', w.tip.clone().sub(w.prevTip).normalize(), realDt);
         else if (sp > 2.2 && w.cls === 'bow') this.tryHit(w, a, b, peak, 'melee', w.tip.clone().sub(w.prevTip).normalize(), realDt);
@@ -843,10 +860,24 @@ export class WeaponManager {
     const sweepB = w.state === 'held' ? w.tip : w.center;
     const hasSweep = sweepA.lengthSq() > 0 && sweepA.distanceTo(sweepB) < speed * dt * 3 + 0.5;
     const magnet = w.state === 'held' && speed > 3.5 ? 0.12 : 0;
-    // chamber: blade meets a wooer's sword during his wind-up → his attack is cancelled
-    if (w.state === 'held' && speed > 2) {
+    // blade meets blade. A CHAMBER (his attack cancelled) needs intent: late in his wind-up (≥ 60%), at speed
+    // (≥ 4 m/s on mouse) and driving into his blade. Anything else is a CLASH: ring, sparks, both blades bounce.
+    if (w.state === 'held' && speed > 1.2) {
       const clash = this.enemies.testSwords(a, longB, w.radius);
-      if (clash && this.enemies.chamber(clash.e, clash.point)) { this.hooks.onChamber(w, clash.point); return; }
+      if (clash) {
+        const key = clash.e.id * 16 + 15;
+        const last = w.hitCd.get(key) ?? -1;
+        if (this.realT - last >= 0.12) {
+          w.hitCd.set(key, this.realT);
+          const intent = clash.windupProgress >= 0.6 && speed >= 6 * this.hooks.speedScale() && (dir.dot(_v2.subVectors(clash.e.pos, clash.point).setY(0).normalize()) > 0.3 || Math.abs(dir.dot(clash.bladeDir)) < 0.6);
+          if (intent && this.enemies.chamber(clash.e, clash.point)) { this.hooks.onChamber(w, clash.point); return; }
+          const I = Math.min(1, Math.max(0, (speed - 1.5) / 10.5));
+          this.fx.contact(clash.point, dir.clone().negate(), clash.bladeDir, speed, speed >= 2 ? 'clash' : 'block');
+          audio.clashEdge(I, audio.pan(clash.point));
+          this.hooks.onRecoil(w.hand ?? 'right', dir, 0.1, 150);
+          return;
+        }
+      }
     }
     const hit = this.enemies.testSegment(a, longB, w.radius, hasSweep ? sweepA : undefined, hasSweep ? sweepB : undefined, magnet);
     if (!hit) return;
@@ -855,11 +886,36 @@ export class WeaponManager {
     if (this.realT - last < 0.25) return;
     w.hitCd.set(key, this.realT);
     const zone = this.enemies.zoneOf(hit.part);
-    const relSpeed = Math.min(speed, source === 'arrow' ? 70 : 32);
+    let relSpeed = Math.min(speed, source === 'arrow' ? 70 : 32);
+    // B&S-style contact data for held blades: where along the edge it touched, how fast THAT point moved
+    // this frame (not the tip's peak), and whether the stroke was committed
+    let contactFrac: number | undefined, contactSpeed: number | undefined, strokeLen: number | undefined, strokeTurn: number | undefined;
+    if (w.state === 'held' && dt > 1e-4) {
+      const ab = new THREE.Vector3().subVectors(b, a);
+      const L2 = Math.max(1e-6, ab.lengthSq());
+      contactFrac = clamp(new THREE.Vector3().subVectors(hit.point, a).dot(ab) / L2, 0, 1);
+      const reach = (w.segA.length() + contactFrac * (w.segB.length() - w.segA.length())) / Math.max(1e-3, w.segB.length());
+      const cur = new THREE.Vector3().copy(w.center).lerp(w.tip, reach);
+      const prev = new THREE.Vector3().copy(w.prevCenter).lerp(w.prevTip, reach);
+      contactSpeed = prev.lengthSq() > 0 ? cur.distanceTo(prev) / dt : speed;
+      relSpeed = Math.min(Math.max(contactSpeed, speed * 0.6 * reach), 32); // damage follows the contact point too
+      const hs = this.speedHist.get(w.id) ?? [];
+      const recent = hs.filter((h) => this.realT - h.t <= 0.12);
+      strokeLen = 0;
+      for (let i = 1; i < recent.length; i++) strokeLen += Math.hypot(recent[i].x - recent[i - 1].x, recent[i].y - recent[i - 1].y, recent[i].z - recent[i - 1].z);
+      strokeTurn = 0;
+      if (recent.length >= 3) {
+        const m = Math.floor(recent.length / 2);
+        const d1 = new THREE.Vector3(recent[m].x - recent[0].x, recent[m].y - recent[0].y, recent[m].z - recent[0].z);
+        const d2 = new THREE.Vector3(recent[recent.length - 1].x - recent[m].x, recent[recent.length - 1].y - recent[m].y, recent[recent.length - 1].z - recent[m].z);
+        if (d1.lengthSq() > 1e-6 && d2.lengthSq() > 1e-6) strokeTurn = THREE.MathUtils.radToDeg(d1.angleTo(d2));
+      }
+    }
     const info: HitInfo = {
       amount: 0, zone, part: hit.part, point: hit.point, dir: dir.clone(), speed: relSpeed, sharp: w.spec.sharp,
       source, impulse: relSpeed * w.spec.massKg * (w.cls === 'blunt' || w.cls === 'shield' ? 14 : 7) + 40, weaponEntId: w.id,
       bladeAxis: w.cls === 'arrow' ? dir.clone() : axis.clone(), massKg: w.spec.massKg * (w.state === 'held' ? HELD_MULT : 1), classDamage: w.spec.damage,
+      bladeA: a.clone(), bladeB: b.clone(), contactFrac, contactSpeed, strokeLen, strokeTurn,
     };
     if (w.cls === 'bomb' && w.state === 'free') { this.detonate(w); return; }
     const res = this.enemies.damage(hit.enemy, info);

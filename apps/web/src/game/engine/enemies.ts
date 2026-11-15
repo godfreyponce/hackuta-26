@@ -89,6 +89,9 @@ export interface Enemy {
   bleedUntil: number;
   /** last stagger (anti stun-lock) */
   staggerT: number;
+  /** throat cut: bleeding (5 hp/s) until, and the neck gives way more easily until */
+  throatBleedUntil: number;
+  neckWoundUntil: number;
   /** severed limbs of the realistic body, following their gib bodies */
   gibs: { part: number; mesh: THREE.Object3D }[];
 }
@@ -108,6 +111,16 @@ export interface HitInfo {
   bladeAxis?: THREE.Vector3;
   massKg?: number;
   classDamage?: number;
+  /** visible blade at contact (guard end → point), world — for the strict neck/joint geometry */
+  bladeA?: THREE.Vector3;
+  bladeB?: THREE.Vector3;
+  /** where along the edge it touched: 0 at the guard end of the blade … 1 at the point */
+  contactFrac?: number;
+  /** speed of the blade at the contact point this frame (m/s) — what B&S cuts with, not the tip's peak */
+  contactSpeed?: number;
+  /** stroke commitment: tip travel (m) over the last 120 ms and its heading change (deg) */
+  strokeLen?: number;
+  strokeTurn?: number;
 }
 
 export type HitKind = 'flesh' | 'glance' | 'blocked' | 'shield' | 'kill';
@@ -156,14 +169,21 @@ const RAGDOLL_TTL = 14;
 
 // Armor penetration (m/s): cut / thrust — research brief §5
 type ArmorClass = 'bronze' | 'linen' | 'thigh' | 'gap';
-const VPEN: Record<ArmorClass, [number, number]> = { bronze: [9, 6], linen: [5, 3.5], thigh: [3, 2], gap: [1.5, 1.5] };
+// B&S Update 11: armour cancels slashing — bronze turns all but the hardest cuts (and those do half); thrust gaps
+const VPEN: Record<ArmorClass, [number, number]> = { bronze: [14, 7], linen: [7, 4], thigh: [4, 2.5], gap: [1.5, 1.5] };
 const BLUNT_ABSORB: Record<ArmorClass, number> = { bronze: 0.45, linen: 0.3, thigh: 0.15, gap: 0 };
-// Sever speed (m/s) for an edge cut through a joint gap
-// B&S needs 12 m/s in VR; scaled to mouse/webcam swing speeds. Head = the NECK only (helmets stop head cuts).
+// Sever speed (m/s, webcam; × speedScale on mouse) AT THE CONTACT POINT for a committed edge cut across the
+// joint. Blade & Sorcery made dismemberment "trickier to encourage skill-based dismembers": perpendicular, hard
+// cuts at the neck / shoulder / elbow / knee, ideally after staggering him. Head = the NECK only.
+const NECK_V = 11.5;
 const SEVER: Partial<Record<number, number>> = {
-  [P.Head]: 5.5, [P.UArmL]: 6.0, [P.UArmR]: 6.0, [P.LArmL]: 5.0, [P.LArmR]: 5.0,
-  [P.ULegL]: 7.5, [P.ULegR]: 7.5, [P.LLegL]: 6.0, [P.LLegR]: 6.0,
+  [P.Head]: NECK_V, [P.UArmL]: 10.5, [P.UArmR]: 10.5, [P.LArmL]: 9.0, [P.LArmR]: 9.0,
+  [P.ULegL]: 14.0, [P.ULegR]: 14.0, [P.LLegL]: 11.0, [P.LLegR]: 11.0,
 };
+const _n1 = new THREE.Vector3();
+const _n2 = new THREE.Vector3();
+const _n3 = new THREE.Vector3();
+const _n4 = new THREE.Vector3();
 
 const _v = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
@@ -223,7 +243,7 @@ export class EnemyManager {
       anim: newAnim(), pose: newPose(), ragdoll: null, severed: new Set(), stumps: [], armed: look.prop !== 'none',
       dead: false, diedAt: 0, ring: null, attack: null, nextAttackAt: 0, spot: null, lastHit: new Map(), spawnT: this.t,
       name: boss ? 'Antinous' : undefined, pinned: false, feastSeed: Math.random() * 10, forward: new THREE.Vector3(0, 0, 1),
-      charging: false, blockTimes: [], flinch: { t: -9, dir: new THREE.Vector3(), amount: 0 }, bleedUntil: 0, gibs: [], staggerT: -9,
+      charging: false, blockTimes: [], flinch: { t: -9, dir: new THREE.Vector3(), amount: 0 }, bleedUntil: 0, gibs: [], staggerT: -9, throatBleedUntil: 0, neckWoundUntil: 0,
     };
     if (kind === 'archer') {
       const side = Math.random() < 0.5 ? -1 : 1;
@@ -315,6 +335,15 @@ export class EnemyManager {
         continue;
       }
       e.stateT += dt;
+      // throat cut: he bleeds 5 hp/s, clutching his neck
+      if (this.t < e.throatBleedUntil && e.state !== 'maimed') {
+        e.hp -= 5 * dt;
+        if (Math.random() < dt * 6) this.fx.blood(jointPoint(e.pose, P.Head, _n1), e.forward, 3);
+        if (e.hp <= 0) {
+          this.kill(e, { amount: 999, zone: 'head', part: P.Head, point: jointPoint(e.pose, P.Head, new THREE.Vector3()), dir: e.forward.clone().negate(), speed: 1, sharp: true, source: 'melee', impulse: 40, weaponEntId: null }, { decapitated: false, finisher: false, severed: null });
+          continue;
+        }
+      }
       // posture regen 10/s after 1.5 s without posture damage (halved below 50% hp)
       if (this.t - e.postureT > 1.5 && e.state !== 'broken') e.posture = Math.max(0, e.posture - dt * (e.hp < e.maxHp * 0.5 ? 5 : 10));
       if (e.state === 'idle') { this.updateIdle(e, dt); continue; }
@@ -601,7 +630,7 @@ export class EnemyManager {
       const tip = new THREE.Vector3();
       this.renderer.swordSegment(e.pose, e.look, _c1, tip);
       this.fx.sparks(tip, null, 8, at.unblockable ? '#ff6a4a' : '#fff1c4');
-      if (at.unblockable) audio.gong(98, 1.2, 0.25); else audio.metal(0.35, 2600);
+      if (at.unblockable) audio.gong(98, 1.2, 0.25); else audio.glint(at.dir === 'left' ? -0.6 : at.dir === 'right' ? 0.6 : 0);
     }
     if (!at.whooshed && toImpact <= 0.25) { at.whooshed = true; audio.whoosh(6); }
     if (toImpact <= 0.12 && e.state === 'windup') { e.state = 'strike'; }
@@ -670,17 +699,22 @@ export class EnemyManager {
     e.attack = null;
     this.addPosture(e, 20);
     if ((e.state as EState) !== 'broken') this.setState(e, 'recoil', 0.45);
-    this.fx.sparks(point, null, 18, '#ffe2a0');
-    audio.metal(0.9, 2100);
+    this.fx.contact(point, _v.copy(this.hooks.playerHead()).sub(point), null, 6, 'clash');
+    audio.clashEdge(0.75, audio.pan(point));
     return true;
   }
 
   /** Swept test of the player's blade against wooers' swords (for chambers). */
-  testSwords(a: THREE.Vector3, b: THREE.Vector3, radius: number): { e: Enemy; point: THREE.Vector3 } | null {
+  /** Blade-on-blade: your blade against any living, armed wooer's sword (any state) — the true contact point. */
+  testSwords(a: THREE.Vector3, b: THREE.Vector3, radius: number): { e: Enemy; point: THREE.Vector3; windupProgress: number; bladeDir: THREE.Vector3 } | null {
     for (const e of this.list) {
-      if (e.dead || !e.armed || e.state !== 'windup') continue;
+      if (e.dead || !e.armed || e.severed.has(P.LArmR) || e.state === 'idle' || e.kind === 'hero') continue;
       this.renderer.swordSegment(e.pose, e.look, _c1, _c2);
-      if (segSegDist2(a, b, _c1, _c2, _v, _v2) < (radius + 0.04) ** 2) return { e, point: _v2.clone() };
+      if (segSegDist2(a, b, _c1, _c2, _v, _v2) < (radius + 0.04) ** 2) {
+        const at = e.attack;
+        const progress = e.state === 'windup' && at ? 1 - (at.impactAt - this.t) / Math.max(0.1, at.windup) : 0;
+        return { e, point: _v.clone().lerp(_v2, 0.5), windupProgress: progress, bladeDir: _c2.clone().sub(_c1).normalize() };
+      }
     }
     return null;
   }
@@ -812,12 +846,9 @@ export class EnemyManager {
     if (e.kind === 'hero') return res;
     if (e.dead) {
       // B&S: corpses can be dismembered too
-      if (info.sharp && info.source === 'melee' && info.speed > 4 && e.ragdoll) {
-        const sv = SEVER[info.part];
-        if (sv !== undefined && !e.severed.has(info.part)) {
-          const cut = info.part === P.Torso && this.armorAt(e, info.part, info.point).neck ? P.Head : info.part;
-          if (this.sever(e, cut, info)) { res.severed = cut; res.decapitated = cut === P.Head; }
-        }
+      if (info.sharp && info.source === 'melee' && e.ragdoll) {
+        const cut = this.cutCheck(e, info, 0.6);
+        if (cut !== null && this.sever(e, cut, info)) { res.severed = cut; res.decapitated = cut === P.Head; }
       }
       return res;
     }
@@ -841,8 +872,15 @@ export class EnemyManager {
         this.addPosture(e, e.kind === 'boss' ? 8 : tier === 3 ? 22 : 14);
         if (e.state !== 'broken') this.setState(e, 'block', 0.3);
         if (hasShield && tier === 3 && info.massKg && info.massKg > 2) this.setState(e, 'stagger', 0.6); // heavy blow staggers through the shield
-        this.fx.sparks(info.point, info.dir.clone().negate(), hasShield ? 16 : 22, '#ffe2a0');
-        audio.parry();
+        const I = Math.min(1, Math.max(0, ((info.contactSpeed ?? info.speed) - 1.5) / 10.5));
+        let at = info.point;
+        if (!hasShield && hasSword && info.bladeA && info.bladeB) {
+          this.renderer.swordSegment(e.pose, e.look, _v, _v2);
+          segSegDist2(info.bladeA, info.bladeB, _v, _v2, _n3, _n4);
+          at = _n3.clone();
+        }
+        this.fx.contact(at, info.dir.clone().negate(), info.dir, info.contactSpeed ?? info.speed, hasShield ? 'shield' : 'clash');
+        if (hasShield) audio.shieldWood(I, audio.pan(at)); else audio.clashEdge(I, audio.pan(at));
         this.renderer.flash[e.slot] = 0.3;
         return res;
       }
@@ -858,8 +896,8 @@ export class EnemyManager {
         res.blocked = true;
         e.shieldHp -= (info.amount || this.rawDamage(info)) * (info.sharp ? 0.6 : 1.4);
         this.addPosture(e, 6);
-        this.fx.sparks(info.point, info.dir.clone().negate(), 12);
-        audio.block();
+        this.fx.contact(info.point, info.dir.clone().negate(), info.dir, info.speed, 'shield');
+        audio.shieldWood(Math.min(1, info.speed / 12), audio.pan(info.point));
         if (e.shieldHp <= 0) {
           res.shieldBroke = true;
           this.fx.dust(info.point, 14);
@@ -885,40 +923,53 @@ export class EnemyManager {
         res.glanced = true;
         dmg = this.rawDamage(info) * 0.2;
         this.addPosture(e, tier >= 3 ? 30 : tier === 2 ? 20 : 12);
-        this.fx.sparks(info.point, info.dir.clone().negate(), 10, '#ffd28a');
-        audio.metal(0.55, 3000);
-      } else dmg = this.rawDamage(info);
+        const I = Math.min(1, Math.max(0, (info.speed - 1.5) / 10.5));
+        const pan = audio.pan(info.point);
+        if (info.part === P.Head) { this.fx.contact(info.point, info.dir.clone().negate(), info.dir, info.speed, 'helmet'); audio.helmetBell(I, pan); }
+        else { this.fx.contact(info.point, info.dir.clone().negate(), info.dir, info.speed, arm.cls === 'bronze' ? 'glance' : 'armour'); audio.glanceScrape(I, pan); if (arm.cls === 'bronze') audio.armourBonk(I * 0.6, pan); }
+      } else dmg = this.rawDamage(info) * (arm.cls === 'bronze' && !thrust ? 0.5 : 1);
     } else dmg = this.rawDamage(info) * (1 - BLUNT_ABSORB[arm.cls]);
     if (!res.glanced) dmg *= this.zoneMult(info.part, arm.neck);
     if (broken) dmg *= 3;
     else if (e.state === 'stagger' || e.state === 'recoil') dmg *= 1.5; // riposte window
     if (tier === 0 && info.source === 'melee') {
       // touch: never silent
-      audio.metal(0.15, 2400);
+      if (arm.cls === 'bronze') audio.armourBonk(0.1, audio.pan(info.point)); else audio.fleshCut(0.05, arm.cls === 'linen', audio.pan(info.point));
       e.flinch = { t: this.t, dir: info.dir.clone(), amount: 0.25 };
       return res;
     }
-    // 4) dismemberment (edge cuts through gaps) — B&S rules: slash only, gaps only, speed threshold
+    // 4) dismemberment — Blade & Sorcery rules: a committed edge cut ACROSS the neck or a joint, fast enough at the
+    // contact point, with the middle-to-point of the blade; the neck also needs an opening
     let severPart: number | null = null;
-    // edge leading (≥55° off the blade axis), like B&S's slash cone; stabs never sever
-    const edgeCut = !info.bladeAxis || Math.abs(info.bladeAxis.dot(info.dir)) < 0.57;
-    const cutCapable = info.sharp && !thrust && edgeCut && (info.source === 'melee' || info.source === 'thrown') && !res.glanced;
-    if (cutCapable) {
-      const target = arm.neck ? P.Head : info.part;
-      const need = SEVER[target];
-      const headBlocked = info.part === P.Head && !arm.neck; // the bronze bell of the helmet
-      const greaved = (target === P.LLegL || target === P.LLegR) && e.look.greaves;
-      const armored = arm.cls === 'linen' ? 1.3 : 1;          // leather bracers / linen
-      // Antinous is a boss, not a one-cut kill: his limbs and head come off only once he's broken or nearly spent
-      const bossGuard = e.kind === 'boss' && !e.dead && !broken && e.hp - dmg > e.maxHp * 0.3;
-      if (need !== undefined && !headBlocked && !greaved && !bossGuard && !e.severed.has(target) && info.speed >= need * armored * this.hooks.speedScale()) severPart = target;
+    const cutCapable = info.sharp && !thrust && (info.source === 'melee' || info.source === 'thrown') && !res.glanced;
+    // Antinous is a boss, not a one-cut kill: his limbs and head come off only once he's broken or nearly spent
+    const bossGuard = e.kind === 'boss' && !broken && e.hp - dmg > e.maxHp * 0.3;
+    if (cutCapable && !bossGuard) {
+      severPart = this.cutCheck(e, info, broken ? 0.5 : 1);
+      // near miss at the throat: a gash, not a beheading — he bleeds and staggers, and the next cut takes it
+      if (severPart === null && this.lastNeckNearMiss) {
+        dmg *= 1.8 / this.zoneMult(info.part, arm.neck);
+        e.throatBleedUntil = this.t + 6;
+        e.neckWoundUntil = this.t + 8;
+        if (e.state !== 'broken') { e.attack = null; this.setState(e, 'stagger', 0.7); }
+        this.fx.blood(info.point, info.dir, 14);
+        combatLog({ kind: 'throatCut', speed: +(info.contactSpeed ?? info.speed).toFixed(2) });
+      }
     }
-    if (broken && info.sharp && (info.part === P.Head || arm.neck)) severPart = P.Head; // finisher: off with his head
     res.damage = dmg;
     e.hp -= dmg;
     e.lastHit.set(-99, this.t);
     this.renderer.flash[e.slot] = Math.min(1, 0.5 + dmg / 60);
-    if (!res.glanced) this.fx.hitPuff(info.point, info.dir, dmg);
+    if (!res.glanced) {
+      this.fx.hitPuff(info.point, info.dir, dmg);
+      // the missing sound: a blade going in (through bronze it also rings the plate)
+      if (info.sharp && info.source !== 'bomb') {
+        const I = Math.min(1, Math.max(0, ((info.contactSpeed ?? info.speed) - 1.5) / 10.5));
+        const pan = audio.pan(info.point);
+        if (arm.cls === 'bronze') { audio.armourBonk(I, pan); setTimeout(() => audio.fleshCut(I * 0.6, false, pan), 6); }
+        else audio.fleshCut(I, arm.cls === 'linen', pan);
+      }
+    }
     if (severPart === P.Head || ((severPart === P.ULegL || severPart === P.ULegR || severPart === P.LLegL || severPart === P.LLegR))) e.hp = Math.min(e.hp, 0);
     if (!res.glanced && tier >= 1) this.addPosture(e, tier === 3 ? 18 : 10);
 
@@ -956,10 +1007,15 @@ export class EnemyManager {
       if (tier >= 2 && e.state !== 'broken' && e.state !== 'maimed') {
         // hyper-armour: once his wind-up is 40% done only a heavy blow (≥7 m/s, mouse-scaled) breaks it, and a
         // wooer can be staggered at most once per 1.5 s — fast sweeps no longer stun-lock him
+        // interrupts only early in his wind-up (< 25%) or with a heavy blow (≥ 14 m/s, mouse-scaled) — otherwise
+        // it's a TRADE: you hurt him, but his blow still lands. Stagger cooldown 1.5 s (2.5 s armoured).
         const atk = e.attack;
-        const committed = e.state === 'windup' && !!atk && 1 - (atk.impactAt - this.t) / Math.max(0.1, atk.windup) > 0.4;
-        const heavy = info.speed >= 7 * this.hooks.speedScale();
-        if ((committed && !heavy) || this.t - e.staggerT < 1.5) { /* flinch only */ }
+        const progress = e.state === 'windup' && atk ? 1 - (atk.impactAt - this.t) / Math.max(0.1, atk.windup) : 0;
+        const committed = e.state === 'windup' && progress >= 0.25;
+        const heavy = info.speed >= 14 * this.hooks.speedScale();
+        const resist = (e.kind === 'boss' || e.look.armor === 'muscle') && !(heavy && e.posture >= 60);
+        const cd = e.look.armor === 'muscle' || e.kind === 'boss' ? 2.5 : 1.5;
+        if ((committed && (!heavy || resist)) || this.t - e.staggerT < cd) { /* flinch only — trade */ }
         else {
           e.staggerT = this.t;
           e.attack = null;
@@ -981,9 +1037,68 @@ export class EnemyManager {
     const cls = (info.classDamage ?? 1.3) / 1.3;
     return 20 * Math.pow(Math.max(0, v) / 5, 1.2) * mass * cls;
   }
+  private lastNeckNearMiss = false;
+  /**
+   * Blade & Sorcery dismemberment check. Returns the part that comes off (P.Head = beheading) or null.
+   * `k` scales the speed thresholds (0.5 broken finisher, 0.6 corpses). Sets lastNeckNearMiss for throat cuts.
+   * Held-blade hits carry the real blade segment, contact fraction/speed and stroke; thrown blades use speed.
+   */
+  private cutCheck(e: Enemy, info: HitInfo, k: number): number | null {
+    this.lastNeckNearMiss = false;
+    const ss = this.hooks.speedScale();
+    const L = e.look;
+    const v = info.contactSpeed ?? info.speed;
+    const held = info.bladeA !== undefined && info.bladeB !== undefined;
+    // the edge leads (≥ 65° off the blade axis) and the stroke was committed (no back-and-forth wiggles)
+    const edge = !info.bladeAxis || Math.abs(info.bladeAxis.dot(info.dir)) <= 0.42;
+    const committed = !held || ((info.strokeLen ?? 0) >= 0.25 && (info.strokeTurn ?? 0) <= 40);
+    const onEdge = !held || ((info.contactFrac ?? 1) >= 0.15); // not the ricasso by the guard
+    if (!edge || !onEdge) return null;
+    const corpse = e.dead;
+    // ── the neck: a strict capsule between the head joint and the top of the torso, no hit-test forgiveness ──
+    if (!e.severed.has(P.Head)) {
+      const top = jointPoint(e.pose, P.Head, _n1);
+      const bot = _n2.copy(e.pose[P.Torso].b);
+      if (top.distanceToSquared(bot) < 1e-4) bot.y -= 0.06 * L.scale;
+      const r = 0.06 * L.scale + 0.025;
+      const geo = held
+        ? segSegDist2(info.bladeA!, info.bladeB!, top, bot, _n3, _n4) <= r * r
+        : info.point.distanceTo(top) < 0.1 * L.scale;
+      if (geo) {
+        const axis = _n3.subVectors(top, bot).normalize();
+        const across = Math.abs(info.dir.dot(axis)) <= 0.5;
+        // an opening: off balance, committed to his own swing, or cut from his flank/back
+        const toPlayer = _n4.copy(this.hooks.playerHead()).sub(e.pos).setY(0).normalize();
+        const flank = toPlayer.dot(e.forward) < Math.cos(THREE.MathUtils.degToRad(50));
+        const atk = e.attack;
+        const progress = e.state === 'windup' && atk ? 1 - (atk.impactAt - this.t) / Math.max(0.1, atk.windup) : 0;
+        const opening = corpse || flank || progress >= 0.6 || ['strike', 'stagger', 'recoil', 'broken', 'maimed', 'recover', 'down', 'getup'].includes(e.state);
+        const need = NECK_V * ss * k * (this.t < e.neckWoundUntil ? 0.7 : 1);
+        if (across && committed) {
+          if (opening && v >= need) return P.Head;
+          // no opening (he's square to you, guarding) or not quite fast enough: a throat gash instead
+          if (!corpse && v >= need * 0.55) this.lastNeckNearMiss = true;
+        }
+        return null;
+      }
+    }
+    if (!committed) return null;
+    // ── limbs: across the bone, at the joint (shoulder / elbow / hip / knee) ──
+    const part = info.part;
+    const base = SEVER[part];
+    if (base === undefined || part === P.Head || e.severed.has(part)) return null;
+    if ((part === P.LLegL || part === P.LLegR) && L.greaves) return null; // greaves cover the knee/shin
+    const p = e.pose[part];
+    const bone = _n1.subVectors(p.b, p.a).normalize();
+    if (Math.abs(info.dir.dot(bone)) > 0.5) return null;
+    if (info.point.distanceTo(jointPoint(e.pose, part, _n2)) > 0.14 * L.scale) return null;
+    const armored = this.armorAt(e, part, info.point).cls === 'linen' ? 1.3 : 1; // leather bracers
+    return v >= base * ss * k * armored ? part : null;
+  }
+
   private zoneMult(part: number, neck: boolean) {
-    if (neck) return 2.5;
-    if (part === P.Head) return 2;
+    if (neck) return 1.8;
+    if (part === P.Head) return 1.5;
     if (part === P.Torso || part === P.Pelvis) return 1;
     return 0.6;
   }
@@ -1018,8 +1133,7 @@ export class EnemyManager {
     e.stumps.push({ part, local: toLocal(part), until: this.t + 1.6 });
     if (parent >= 0) e.stumps.push({ part: parent, local: toLocal(parent), until: this.t + 2.2 });
     this.fx.blood(jp, info.dir, 26);
-    audio.thunk(1.1);
-    audio.metal(0.3, 700);
+    if (part === P.Head) audio.decap(audio.pan(jp)); else audio.severSound(audio.pan(jp));
     // weapons in a severed hand fall free (can be picked up)
     if (pieces.includes(P.LArmR) && e.armed) {
       e.armed = false;
