@@ -107,6 +107,7 @@ const _sb = new THREE.Vector3();
 const _m = new THREE.Matrix4();
 const _st1 = new THREE.Vector3();
 const _st2 = new THREE.Vector3();
+const _st3 = new THREE.Vector3();
 const Y = new THREE.Vector3(0, 1, 0);
 
 // ── arrow instancing (player + enemy arrows, one draw call per skin) ──────
@@ -465,7 +466,7 @@ export class WeaponManager {
     let best: WeaponEnt | null = null, bestScore = Infinity;
     const end = new THREE.Vector3().copy(aimRay.origin).addScaledVector(aimRay.dir, 4);
     for (const w of this.list) {
-      if ((w.state !== 'racked' && w.state !== 'free') || w.cls === 'arrow') continue;
+      if ((w.state !== 'racked' && w.state !== 'free' && w.state !== 'lodged') || w.cls === 'arrow') continue;
       const gp = this.gripWorld(w, new THREE.Vector3());
       const along = new THREE.Vector3().subVectors(gp, aimRay.origin).dot(aimRay.dir);
       if (along < 0.2 || along > 3.5) continue;
@@ -547,7 +548,7 @@ export class WeaponManager {
 
   /** The weapon flies from where it lies into the hand (point-and-grip pull). */
   pullTo(w: WeaponEnt, h: HandView) {
-    if (this.held[h.side] || (w.state !== 'racked' && w.state !== 'free')) return;
+    if (this.held[h.side] || (w.state !== 'racked' && w.state !== 'free' && w.state !== 'lodged')) return; // a blade left in a body comes back too
     const from = this.gripWorld(w, new THREE.Vector3());
     const quatFrom = w.body.rotation();
     w.state = 'incoming';
@@ -1033,7 +1034,10 @@ export class WeaponManager {
       const ab = _st1.subVectors(b, a);
       const frac = _st2.subVectors(hit.point, a).dot(ab) / Math.max(1e-6, ab.lengthSq());
       if (frac >= 0.7) {
-        if (!this.stabs.tipReached(hit.enemy, hit.part, b)) return;
+        // the point itself must reach his skin (wait a step for it). Webcam depth is the noisiest axis, so there the
+        // point gets 5 cm more forgiveness (≈11 cm in all) — a tracked thrust that stops just short still goes in
+        const point = cap ? b : _st3.copy(b).addScaledVector(axis, 0.05);
+        if (!this.stabs.tipReached(hit.enemy, hit.part, point)) return;
         stabLike = true;
       }
     }

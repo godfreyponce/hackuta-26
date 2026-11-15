@@ -37,9 +37,9 @@ export const BODY_MOVES: { move: string; does: string; friend?: boolean }[] = [
   { move: 'Both fists by your chin', does: 'Guard — hold them up as a blow lands' },
   { move: 'Lean left / right', does: 'Dodge · crouch to duck a high cut' },
   { move: 'Left arm out to the side', does: 'Bow — bring your right fist to your left hand, pull back, open to loose' },
-  { move: 'Fist to your mouth', does: 'Drink a potion (hold ½ s)' },
+  { move: 'Fist to your mouth', does: 'Drink a potion (hold about half a second)' },
   { move: 'Phone sign by your ear', does: 'Thumb and pinky out, hold 1 s — call Telemachus', friend: true },
-  { move: 'Both hands over your head', does: 'Hold 1 s — Telemachus sends a weapon', friend: true },
+  { move: 'Both hands over your head', does: 'Hold a moment — your friend sends a weapon', friend: true },
 ];
 
 /** The moves as a two-column key → action list (used on calibration, in the lobby and the pause menu). */

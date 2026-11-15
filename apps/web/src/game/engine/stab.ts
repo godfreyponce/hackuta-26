@@ -64,6 +64,8 @@ interface Lodge {
   /** lateral anchor offset on the blade (weapon local x/z) for the corpse joint */
   lat: THREE.Vector3;
   rel: { p: THREE.Vector3; q: THREE.Quaternion } | null;
+  /** his tear-out time before you let go (restored if you take the blade back) */
+  freeAtBefore?: number;
   prevC: THREE.Vector3;
   exited: boolean;
   leftAt: number;
@@ -253,6 +255,8 @@ export class StabSystem {
     L.hand = true;
     L.rel = null;
     L.prevC.set(t.x, t.y, t.z);
+    // taking it back cancels his wrench-out
+    if (L.e.impale && L.freeAtBefore !== undefined) { L.e.impale.freeAt = L.freeAtBefore; L.e.impale.wantFree = false; L.freeAtBefore = undefined; }
     w.collider.setCollisionGroups(GROUPS.none);
   }
 
@@ -282,14 +286,14 @@ export class StabSystem {
     L.hand = false;
     L.leftAt = L.age;
     // a living man with a blade left in him tears it out after a moment (unless it kills him first)
-    if (L.e.impale) L.e.impale.freeAt = Math.min(L.e.impale.freeAt, this.enemies.t + 1.3);
+    if (L.e.impale) { L.freeAtBefore = L.e.impale.freeAt; L.e.impale.freeAt = Math.min(L.e.impale.freeAt, this.enemies.t + 1.3); }
     return true;
   }
 
   /** Before world.step: a blade left in a man rides on his body. */
   prestep() {
     for (const L of this.lodges) {
-      if (L.hand || !L.rel || L.w.state === 'gone') continue;
+      if (L.hand || !L.rel || L.w.state !== 'lodged') continue;
       if ((L.e.dead || L.e.state === 'down') && L.e.ragdoll?.bodies[L.part]) this.toPartFrame(L);
       this.entryFrame(L, _pc, _pq);
       const p = _o.copy(L.rel.p).applyQuaternion(_pq).add(_pc);
@@ -473,11 +477,17 @@ export class StabSystem {
   }
 
   /** a weapon is being removed / reset: forget its lodge without effects */
-  forget(w: WeaponEnt) {
+  forget(w: WeaponEnt, quiet = false) {
     const L = this.lodgeOf(w);
-    if (L) { this.lodges.splice(this.lodges.indexOf(L), 1); this.removeJoint(L); L.e.lodged = Math.max(0, L.e.lodged - 1); if (L.e.impale?.weaponId === w.id) L.e.impale.wantFree = true; }
+    if (L) {
+      this.lodges.splice(this.lodges.indexOf(L), 1); this.removeJoint(L); L.e.lodged = Math.max(0, L.e.lodged - 1);
+      if (L.e.impale?.weaponId === w.id) {
+        if (quiet) L.e.impale = null; // match reset: no cries, the wooers are going anyway
+        else this.enemies.impaleEnd(L.e, 'pull', w.id); // never leave him stuck 'impaled'
+      }
+    }
     this.blood.forget(w.id);
   }
 
-  clear() { for (const L of [...this.lodges]) this.forget(L.w); this.drips.length = 0; }
+  clear() { for (const L of [...this.lodges]) this.forget(L.w, true); this.drips.length = 0; }
 }

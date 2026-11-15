@@ -167,7 +167,7 @@ function onServer(m: ServerToWeb) {
       if (m.state === 'connected' && prev.state !== 'connected') {
         if (callWatchdog) clearTimeout(callWatchdog);
         audio.lyre([0, 4, 7, 12], 0.07, 293.7);
-        pushToast({ kind: 'gift', title: `${friendTitle().toUpperCase()} IS ON THE LINE`, sub: useApp.getState().inputKind === 'keyboard_mouse' ? 'Press Q to ask for a weapon' : 'Raise both arms to ask for a weapon' }, 3000);
+        pushToast({ kind: 'gift', title: `${friendTitle().toUpperCase()} IS ON THE LINE`, sub: useApp.getState().inputKind === 'keyboard_mouse' ? 'Press Q to ask for a weapon' : 'Raise both hands over your head to ask for a weapon' }, 3000);
         void getCallBridge().media?.startAudio?.();
       }
       if (m.state === 'ringing' && prev.state !== 'ringing') audio.ring();

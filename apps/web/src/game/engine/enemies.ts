@@ -1203,7 +1203,7 @@ export class EnemyManager {
     return best;
   }
 
-  private armorAt(e: Enemy, part: number, point: THREE.Vector3, atNeck = false): { cls: ArmorClass; neck: boolean } {
+  private armorAt(e: Enemy, part: number, point: THREE.Vector3, atNeck = false, thrust = false): { cls: ArmorClass; neck: boolean } {
     const L = e.look;
     switch (part) {
       case P.Head: {
@@ -1214,7 +1214,8 @@ export class EnemyManager {
       }
       case P.Torso: {
         if (point.y > e.pose[P.Torso].b.y + 0.06 * L.scale) return { cls: 'gap', neck: true };
-        if (L.armor !== 'none') {
+        // the armpit and the belly below the plate are gaps for a POINT finding them — a slash still meets the bronze
+        if (L.armor !== 'none' && thrust) {
           const tp = e.pose[P.Torso];
           const loc = _a1.copy(point).sub(tp.c).applyQuaternion(_aq.copy(tp.q).invert());
           // the armpit: under a raised arm the cuirass is open
@@ -1315,8 +1316,8 @@ export class EnemyManager {
     }
 
     // 3) armor: glance or penetrate
-    const arm = this.armorAt(e, info.part, info.point, !!info.neck);
     const thrust = !!info.bladeAxis && Math.abs(info.bladeAxis.dot(info.dir)) > 0.8 || info.source === 'arrow';
+    const arm = this.armorAt(e, info.part, info.point, !!info.neck, thrust);
     res.armor = arm.cls; res.neck = arm.neck;
     combatLog({ kind: 'hit', part: info.part, speed: +info.speed.toFixed(2), cls: arm.cls, neck: arm.neck, thrust, stab: !!info.stab, source: info.source, state: e.state });
     let dmg: number;
@@ -1814,6 +1815,7 @@ export class EnemyManager {
     e.woundBleedUntil = this.t + (deep ? 5 : 3);
     e.woundBleedRate = deep ? (im.depth > 0.12 ? 6 : 3.5) : 1.5;
     if (e.hp <= 0) { this.kill(e, info, { decapitated: false, finisher: false, severed: null, impaled: im.vital }); return; }
+    if (e.state === 'down') return; // knocked down on the blade: his ragdoll gets up through updateDown, not a stagger
     e.staggerT = this.t;
     this.setState(e, 'stagger', e.kind === 'boss' ? 0.5 : 0.8);
     e.pos.addScaledVector(_v.copy(e.forward).setY(0).normalize(), -0.12);

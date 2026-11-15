@@ -94,7 +94,7 @@ export function Lobby() {
           <div className="field">
             <label>Controls</label>
             <div className="seg" role="group" aria-label="Controls">
-              <button aria-pressed={body} disabled={!motionAvailable} title={motionAvailable ? undefined : 'Body tracking isn’t installed in this build'} onClick={() => void setupInput('motion')}>{motionAvailable ? 'Body (webcam)' : 'Body (webcam) · unavailable'}</button>
+              <button aria-pressed={body} disabled={!motionAvailable} onClick={() => { if (!body) void setupInput('motion'); }}>{motionAvailable ? 'Body (webcam)' : 'Body (webcam) · unavailable'}</button>
               <button aria-pressed={inputKind === 'keyboard_mouse'} onClick={() => void setupInput('keyboard_mouse')}>Keyboard &amp; mouse</button>
             </div>
           </div>

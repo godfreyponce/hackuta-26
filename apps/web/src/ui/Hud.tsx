@@ -40,25 +40,38 @@ function HealthBlock() {
   );
 }
 
-interface HandInfo { held: string | null; seen: boolean; fist: boolean }
+interface HandInfo { held: string | null; seen: boolean; read: boolean; fist: boolean }
 interface HandsSnap { left: HandInfo; right: HandInfo; quiver: number; driven: Hand | null; unarmedLong: boolean; unseenLong: boolean; hover: boolean }
-const NO_HAND: HandInfo = { held: null, seen: true, fist: false };
+const NO_HAND: HandInfo = { held: null, seen: true, read: true, fist: false };
 
 /** What each hand holds and (webcam) whether the tracker sees it / reads a fist — polled at 5 Hz, re-renders on change. */
 function useHands(body: boolean): HandsSnap {
   const [snap, setSnap] = useState<HandsSnap>({ left: NO_HAND, right: NO_HAND, quiver: 0, driven: null, unarmedLong: false, unseenLong: false, hover: false });
   useEffect(() => {
     let unarmedAt = 0, unseenAt = 0, key = '';
-    // fist read with Part C's grip hysteresis (packages/motion config gripOn 0.65 / gripOff 0.35), so the dot doesn't flicker
+    // fallback fist read (only if the controller exposes no gesture flags): C's default hysteresis
     const fist: Record<Hand, boolean> = { left: false, right: false };
+    // when the HAND model last actually read each hand (wrist seen ≠ fingers read: that's when a fist can't register)
+    const freshAt: Record<Hand, number> = { left: 0, right: 0 };
     const t = setInterval(() => {
       const e = runtime.engine, w = e?.weapons;
       if (!e || !w) return;
       const st = body ? runtime.input?.getState() : null;
+      const dbg = (body ? runtime.input : null) as unknown as {
+        getDebugBody?: () => { handFresh: Record<Hand, boolean> } | null;
+        getDebugGestures?: () => Record<string, boolean>;
+      } | null;
+      const dbody = dbg?.getDebugBody?.() ?? null;
+      const flags = dbg?.getDebugGestures?.() ?? null;
+      const now0 = performance.now();
       const info = (h: Hand): HandInfo => {
         const hs = st?.hands[h];
+        if (dbody?.handFresh[h]) freshAt[h] = now0;
         if (hs?.visible) fist[h] = fist[h] ? hs.grip > 0.35 : hs.grip >= 0.65;
-        return { held: w.heldBy(h)?.name ?? null, seen: hs ? hs.visible : true, fist: !!hs?.visible && fist[h] };
+        // Part C's own grip latch, so the dot agrees with whether a grab can fire
+        const latched = flags ? !!flags[h === 'left' ? 'gripL' : 'gripR'] : fist[h];
+        const read = !dbody || now0 - freshAt[h] < 400;
+        return { held: w.heldBy(h)?.name ?? null, seen: hs ? hs.visible : true, read, fist: !!hs?.visible && read && latched };
       };
       const left = info('left'), right = info('right');
       const now = performance.now();
@@ -87,13 +100,13 @@ function HandsBlock({ hands, body }: { hands: HandsSnap; body: boolean }) {
   const slot = (side: Hand, label: string) => {
     const h = hands[side];
     const driven = hands.driven === side;
-    // webcam: a dot per hand — green seen/open, brass fist, red not seen (the in-game hand ghosts and holds still)
-    const status = !body ? '' : !h.seen ? 'unseen' : h.fist ? 'fist' : 'open';
+    // webcam: a dot per hand — green open, brass fist, amber arm seen but fingers not read (a fist can't register),
+    // red not seen at all (the in-game hand ghosts and holds still)
+    const status = !body ? '' : !h.seen ? 'unseen' : !h.read ? 'unread' : h.fist ? 'fist' : 'open';
     return (
-      <span className={`hand-slot ${h.held ? 'on' : ''} ${driven ? 'driven' : ''} ${status}`}
-        title={body ? (!h.seen ? 'The camera can’t see this hand' : h.fist ? 'Fist' : 'Open hand') : undefined}>
+      <span className={`hand-slot ${h.held ? 'on' : ''} ${driven ? 'driven' : ''} ${status}`}>
         {body && <i className="dot" aria-hidden />}
-        {label} · {h.held ?? (body && !h.seen ? 'not seen' : 'empty')}
+        {label} · {h.held ?? (body && !h.seen ? 'not seen' : body && !h.read ? 'open your hand to the camera' : 'empty')}
         {body && !h.seen && h.held && <em className="unseen-tag"> · not seen</em>}
         {driven ? ' ◂ mouse' : ''}
       </span>
@@ -221,7 +234,7 @@ function CallPanel() {
   const kb = useApp((s) => s.inputKind === 'keyboard_mouse');
   // fighting alone: one small chip, not a panel — keeps the top-right of the hall clear
   if (!friend && !isCallLive(call)) {
-    return <div className="tr solo"><span className="chip" title={netMode === 'mock' ? 'Mock hub' : undefined}><span className="dot" />Fighting alone</span></div>;
+    return <div className="tr solo"><span className="chip"><span className="dot" />Fighting alone{netMode === 'mock' ? ' · mock' : ''}</span><ForgeCard /></div>;
   }
   return (
     <div className="tr">
@@ -278,7 +291,7 @@ function Prompts({ hands }: { hands: HandsSnap }) {
   }
   // webcam: say when the tracker is struggling — the in-game hands only ghost, which is easy to miss mid-fight
   if (body && tracking === 'degraded') return <div className="prompt warn" role="status">Tracking is weak — face a light and keep both hands in view</div>;
-  if (body && hands.unseenLong) return <div className="prompt warn" role="status">We can’t see your hands — hold them up in front of you</div>;
+  if (body && hands.unseenLong && tracking !== 'lost' && tracking !== 'calibrating') return <div className="prompt warn" role="status">We can’t see your hands — hold them up in front of you</div>;
   if (hands.unarmedLong && !bow && !(kb && hands.hover)) {
     return kb
       ? <div className="prompt">Click a weapon on the table to take it · <span className="kbd">Tab</span> look down</div>
@@ -391,12 +404,12 @@ function PauseMenu({ onResume }: { onResume: () => void }) {
         <div className="field">
           <label>Controls (hot-swap)</label>
           <div className="seg">
-            <button aria-pressed={body} disabled={!motionAvailable} title={motionAvailable ? undefined : 'Body tracking isn’t installed in this build'} onClick={() => void setupInput('motion')}>{motionAvailable ? 'Body (webcam)' : 'Body (webcam) · unavailable'}</button>
+            <button aria-pressed={body} disabled={!motionAvailable} onClick={() => { if (!body) void setupInput('motion'); }}>{motionAvailable ? 'Body (webcam)' : 'Body (webcam) · unavailable'}</button>
             <button aria-pressed={inputKind === 'keyboard_mouse'} onClick={() => void setupInput('keyboard_mouse')}>Keyboard &amp; mouse</button>
           </div>
           {inputKind === 'replay' && <span className="muted small">Replaying a recorded webcam session.</span>}
         </div>
-        {body && <Btn onClick={() => { void runtime.input?.calibrate?.(); }}>Recalibrate</Btn>}
+        {inputKind === 'motion' && <Btn onClick={() => { void runtime.input?.calibrate?.(); }}>Recalibrate</Btn>}
         <div className="field">
           <label htmlFor="shake">Camera shake</label>
           <input id="shake" type="range" min={0} max={100} defaultValue={Math.round((runtime.engine?.shakeScale ?? 1) * 100)}

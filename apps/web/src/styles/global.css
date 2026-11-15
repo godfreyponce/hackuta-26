@@ -215,6 +215,7 @@ button, input, select { font: inherit; color: inherit; }
 .hand-slot { display: inline-flex; align-items: center; gap: 6px; }
 .hand-slot .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--verdigris-hi); box-shadow: 0 0 6px var(--verdigris-hi); flex: none; }
 .hand-slot.fist .dot { background: var(--brass-hi); box-shadow: 0 0 6px var(--brass-hi); }
+.hand-slot.unread .dot { background: #e0a43c; box-shadow: 0 0 6px #e0a43c; }
 .hand-slot.unseen { color: #ffb38a; }
 .hand-slot.unseen .dot { background: var(--alarm); box-shadow: 0 0 6px var(--alarm); animation: blink 1s steps(2) infinite; }
 .hand-slot .unseen-tag { color: #ffb38a; }
