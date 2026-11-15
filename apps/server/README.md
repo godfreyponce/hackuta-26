@@ -28,4 +28,4 @@ Notes for other parts:
 - `weapon.spawn` is guaranteed (prefab fallback) within `SF3D_TIMEOUT_MS` + 5 s of detection.
   The server serves the fallback models at `/prefabs/<class>.glb` from `apps/server/prefabs/`
   (rebuild: `pnpm --filter @ithaca/server prefabs:build`, check: `prefabs:test`).
-- Same object name forged in the last 2 h reuses its GLB (instant, no credits).
+- Same object name, color and pipeline (`FORGE_3D_MODEL`, `FORGE_CLEAN_IMAGE`, `SF3D_TEXTURE_RES`) forged in the last 2 h reuses its GLB and its thumb (instant, no credits).

@@ -7,7 +7,7 @@ const examples = Object.entries(WEAPON_CLASSES)
 export const VISION_PROMPT = `You are the Quartermaster of Ithaca's armory in a video game. The image is a frame from a FaceTime call. A friend is holding up a real household object to be turned into a game weapon.
 1. Identify the single most prominent handheld object being shown (not the person, not the face, not furniture or the room, and ignore any phone/video-call UI, names or overlays).
 2. Return a tight bounding box around only that object, as normalized coordinates [x0, y0, x1, y1] in 0..1 with (0,0) at the top-left.
-3. Map it to one weapon class: spear (long poles), sword (flat/stick-like, arm length or shorter), blunt (heavy/solid), throwable (small, round or light), shield (flat and wide), bomb (cans/bottles that look like they'd explode in a cartoon), potion (drinkable containers). Examples: ${examples}.
+3. Map it to one weapon class: spear (long poles, longer than an arm), sword (flat/stick-like, arm length or shorter, including thin hand-sized sticks such as chopsticks, pens and pencils), blunt (heavy/solid), throwable (small, round or light), shield (flat and wide), bomb (cans/bottles that look like they'd explode in a cartoon), potion (drinkable containers). Examples: ${examples}.
 4. Give it an epic display name in the style of Homer's Odyssey (mortal heroes and places only, no gods), at most 4 words.
 5. Write a one-line gruff, funny quip (at most 14 words) the armorer would say on seeing it.
 6. Give the object's real main colors and material as seen in the image, at most 6 words (e.g. "black plastic and silver metal").

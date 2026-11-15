@@ -112,3 +112,23 @@ test('the schema keeps the object color, short and trimmed, and defaults it to e
   assert.equal(visionResultSchema.parse({ ...base, color: 'x'.repeat(200) }).color.length, 60);
   assert.equal(visionResultSchema.parse(base).color, '');
 });
+
+const parseAs = (object_name: string, weapon_class: string) => visionResultSchema.parse({
+  is_object: true, object_name, display_name: 'X', weapon_class, bbox: [0, 0, 1, 1], confidence: 0.9, quip: '', color: '',
+}).weapon_class;
+
+test('thin hand-sized sticks become swords (0.9 m), not 1.8 m spears', () => {
+  for (const name of ['chopsticks', 'Chopstick', 'pair of wooden chopsticks', 'black pen', 'ballpoint pen', 'pencil', 'pens', 'marker', 'paintbrush']) {
+    assert.equal(parseAs(name, 'spear'), 'sword', name);
+  }
+  assert.equal(parseAs('pen', 'blunt'), 'sword');
+});
+
+test('other objects keep the class vision picked', () => {
+  assert.equal(parseAs('aquaphor tube', 'bomb'), 'bomb');
+  assert.equal(parseAs('tube of lotion', 'potion'), 'potion');
+  assert.equal(parseAs('broom', 'spear'), 'spear');
+  assert.equal(parseAs('pen holder', 'blunt'), 'blunt');
+  assert.equal(parseAs('pencil case', 'blunt'), 'blunt');
+  assert.equal(parseAs('open book', 'blunt'), 'blunt');
+});

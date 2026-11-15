@@ -21,6 +21,8 @@ export interface WeaponDoc {
   _id: ObjectId; sessionId: string; playerId: ObjectId | null; friendName: string;
   objectName: string; displayName: string; weaponClass: WeaponClass; quip: string;
   vision: { provider: string; model: string; confidence: number; bbox: [number, number, number, number] };
+  /** How the GLB was made (3D model, clean-image mode, texture size) and the object color vision saw; the GLB reuse key. */
+  pipeline?: string; color?: string;
   glbFileId?: ObjectId; thumbFileId?: ObjectId; fallback: boolean; reusedFrom?: ObjectId;
   kills: number; createdAt: Date;
 }

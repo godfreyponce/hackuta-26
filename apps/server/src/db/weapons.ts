@@ -31,13 +31,17 @@ export async function listWeapons(limit: number): Promise<WeaponDoc[]> {
   return mem.slice(0, limit);
 }
 
-/** A successful, real (non-fallback) GLB for this object forged in the last `withinMs`. */
-export async function findRecentGlb(objectName: string, withinMs: number): Promise<WeaponDoc | null> {
+export interface GlbKey { objectName: string; pipeline: string; color: string }
+
+/** A successful, real (non-fallback) GLB for this object, made by this pipeline from this color, in the last `withinMs`. */
+export async function findRecentGlb(key: GlbKey, withinMs: number): Promise<WeaponDoc | null> {
   const since = new Date(Date.now() - withinMs);
   const s = getStore();
-  const q = { objectName, fallback: false, glbFileId: { $exists: true }, createdAt: { $gte: since } } as const;
+  const { objectName, pipeline, color } = key;
+  const q = { objectName, pipeline, color, fallback: false, glbFileId: { $exists: true }, createdAt: { $gte: since } } as const;
   if (s) return s.weapons.find(q).sort({ createdAt: -1 }).limit(1).next();
-  return mem.find((w) => w.objectName === objectName && !w.fallback && w.glbFileId && w.createdAt >= since) ?? null;
+  return mem.find((w) => w.objectName === objectName && w.pipeline === pipeline && w.color === color
+    && !w.fallback && w.glbFileId && w.createdAt >= since) ?? null;
 }
 
 export async function addKills(perWeapon: Record<string, number>): Promise<void> {

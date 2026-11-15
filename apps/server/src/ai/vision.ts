@@ -43,6 +43,10 @@ export function toUnitBox(raw: unknown, order: 'xy' | 'yx'): Box {
   return [x0, y0, x1, y1];
 }
 
+// The game stretches a spear to 1.8 m, so a chopstick held at the eye reads as a plank; at sword size (0.9 m) it reads as a stick.
+const THIN_STICK = /^(chopsticks?|pens?|pencils?|markers?|crayons?|paintbrush(es)?|stylus(es)?|skewers?|straws?)$/;
+const isThinStick = (objectName: string) => THIN_STICK.test(objectName.split(/\s+/).at(-1) ?? '');
+
 export const visionResultSchema = z.object({
   is_object: z.boolean(),
   object_name: z.string().default(''),
@@ -58,7 +62,7 @@ export const visionResultSchema = z.object({
     is_object: r.is_object,
     object_name: r.object_name.trim().toLowerCase().slice(0, 60),
     display_name: r.display_name.trim().split(/\s+/).slice(0, 5).join(' ').slice(0, 60),
-    weapon_class: r.weapon_class,
+    weapon_class: isThinStick(r.object_name.trim().toLowerCase()) ? 'sword' : r.weapon_class,
     bbox: toUnitBox(r.bbox, 'xy'),
     confidence: clamp01(r.confidence),
     quip: r.quip.trim().slice(0, 140),

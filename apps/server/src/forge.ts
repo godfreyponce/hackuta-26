@@ -20,6 +20,11 @@ const inFlight = new Set<string>();
 const REUSE_WITHIN_MS = 2 * 60 * 60 * 1000;
 const MIN_CONFIDENCE = 0.6;
 
+/** Two GLBs are interchangeable only when these settings match; the reuse cache keys on it. */
+export function forgePipeline(): string {
+  return `${env.FORGE_3D_MODEL}/clean=${env.FORGE_CLEAN_IMAGE}/tex=${env.SF3D_TEXTURE_RES}`;
+}
+
 /** Lets tests/CLI await the async part of a forge. */
 export const forgeDone = new Map<string, Promise<WeaponSpawn>>();
 
@@ -82,7 +87,7 @@ async function runPipeline(forgeId: string, jpeg: Buffer, sessionId: string, v: 
 
   const base = {
     sessionId, playerId: ctx.playerId, friendName: ctx.friendName, objectName: v.object_name, displayName,
-    weaponClass: v.weapon_class, quip: v.quip,
+    weaponClass: v.weapon_class, quip: v.quip, pipeline: forgePipeline(), color: v.color,
     vision: { provider: vision.name, model: vision.model, confidence: v.confidence, bbox: v.bbox },
     kills: 0, createdAt: new Date(),
   };
@@ -125,19 +130,27 @@ async function runPipeline(forgeId: string, jpeg: Buffer, sessionId: string, v: 
   try {
     return await withTimeout((async () => {
       progress('crop', 15);
-      const { png1024, thumbJpeg } = await cropForModel(jpeg, v.bbox);
-      thumbFileId = await putFile('thumbs', thumbJpeg, `${forgeId}.jpg`, 'image/jpeg');
-      progress('crop', 30);
+      const crop = async () => {
+        const c = await cropForModel(jpeg, v.bbox);
+        thumbFileId = await putFile('thumbs', c.thumbJpeg, `${forgeId}.jpg`, 'image/jpeg');
+        progress('crop', 30);
+        return c.png1024;
+      };
 
       let glbFileId: string;
       let reusedFrom: WeaponDocId | undefined;
-      const cached = await findRecentGlb(v.object_name, REUSE_WITHIN_MS).catch(() => null);
+      const key = { objectName: v.object_name, pipeline: base.pipeline, color: v.color };
+      const cached = await findRecentGlb(key, REUSE_WITHIN_MS).catch(() => null);
       if (cached?.glbFileId) {
         glbFileId = cached.glbFileId.toHexString();
         reusedFrom = cached._id;
+        // The thumb must show what this GLB was built from, not today's crop with the hand in it.
+        if (cached.thumbFileId) thumbFileId = cached.thumbFileId.toHexString();
+        else await crop();
         log.info({ object: v.object_name }, 'forge: reusing cached GLB');
         progress('3d', 90);
       } else {
+        const png1024 = await crop();
         progress('3d', 40);
         const tick = setInterval(() => progress('3d', 60), 1500);
         let made: Awaited<ReturnType<typeof generateGlb>>;
