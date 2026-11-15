@@ -1,4 +1,4 @@
-> **Dry-run prototype.** This folder is from before the monorepo. If it has `armory.mjs`, that listens on port 8787 like `apps/server`. Do not run both: both start with no error, and the prototype quietly takes the `localhost` traffic. The real agent is `apps/agent`. The game sends its messages only to `apps/server` (spec 4.1).
+> **Dry-run prototype.** It predates the monorepo. If this folder has `armory.mjs`, it serves port 8787, the same port as `apps/server`. Never run the two together: neither fails to start, and requests to `127.0.0.1:8787` then reach the prototype instead of the server. The agent in use is `apps/agent`. The game sends its messages only to `apps/server` (spec 4.1).
 
 # Chert video agent (camera test)
 
