@@ -29,6 +29,7 @@ const hub = new Hub((m: ServerToAgent) => {
     return;
   }
   if (active && active.sid === m.sessionId) active.handle(m);
+  else if (m.type === 'scan.request') hub.send({ type: 'scan.status', sessionId: m.sessionId, state: 'failed', reason: 'not_connected' });
 });
 
 function startHealthServer(): void {

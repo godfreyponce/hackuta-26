@@ -11,6 +11,10 @@ The Chert FaceTime agent. It joins two LiveKit rooms per call: the game room (`g
 5. Check it headless: `pnpm e2e`. It runs three scenarios (main loop, call.end during setup, web tab killed) and exits 1 on any failed check. Unit tests: `pnpm test`.
 6. Or by hand: open `http://localhost:8787/` (game stub), click Start, then Call Telemachus. Open the URL the agent logs (`/dev/fake-phone?sid=...`) and click Answer.
 
+## With the real server (Part D)
+
+The server reads `apps/server/.env.local` first, then the root `.env.local` (the first file to set a key wins); the agent reads `apps/agent/.env.local`. Both need the same `AGENT_SHARED_SECRET` and LiveKit keys. The fake hub and the real server both listen on 8787, so run only one of them.
+
 ## Live path without Chert minutes
 
 `pnpm dev:fake-chert` runs the agent with `AGENT_MODE=live` against a fake Chert inside the fake hub (`/fake-chert`). With `pnpm fake-hub` running, `pnpm e2e` then checks the live path: `when_busy: 'queue'` and a 202 queued call, video published before create, `bridge_ready` greeting, Chert's failure reason, and `call.end` while POST /calls is in flight. The e2e refuses to run against an agent pointed at the real Chert.

@@ -8,7 +8,9 @@ import { cropRgba } from './video.ts';
 
 const TICK_MS = 700;
 const WINDOW_MS = 10_000;
-const FORGE_TIMEOUT_MS = 6_000;
+// Above the server's worst case, vision 8.5 s plus one 8.5 s retry (apps/server/src/ai/vision.ts analyzeWithRetry):
+// if we give up first, the server still forges a weapon we never announce. The 3 s for upload and parsing is a guess.
+const FORGE_TIMEOUT_MS = 2 * 8_500 + 3_000;
 const MIN_CHANGE = 0.02;
 const CAPTURES = 3;
 
@@ -41,7 +43,10 @@ export class CallerScanner {
 
   get scanning(): boolean { return this.active; }
 
-  /** Samples frames until the forge detects an object or 10 s pass. Returns null on timeout or cancel. */
+  /**
+   * Samples frames until the forge detects an object or 10 s pass. Returns null on timeout or cancel.
+   * No new forge starts after 10 s, but one in flight runs to its reply (up to FORGE_TIMEOUT_MS), so a scan can last about 30 s.
+   */
   async scan(onTick?: (elapsedMs: number) => void): Promise<Detected | null> {
     if (this.active) return null;
     this.active = true;
@@ -90,7 +95,7 @@ export class CallerScanner {
     form.append('source', 'facetime');
     const t0 = Date.now();
     try {
-      const res = await fetch(`${env.SERVER_HTTP_URL}/api/forge`, { method: 'POST', body: form, signal: AbortSignal.timeout(FORGE_TIMEOUT_MS) });
+      const res = await fetch(`${env.SERVER_HTTP_URL}/api/forge`, { method: 'POST', body: form, headers: { 'x-session-id': this.sessionId }, signal: AbortSignal.timeout(FORGE_TIMEOUT_MS) });
       const body: unknown = await res.json().catch(() => ({}));
       const hit = parseForgeReply(res.status, body);
       log('forge_reply', { status: res.status, detected: !!hit, reason: (body as { reason?: string }).reason, ms: Date.now() - t0 });

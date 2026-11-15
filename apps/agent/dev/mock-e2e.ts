@@ -123,6 +123,9 @@ const mockPhone = async (sid: string) => {
 async function mockMainLoop(): Promise<void> {
   out('scenario', { name: 'mock main loop' });
   const g = await openGame();
+  g.send('scan.request'); // no call yet (integration check b)
+  check('scan with no call gets a reply', await waitFor(() => g.msgs.some((m) => m.type === 'scan.status' && m.state === 'failed' && m.reason === 'not_connected'), 3_000));
+  g.msgs.length = 0;
   g.send('call.request', { friendId: 'friend-1' });
   await waitFor(() => g.has('call.status', 'ringing'), 15_000);
   g.send('scan.request'); // before the friend answers (review #7a)

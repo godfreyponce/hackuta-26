@@ -410,8 +410,7 @@ export class CallSession {
 
   /** Every request gets a scan.status reply. A request during a scan repeats the current state. */
   private async runScan(): Promise<void> {
-    if (this.ending) return;
-    if (!this.bridgeReadyAt) return this.scanStatus('failed', { reason: 'not_connected' });
+    if (this.ending || !this.bridgeReadyAt) return this.scanStatus('failed', { reason: 'not_connected' });
     if (this.scanner.scanning) return this.scanStatus('looking');
     if (this.awaitingWeapon) return this.scanStatus('forging');
     this.scanStatus('looking');
