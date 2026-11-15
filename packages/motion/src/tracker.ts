@@ -144,8 +144,8 @@ export class Tracker {
     // Keep-alive, independent of the video's frame callbacks: the browser PAUSES a <video> that is removed from or
     // moved around the page (e.g. a calibration screen that showed it and handed it back), and a paused video sends
     // no frame callbacks — the loop would stop and the player freeze on his last pose. Resume it and re-arm the loop.
-    window.clearInterval(this.watchdog);
-    this.watchdog = window.setInterval(() => this.keepAlive(), 500);
+    globalThis.clearInterval(this.watchdog);
+    this.watchdog = globalThis.setInterval(() => this.keepAlive(), 500) as unknown as number;
   }
 
   private keepAlive(): void {
@@ -162,7 +162,7 @@ export class Tracker {
 
   stop(): void {
     this.running = false;
-    window.clearInterval(this.watchdog);
+    globalThis.clearInterval(this.watchdog);
     if (this.usingRvfc) this.video.cancelVideoFrameCallback(this.loopHandle);
     else cancelAnimationFrame(this.loopHandle);
     this.stream?.getTracks().forEach((t) => t.stop());
