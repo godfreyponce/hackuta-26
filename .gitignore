@@ -1,0 +1,11 @@
+
+# ithaca
+node_modules/
+.env
+.env.*
+!.env.example
+*.local
+dist/
+out/
+recordings/
+apps/agent/dev/captures/

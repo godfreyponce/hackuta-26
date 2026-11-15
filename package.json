@@ -1,0 +1,21 @@
+{
+  "name": "ithaca",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.0.0",
+  "scripts": {
+    "dev": "pnpm --parallel --filter @ithaca/server --filter @ithaca/web --filter @ithaca/agent dev",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "pnpm -r --if-present lint"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "sharp",
+      "protobufjs"
+    ]
+  }
+}
