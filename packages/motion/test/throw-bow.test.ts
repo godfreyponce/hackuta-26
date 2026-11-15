@@ -164,3 +164,36 @@ describe('bow: nocking while the right arm crosses the left', () => {
     expect(types(events)).not.toContain('bow_nock');
   });
 });
+
+describe('bow: opening at full draw always looses', () => {
+  const both = (r: number) => ({ left: { curl: 1 }, right: { curl: r } });
+  function drawnToChin() {
+    const ctx = engine();
+    let t = run(ctx.push, 400, { joints: LEFT_OUT, hands: both(0) });
+    t = run(ctx.push, 400, { joints: NOCK, hands: both(1) }, t);
+    t = run(ctx.push, 600, drawPath(t, 600, both(1)), t);
+    t = run(ctx.push, 300, { joints: DRAWN, hands: both(1) }, t);
+    expect(ctx.e.state.bowDraw).toBeGreaterThan(0.5);
+    return { ...ctx, t };
+  }
+
+  it('a sideways open hand by the chin that only reads grip ≈ 0.3 still shoots', () => {
+    const { events, push, t } = drawnToChin();
+    run(push, 400, { joints: DRAWN, hands: both(0.28) }, t); // synthetic curl 0.28 → grip ≈ 0.31
+    const rel = events.find((x) => x.type === 'bow_release');
+    expect(rel).toBeDefined();
+    if (rel?.type === 'bow_release') expect(rel.draw).toBeGreaterThan(0.5);
+  });
+
+  it('a clean wide open at full draw shoots exactly once', () => {
+    const { events, push, t } = drawnToChin();
+    run(push, 600, { joints: DRAWN, hands: both(0) }, t);
+    expect(events.filter((x) => x.type === 'bow_release')).toHaveLength(1);
+  });
+
+  it('keeping the fist closed at full draw does not shoot', () => {
+    const { events, push, t } = drawnToChin();
+    run(push, 1500, { joints: DRAWN, hands: both(1) }, t);
+    expect(types(events)).not.toContain('bow_release');
+  });
+});

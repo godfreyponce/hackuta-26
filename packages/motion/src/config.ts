@@ -89,8 +89,8 @@ export const DEFAULT_CONFIG = {
   /** After a full extension, the left arm stays nock-ready this long while roughly held out. */
   bowArmLatchMs: 1500,
   /** Right hand must read below this grip, seen by the hand model for bowReleaseFrames, to loose the arrow. */
-  bowReleaseGrip: 0.25,
-  bowReleaseFrames: 3,
+  bowReleaseGrip: 0.35,
+  bowReleaseFrames: 2,
   /** Opens below this draw are treated as tracking noise (sideways hand near the face): arrow stays nocked. */
   bowLooseMinDraw: 0.3,
 

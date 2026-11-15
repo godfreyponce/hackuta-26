@@ -9,7 +9,7 @@ import type { PendingGesture } from './types';
 type Emit = (e: InputEvent) => void;
 
 export type DetectorFlags = Record<
-  'gripL' | 'gripR' | 'blockPose' | 'blocking' | 'bowArm' | 'bowReady' | 'nocked' | 'phoneShape' | 'nearEar' | 'armsUp',
+  'gripL' | 'gripR' | 'blockPose' | 'blocking' | 'bowArm' | 'bowReady' | 'nocked' | 'handSeenR' | 'phoneShape' | 'nearEar' | 'armsUp',
   boolean
 >;
 
@@ -76,6 +76,7 @@ export class Gestures {
   private bowLostSince = -1;
   private bowOpenFrames = 0;
   private bowArmSeenAt = -1e9;
+  private bowPrevGripR = false;
   private bowDraw = 0;
   /** Last frame's diagnostics for the lab. */
   readonly debug = {
@@ -223,6 +224,7 @@ export class Gestures {
           this.bowLostSince = -1;
           this.bowOpenFrames = 0;
           this.bowDraw = 0;
+          this.bowPrevGripR = true;
           this.debug.bowDropReason = '';
           emit({ type: 'bow_nock' });
         }
@@ -233,11 +235,16 @@ export class Gestures {
       const draw = this.bowDraw;
       state.bowDraw = draw;
 
-      // Loose only on a real open: the hand model sees the right hand open for N frames.
-      // Ignored until the draw is meaningful — a sideways hand by the face misreads as "open".
+      // Loose on a real open: the hand model sees the right hand open for N frames, OR the regular
+      // grab/release tracker lets go of the right hand. Either one is ignored until the draw is
+      // meaningful — a sideways hand by the face misreads as "open" early in the draw.
       const seenOpen = body.ok && !!body.hand.right && body.handFresh.right && R.grip < config.bowReleaseGrip;
       this.bowOpenFrames = seenOpen ? this.bowOpenFrames + 1 : 0;
-      if (this.bowOpenFrames >= Math.max(1, Math.round(config.bowReleaseFrames)) && draw > Math.max(config.bowMinDraw, config.bowLooseMinDraw)) {
+      const gripNow = grip.isGripping('right');
+      const gripLetGo = this.bowPrevGripR && !gripNow;
+      this.bowPrevGripR = gripNow;
+      const opened = this.bowOpenFrames >= Math.max(1, Math.round(config.bowReleaseFrames)) || gripLetGo;
+      if (opened && draw > Math.max(config.bowMinDraw, config.bowLooseMinDraw)) {
         this.nocked = false;
         state.bowDraw = 0;
         const aim = normalize3(sub3(v3(), L.pos, body.shoulder.right));

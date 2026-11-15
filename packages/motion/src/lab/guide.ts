@@ -175,7 +175,7 @@ export const GUIDE_STEPS: StepDef[] = [
         },
         hint: (c) =>
           c.flags?.nocked
-            ? `draw ${fmt(c.state.bowDraw * 100, 0)}% · needs > ${fmt(Math.max(config.bowMinDraw, config.bowLooseMinDraw) * 100, 0)}% before you open`
+            ? bowDrawHint(c)
             : 'Arrow dropped: your left arm bent or dropped. Straighten it, then fist back on your left wrist to nock again',
       },
     ],
@@ -255,6 +255,16 @@ export const GUIDE_STEPS: StepDef[] = [
     ],
   },
 ];
+
+/** Live bow feedback while an arrow is nocked: how far drawn, and why an open isn't registering. */
+function bowDrawHint(c: Ctx): string {
+  const draw = c.state.bowDraw;
+  const need = Math.max(config.bowMinDraw, config.bowLooseMinDraw);
+  const pct = `draw ${fmt(draw * 100, 0)}%`;
+  if (draw <= need) return `${pct} · pull your right fist further back (needs > ${fmt(need * 100, 0)}%)`;
+  if (!c.flags?.handSeenR) return `${pct} ✓ · I can't see your right fingers: turn your palm toward the camera, then open`;
+  return `${pct} ✓ · now OPEN your right hand wide (grip ${fmt(c.state.hands.right.grip, 2)}, needs < ${config.bowReleaseGrip})`;
+}
 
 export class GestureGuide {
   private status: StepStatus[] = GUIDE_STEPS.map(() => 'pending');
