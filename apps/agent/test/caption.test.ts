@@ -6,7 +6,7 @@ import { after, test } from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { dispose, type VideoFrame } from '@livekit/rtc-node';
 import { LINES } from '../src/lines.ts';
-import { AGENT_H, AGENT_W, CAPTION_LINGER_MS, CHUNK_MAX_CHARS, captionChunks, drawCaption, GAME_BOTTOM, keyWord, renderCaption, VideoRelay } from '../src/video.ts';
+import { AGENT_H, AGENT_W, CAPTION_LINGER_MS, CHUNK_MAX_CHARS, captionChunks, drawCaption, GAME_BOTTOM, keyWord, renderCaption, SPEECH_CHARS_PER_S, VideoRelay } from '../src/video.ts';
 
 /** Grey frame, caption chunk drawn: bounding box of every changed pixel (the pill), and the count of blue pixels. */
 async function pillBox(chunk: string) {
@@ -25,7 +25,7 @@ async function pillBox(chunk: string) {
 const SIDE = 16; // the pill must not touch the frame edges
 const quip = 'Behold, the Enchanted Golden Frying Pan of the Western Isles, forged in fire and fury, heavier than it looks and twice as mean as a suitor on a bad day!';
 const longWord = 'Behold the Antidisestablishmentarianismophobicbroomstickofdoom, Telemachus!';
-const TEXTS = [...Object.values(LINES).flat(), quip, longWord, 'Your Enchanted Golden Frying Pan of Ithaca just flattened a suitor. Ha!'];
+const TEXTS = [...Object.values(LINES).flat(), quip, longWord, 'W'.repeat(22), 'm'.repeat(22), 'Behold the Megasledgehammer of doom!', 'Your Enchanted Golden Frying Pan of Ithaca just flattened a suitor. Ha!'];
 
 test('every fixed line and a long forge quip: one short line per chunk, pill whole inside the game, nothing in the bottom bar', async () => {
   for (const text of TEXTS) {
@@ -45,6 +45,13 @@ test('a chunk ends at a phrase break: a chunk never runs on past a sentence end'
   }
   assert.deepEqual(captionChunks('Two with one throw!'), ['Two with one throw!']);
   assert.ok(captionChunks(LINES.greeting[0]).includes('Telemachus!'));
+});
+
+test('a word that fits on a chunk is never split across two', () => {
+  for (const text of TEXTS) {
+    const words = new Set(captionChunks(text).flatMap((c) => c.split(' ')));
+    for (const w of text.split(/\s+/)) if (w.length <= CHUNK_MAX_CHARS) assert.ok(words.has(w), `"${w}" was split in ${text}`);
+  }
 });
 
 test('the chunks together are the web subtitle text: nothing cut, no ellipsis added', () => {
@@ -104,9 +111,9 @@ test('agent-video: caption pixels while a line plays, still there just after its
 test('agent-video: a long line steps through its chunks by character share of its audio, and the last clears after the linger', async () => {
   const chunks = captionChunks(quip);
   assert.ok(chunks.length >= 3, `${chunks.length} chunks`);
-  // 4.8 s is twice the measured speech rate (16 chars/s). A chunk can show up to about 90 ms late (render stalls,
-  // measured) and the card frame comes every 67 ms, so each chunk is checked 3/4 of the way through its share.
-  const ms = 4_800, perChar = ms / chunks.reduce((n, p) => n + p.length, 0);
+  // The quip at the measured speech rate. A chunk can show up to about 110 ms late (sharp render stalls, measured) and
+  // the card frame comes every 67 ms, so each chunk is checked 3/4 of the way through its share.
+  const ms = Math.round((quip.length / SPEECH_CHARS_PER_S) * 1000), perChar = ms / chunks.reduce((n, p) => n + p.length, 0);
   const starts = chunks.map((_, i) => chunks.slice(0, i).reduce((n, p) => n + p.length * perChar, 0));
   const relay = new VideoRelay();
   let last: VideoFrame | null = null;

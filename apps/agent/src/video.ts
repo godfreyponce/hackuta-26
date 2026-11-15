@@ -69,7 +69,8 @@ function wrap(text: string, maxChars: number): string[] {
 /** The fewest chunks that fit, made as even as possible, so a phrase does not end on one stray word. */
 function evenWrap(phrase: string): string[] {
   const fewest = wrap(phrase, CHUNK_MAX_CHARS);
-  for (let w = Math.ceil(phrase.length / fewest.length); w < CHUNK_MAX_CHARS; w++) {
+  const longest = Math.max(...phrase.split(' ').map((word) => word.length));
+  for (let w = Math.max(Math.ceil(phrase.length / fewest.length), longest); w < CHUNK_MAX_CHARS; w++) {
     const lines = wrap(phrase, w);
     if (lines.length === fewest.length) return lines;
   }
@@ -113,6 +114,12 @@ export function keyWord(chunk: string): string | undefined {
   return words[keyIndex(words)];
 }
 
+/**
+ * Text is measured at half size, so wide text (22 W's at 40 px is over 640 px) is not clipped to the frame before
+ * trim. A 4x wider canvas instead made the first chunk about 45 ms later (measured).
+ */
+const MEASURE_SCALE = 2;
+
 /** pillW 0 draws the text alone, for measuring. */
 function captionSvg(chunk: string, size: number, pillW: number): string {
   const words = chunk.split(' '), key = keyIndex(words);
@@ -128,10 +135,10 @@ function captionSvg(chunk: string, size: number, pillW: number): string {
  * fits it; a chunk too wide for the pill (one long word) gets a smaller font instead of running past it.
  */
 export async function renderCaption(chunk: string): Promise<Caption> {
-  const { info } = await sharp(Buffer.from(captionSvg(chunk, CAPTION_SIZE, 0))).trim().toBuffer({ resolveWithObject: true });
-  const room = PILL_MAX_W - 2 * PILL_PAD_X;
-  const size = info.width > room ? Math.floor((CAPTION_SIZE * room) / info.width) : CAPTION_SIZE;
-  const pillW = Math.round((info.width * size) / CAPTION_SIZE) + 2 * PILL_PAD_X;
+  const { info } = await sharp(Buffer.from(captionSvg(chunk, CAPTION_SIZE / MEASURE_SCALE, 0))).trim().toBuffer({ resolveWithObject: true });
+  const textW = info.width * MEASURE_SCALE, room = PILL_MAX_W - 2 * PILL_PAD_X;
+  const size = textW > room ? Math.floor((CAPTION_SIZE * room) / textW) : CAPTION_SIZE;
+  const pillW = Math.round((textW * size) / CAPTION_SIZE) + 2 * PILL_PAD_X;
   const data = new Uint8Array(await sharp(Buffer.from(captionSvg(chunk, size, pillW))).ensureAlpha().raw().toBuffer());
   return { data, top: GAME_BOTTOM - PILL_GAP - PILL_H - 1, height: PILL_H + 2 };
 }
