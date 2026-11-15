@@ -35,7 +35,10 @@ export class Narrator {
   async sayNow(text: string, priority: number, pcm?: Int16Array): Promise<void> {
     this.mixer.interrupt();
     this.queue = [];
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
     await this.speak({ text, priority, at: Date.now(), ...(pcm ? { pcm } : {}) });
+    this.pump();
   }
 
   stop(): void {

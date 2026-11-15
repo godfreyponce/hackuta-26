@@ -14,6 +14,17 @@ const CAPTURES = 3;
 
 export type Detected = { forgeId: string; objectName: string; displayName: string; weaponClass: string; quip: string };
 
+/** Spec D.3 replies 202 {forgeId, ...} and may leave out `detected`, so a 202 with a forgeId is a hit. */
+export function parseForgeReply(status: number, raw: unknown): Detected | null {
+  const body = (raw ?? {}) as Partial<Detected>;
+  if (status !== 202 || !body.forgeId) return null;
+  return {
+    forgeId: body.forgeId, objectName: body.objectName ?? 'something',
+    displayName: body.displayName ?? body.objectName ?? 'a weapon',
+    weaponClass: body.weaponClass ?? 'blunt', quip: body.quip ?? 'Forging now.',
+  };
+}
+
 export class CallerScanner {
   private latest: VideoFrame | null = null;
   private prevThumb: Buffer | null = null;
@@ -80,15 +91,10 @@ export class CallerScanner {
     const t0 = Date.now();
     try {
       const res = await fetch(`${env.SERVER_HTTP_URL}/api/forge`, { method: 'POST', body: form, signal: AbortSignal.timeout(FORGE_TIMEOUT_MS) });
-      const body = (await res.json().catch(() => ({}))) as Partial<Detected> & { detected?: boolean; reason?: string };
-      log('forge_reply', { status: res.status, detected: body.detected ?? false, reason: body.reason, ms: Date.now() - t0 });
-      if (res.status === 202 && body.detected && body.forgeId) {
-        return {
-          forgeId: body.forgeId, objectName: body.objectName ?? 'something',
-          displayName: body.displayName ?? body.objectName ?? 'a weapon',
-          weaponClass: body.weaponClass ?? 'blunt', quip: body.quip ?? 'Forging now.',
-        };
-      }
+      const body: unknown = await res.json().catch(() => ({}));
+      const hit = parseForgeReply(res.status, body);
+      log('forge_reply', { status: res.status, detected: !!hit, reason: (body as { reason?: string }).reason, ms: Date.now() - t0 });
+      if (hit) return hit;
     } catch (e) {
       warn('forge_failed', { error: errText(e), ms: Date.now() - t0 });
     }

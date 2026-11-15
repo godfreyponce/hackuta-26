@@ -46,6 +46,18 @@ export async function prerenderLines(): Promise<void> {
   log('tts_cache_ready', { lines: cache.size, of: texts.length, ms: Date.now() - t0 });
 }
 
+/** The greeting must come from the cache (spec B.5), so keep retrying it in the background until it renders. */
+export async function ensureGreeting(): Promise<void> {
+  const text = LINES.greeting[0];
+  for (let tries = 1; !cache.has(text); tries++) {
+    await new Promise((r) => setTimeout(r, 5_000));
+    try { cache.set(text, await renderCached(text)); log('greeting_rendered', { tries }); }
+    catch (e) { warn('greeting_render_failed', { tries, error: errText(e) }); }
+  }
+}
+
+export const greetingReady = (): boolean => LINES.greeting.every((t) => cache.has(t));
+
 const lastPick = new Map<LineKey, string>();
 
 /** A random line for the key, never the same one twice in a row. */

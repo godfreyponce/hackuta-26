@@ -3,7 +3,7 @@
 import { randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage } from 'node:http';
-import { AccessToken } from 'livekit-server-sdk';
+import { AccessToken, RoomServiceClient } from 'livekit-server-sdk';
 import { WebSocketServer, type WebSocket } from 'ws';
 
 const PORT = 8787;
@@ -16,6 +16,52 @@ const log = (event: string, f: Record<string, unknown> = {}) => console.log(JSON
 let agent: WebSocket | null = null;
 const webs = new Map<string, Set<WebSocket>>();
 const forgeCalls = new Map<string, number>();
+
+// ── fake Chert (for `pnpm dev:fake-chert`): the agent runs AGENT_MODE=live against /fake-chert. No real calls. ──
+type FakeCall = { id: string; key: string; body: Record<string, unknown>; status: string; events: Array<Record<string, unknown>>; endPosts: number; agentTracksAtCreate: string[] };
+const calls = new Map<string, FakeCall>();
+let lastCall: FakeCall | null = null;
+let createCount = 0;
+let nextCreate: { queued?: boolean; delayMs?: number } = {};
+const rooms = new RoomServiceClient(LIVEKIT_URL.replace(/^wss:/, 'https:'), LIVEKIT_API_KEY, LIVEKIT_API_SECRET);
+
+async function fakeChert(method: string, path: string, req: IncomingMessage, json: (code: number, b: unknown) => void): Promise<void> {
+  const parts = path.split('/').filter(Boolean); // calls, <id>, events|end
+  if (method === 'POST' && path === '/_next') { nextCreate = JSON.parse((await body(req)).toString()); return json(200, {}); }
+  if (method === 'GET' && path === '/_last') return json(200, { call: lastCall, createCount });
+  if (method === 'POST' && path === '/_emit') {
+    const { id, status, ...ev } = JSON.parse((await body(req)).toString()) as { id: string; status?: string; type?: string };
+    const c = calls.get(id);
+    if (!c) return json(404, {});
+    if (status) c.status = status;
+    if (ev.type) c.events.push({ id: `ev-${c.events.length + 1}`, ...ev });
+    return json(200, {});
+  }
+  if (method === 'POST' && path === '/calls') {
+    const key = String(req.headers['idempotency-key'] ?? '');
+    const raw = (await body(req)).toString();
+    const existing = [...calls.values()].find((c) => c.key === key);
+    if (existing) return JSON.stringify(existing.body) === raw ? json(201, { data: { id: existing.id } }) : json(409, { error: { code: 'idempotency_conflict' } });
+    const { queued = false, delayMs = 0 } = nextCreate;
+    nextCreate = {};
+    const b = JSON.parse(raw) as Record<string, unknown>;
+    const ftRoom = /"room":"([^"]+)"/.exec(Buffer.from(String(b.participant_token).split('.')[1] ?? '', 'base64url').toString())?.[1] ?? '';
+    const agent = (await rooms.listParticipants(ftRoom).catch(() => [])).find((p) => p.identity === b.remote_participant_identity);
+    const c: FakeCall = { id: randomBytes(4).toString('hex'), key, body: b, status: queued ? 'queued' : 'allocating', events: [], endPosts: 0, agentTracksAtCreate: agent?.tracks.map((t) => t.name) ?? [] };
+    calls.set(c.id, c);
+    lastCall = c;
+    createCount++;
+    log('fake_chert_create', { id: c.id, queued, delayMs, agentTracksAtCreate: c.agentTracksAtCreate });
+    if (delayMs) await new Promise((r) => setTimeout(r, delayMs));
+    return json(queued ? 202 : 201, { data: { id: c.id, status: c.status } });
+  }
+  const c = calls.get(parts[1] ?? '');
+  if (parts[0] !== 'calls' || !c) return json(404, { error: { code: 'not_found' } });
+  if (method === 'GET' && parts.length === 2) return json(200, { data: { id: c.id, status: c.status } });
+  if (method === 'GET' && parts[2] === 'events') return json(200, { data: c.events });
+  if (method === 'POST' && parts[2] === 'end') { c.endPosts++; c.status = 'ended'; log('fake_chert_end', { id: c.id }); return json(202, {}); }
+  json(404, { error: { code: 'not_found' } });
+}
 
 const env = (type: string, sessionId: string, p: Record<string, unknown> = {}) => JSON.stringify({ v: 1, type, sessionId, ts: Date.now(), ...p });
 const toWeb = (sid: string, msg: string) => { for (const w of webs.get(sid) ?? []) w.send(msg); };
@@ -35,6 +81,7 @@ const server = createServer(async (req, res) => {
       res.writeHead(200, { 'content-type': 'text/html' });
       return res.end(await readFile(new URL('./game-stub.html', import.meta.url)));
     }
+    if (url.pathname.startsWith('/fake-chert/')) return await fakeChert(req.method ?? 'GET', url.pathname.slice('/fake-chert'.length), req, json);
     if (req.method === 'GET' && url.pathname === '/api/health') return json(200, { ok: true, mongo: false, agentConnected: !!agent });
     if (req.method === 'POST' && url.pathname === '/api/sessions') {
       const sessionId = randomBytes(6).toString('hex');

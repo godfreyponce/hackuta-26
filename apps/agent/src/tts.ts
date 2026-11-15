@@ -7,12 +7,13 @@ import { log } from './log.ts';
 
 export const TTS_SAMPLE_RATE = 48_000;
 const FIRST_BYTE_TIMEOUT_MS = 5_000; // guess: measured TTFB was about 0.26 s
+export const CHUNK_IDLE_MS = 3_000; // guess: a stalled body would otherwise hold the narrator and the mic duck forever
 
 /** Streams 48 kHz mono Int16 PCM chunks for one line. */
 export async function* ttsStream(text: string): AsyncGenerator<Int16Array> {
   const url = `https://api.elevenlabs.io/v1/text-to-speech/${env.ELEVENLABS_VOICE_ID}/stream?output_format=pcm_48000`;
   const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(), FIRST_BYTE_TIMEOUT_MS);
+  let timer = setTimeout(() => ctl.abort(), FIRST_BYTE_TIMEOUT_MS);
   const res = await fetch(url, {
     method: 'POST',
     signal: ctl.signal,
@@ -21,18 +22,25 @@ export async function* ttsStream(text: string): AsyncGenerator<Int16Array> {
   }).finally(() => clearTimeout(timer));
   if (!res.ok || !res.body) throw new Error(`elevenlabs ${res.status}: ${(await res.text()).slice(0, 200)}`);
 
+  const idle = () => { clearTimeout(timer); timer = setTimeout(() => ctl.abort(new Error('elevenlabs body stalled')), CHUNK_IDLE_MS); };
+  idle();
   let carry: Uint8Array | null = null; // odd byte left over between network chunks
-  for await (const part of res.body as AsyncIterable<Uint8Array>) {
-    let bytes: Uint8Array = part;
-    if (carry) {
-      bytes = new Uint8Array(carry.length + part.length);
-      bytes.set(carry);
-      bytes.set(part, carry.length);
-      carry = null;
+  try {
+    for await (const part of res.body as AsyncIterable<Uint8Array>) {
+      idle();
+      let bytes: Uint8Array = part;
+      if (carry) {
+        bytes = new Uint8Array(carry.length + part.length);
+        bytes.set(carry);
+        bytes.set(part, carry.length);
+        carry = null;
+      }
+      const even = bytes.length & ~1;
+      if (even < bytes.length) carry = bytes.slice(even);
+      if (even > 0) yield new Int16Array(bytes.slice(0, even).buffer); // little-endian, same as the Mac
     }
-    const even = bytes.length & ~1;
-    if (even < bytes.length) carry = bytes.slice(even);
-    if (even > 0) yield new Int16Array(bytes.slice(0, even).buffer); // little-endian, same as the Mac
+  } finally {
+    clearTimeout(timer);
   }
 }
 

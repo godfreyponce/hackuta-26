@@ -8,12 +8,16 @@ The Chert FaceTime agent. It joins two LiveKit rooms per call: the game room (`g
 2. `pnpm install`
 3. `pnpm fake-hub` (stand-in for Part D on :8787)
 4. `pnpm dev` (the agent; health on :8788)
-5. Check it headless: `pnpm e2e`. It prints greeting latency, relayed tracks, and the scan-to-weapon loop.
+5. Check it headless: `pnpm e2e`. It runs three scenarios (main loop, call.end during setup, web tab killed) and exits 1 on any failed check. Unit tests: `pnpm test`.
 6. Or by hand: open `http://localhost:8787/` (game stub), click Start, then Call Telemachus. Open the URL the agent logs (`/dev/fake-phone?sid=...`) and click Answer.
+
+## Live path without Chert minutes
+
+`pnpm dev:fake-chert` runs the agent with `AGENT_MODE=live` against a fake Chert inside the fake hub (`/fake-chert`). With `pnpm fake-hub` running, `pnpm e2e` then checks the live path: `when_busy: 'queue'` and a 202 queued call, video published before create, `bridge_ready` greeting, Chert's failure reason, and `call.end` while POST /calls is in flight. The e2e refuses to run against an agent pointed at the real Chert.
 
 ## Live mode
 
-Set `AGENT_MODE=live` plus `CHERT_FACETIME_TOKEN`, `CHERT_PROJECT_ID`, `CHERT_LINE_ID`. The fake hub dials `OUTBOUND_TO`. Each test call costs Chert minutes (5 min per call, 50 min per day).
+Set `AGENT_MODE=live` plus `CHERT_FACETIME_TOKEN`, `CHERT_PROJECT_ID`, `CHERT_LINE_ID`. The fake hub dials `OUTBOUND_TO`. Each test call costs Chert minutes (5 min per call, 50 min per day). Our line is shared with other teams, so POST /calls sends `when_busy: 'queue'`; a 202 means queued, and the 60 s no-answer clock and the call deadline start when Chert allocates the call. Ctrl-C ends the call through Chert; a second Ctrl-C quits at once.
 
 ## Files
 

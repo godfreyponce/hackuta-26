@@ -4,7 +4,7 @@ import {
   TrackSource, VideoSource, VideoStream, type RemoteParticipant, type RemoteTrack, type RemoteTrackPublication,
 } from '@livekit/rtc-node';
 import { AccessToken, RoomServiceClient } from 'livekit-server-sdk';
-import { ChertError, createCall, endCall, getEvents } from './chert.ts';
+import { ChertError, CHERT_TIMEOUT_MS, createCall, endCall, getCallStatus, getEvents, type ChertEvent } from './chert.ts';
 import type { CallState, GameEvent, ServerToAgent, WeaponSpawn } from './contracts/protocol.ts';
 import { env } from './env.ts';
 import type { Hub } from './hub.ts';
@@ -21,6 +21,12 @@ const ANSWER_TIMEOUT_MS = 60_000;
 const MUST_GO_BEFORE_MS = 20_000;
 const FAREWELL_WAIT_MS = 3_000;
 const AUTO_SCAN_AFTER_PIN_MS = 5_000;
+const SETUP_WAIT_MS = 10_000; // guess: one LiveKit connect plus one Chert create (8 s timeout)
+const CLEANUP_MARGIN_MS = 3_000; // guess: disconnects plus deleteRoom
+const WEB_GONE_GRACE_MS = 10_000; // guess: long enough for a page reload to rejoin
+const WEAPON_WAIT_MS = 20_000; // spec D.3: Part D guarantees a prefab fallback by 15 s
+/** Longest that end() can take; main's hard stop on signals must be longer. */
+export const END_MAX_MS = Math.max(SETUP_WAIT_MS, FAREWELL_WAIT_MS) + CHERT_TIMEOUT_MS + CLEANUP_MARGIN_MS;
 const AGENT_FT_IDENTITY = 'quartermaster';
 const AGENT_GAME_IDENTITY = 'quartermaster-relay';
 const ALLOWED_FT_TRACKS = new Set(['agent-video', 'quartermaster-audio']);
@@ -36,6 +42,8 @@ async function mint(identity: string, room: string, ttl: string): Promise<string
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+type Relay = { stream: { cancel(): Promise<void> }; source: { close(): Promise<void> }; published: Promise<string | undefined> };
 
 export class CallSession {
   readonly sid: string;
@@ -53,23 +61,28 @@ export class CallSession {
   private narrator: Narrator;
   private scanner: CallerScanner;
   private callId: string | null = null;
+  private chertEnd: Promise<number> | null = null;
+  private setup: Promise<void> | null = null;
   private bridgeReadyAt = 0;
   private dialedAt = 0;
+  private allocatedAt = 0; // when Chert took the call off the shared-line queue
   private timers: NodeJS.Timeout[] = [];
   private playerMic: RemoteTrack | null = null;
   private lastWeapon: WeaponSpawn | null = null;
   private awaitingWeapon = false;
   private scanRequested = false;
+  private autoScanUsed = false;
+  private weaponTimer: NodeJS.Timeout | null = null;
   private ending: Promise<void> | null = null;
-  private relayStreams: Array<{ cancel(): Promise<void> }> = [];
-  private relaySources: Array<{ close(): Promise<void> }> = [];
+  private relays = new Map<'friend-cam' | 'friend-audio', Relay>();
 
-  constructor(msg: StartMsg, attempt: number, private hub: Hub, private onDone: () => void) {
+  /** bootId keeps Idempotency-Keys unique when the agent restarts and the same session calls again. */
+  constructor(msg: StartMsg, attempt: number, bootId: string, private hub: Hub, private onDone: () => void) {
     this.sid = msg.sessionId;
     this.friend = msg.friend;
     this.gameRoomName = msg.gameRoom;
     this.ftRoom = `ft-${this.sid}-${attempt}`;
-    this.keyBase = `ithaca-${this.sid}-${attempt}`;
+    this.keyBase = `ithaca-${this.sid}-${bootId}-${attempt}`;
     this.bridgeIdentity = this.mock ? MOCK_BRIDGE_IDENTITY : `facetime-bridge-${attempt}`;
     this.scanner = new CallerScanner(this.sid);
     this.narrator = new Narrator(this.mixer, (text, priority) => this.hub.send({ type: 'narration', sessionId: this.sid, text, priority }));
@@ -81,22 +94,30 @@ export class CallSession {
   }
 
   async run(): Promise<void> {
+    this.setup = this.setUp();
     try {
-      this.status('dialing');
-      log('call_start', { sid: this.sid, friend: this.friend.name, phone: maskPhone(this.friend.phoneE164), ftRoom: this.ftRoom, mode: env.AGENT_MODE });
-      await this.joinGameRoom();
-      await this.joinFtRoom();
-      if (this.mock) {
-        this.status('ringing');
-        log('mock_waiting_for_fake_phone', { open: `http://localhost:${env.AGENT_HEALTH_PORT}/dev/fake-phone?sid=${encodeURIComponent(this.sid)}` });
-        return;
-      }
-      await this.dial();
+      await this.setup;
     } catch (e) {
       const reason = e instanceof ChertError ? e.code : 'agent_error';
       warn('call_run_failed', { error: errText(e) });
       await this.end(reason, 'failed');
     }
+  }
+
+  /** Every await is followed by an ending check, so an end() during setup stops it. end() waits for this. */
+  private async setUp(): Promise<void> {
+    this.status('dialing');
+    log('call_start', { sid: this.sid, friend: this.friend.name, phone: maskPhone(this.friend.phoneE164), ftRoom: this.ftRoom, mode: env.AGENT_MODE });
+    await this.joinGameRoom();
+    if (this.ending) return;
+    await this.joinFtRoom();
+    if (this.ending) return;
+    if (this.mock) {
+      this.status('ringing');
+      log('mock_waiting_for_fake_phone', { open: `http://localhost:${env.AGENT_HEALTH_PORT}/dev/fake-phone?sid=${encodeURIComponent(this.sid)}` });
+      return;
+    }
+    await this.dial();
   }
 
   handle(m: ServerToAgent): void {
@@ -120,6 +141,14 @@ export class CallSession {
         if (this.bridgeReadyAt) this.mixer.enableMic(track);
       }
     });
+    this.game.on(RoomEvent.ParticipantDisconnected, (p: RemoteParticipant) => {
+      if (!p.identity.startsWith('web-') || this.ending) return;
+      log('web_left_game_room', { identity: p.identity, graceMs: WEB_GONE_GRACE_MS });
+      this.timers.push(setTimeout(() => {
+        const back = [...this.game.remoteParticipants.values()].some((q) => q.identity.startsWith('web-'));
+        if (!back) void this.end('web_gone', 'ended');
+      }, WEB_GONE_GRACE_MS));
+    });
     this.game.on(RoomEvent.Disconnected, (r) => { if (!this.ending) warn('game_room_disconnected', { reason: r }); });
     await this.game.connect(env.LIVEKIT_URL, await mint(AGENT_GAME_IDENTITY, this.gameRoomName, '2h'), { autoSubscribe: true, dynacast: false });
     log('game_room_joined', { room: this.gameRoomName });
@@ -138,7 +167,7 @@ export class CallSession {
     this.ft.on(RoomEvent.ParticipantDisconnected, (p: RemoteParticipant) => {
       if (p.identity === this.bridgeIdentity && this.bridgeReadyAt) {
         log('bridge_left');
-        if (this.mock) void this.end('remote_hangup', 'ended', { skipChert: true });
+        if (this.mock) void this.end('remote_hangup', 'ended', { quick: true });
       }
     });
     this.ft.on(RoomEvent.TrackSubscribed, (track: RemoteTrack, pub: RemoteTrackPublication, p: RemoteParticipant) => {
@@ -147,10 +176,16 @@ export class CallSession {
       if (pub.name === 'facetime-remote-video') this.relayCallerVideo(track);
       if (pub.name === 'facetime-remote-audio') this.relayCallerAudio(track);
     });
+    this.ft.on(RoomEvent.TrackUnsubscribed, (_t: RemoteTrack, pub: RemoteTrackPublication, p: RemoteParticipant) => {
+      if (p.identity !== this.bridgeIdentity) return;
+      if (pub.name === 'facetime-remote-video') void this.dropRelay('friend-cam');
+      if (pub.name === 'facetime-remote-audio') void this.dropRelay('friend-audio');
+    });
     this.ft.on(RoomEvent.LocalTrackPublished, () => this.checkInvariants());
     this.ft.on(RoomEvent.Disconnected, (r) => { if (!this.ending) warn('ft_room_disconnected', { reason: r }); });
 
     await this.ft.connect(env.LIVEKIT_URL, await mint(AGENT_FT_IDENTITY, this.ftRoom, '2h'), { autoSubscribe: true, dynacast: false });
+    if (this.ending) return;
     const lp = this.ft.localParticipant!;
     const videoTrack = LocalVideoTrack.createVideoTrack('agent-video', this.video.source);
     const audioTrack = LocalAudioTrack.createAudioTrack('quartermaster-audio', this.mixer.source);
@@ -170,15 +205,30 @@ export class CallSession {
     if (extra.length) warn('INVARIANT_unexpected_ft_track', { names: extra.map((p) => p.name) });
   }
 
+  /** One relay per game-room track: a new bridge subscription replaces the old relay, never adds a second. */
+  private relay(name: 'friend-cam' | 'friend-audio', stream: Relay['stream'], source: Relay['source'], track: LocalVideoTrack | LocalAudioTrack, opts: TrackPublishOptions): void {
+    const previous = this.dropRelay(name);
+    const published = previous.then(() => this.game.localParticipant!.publishTrack(track, opts))
+      .then((p) => { log(`${name.replace('-', '_')}_published`); return p.sid; })
+      .catch((e) => { warn(`${name.replace('-', '_')}_publish_failed`, { error: errText(e) }); return undefined; });
+    this.relays.set(name, { stream, source, published });
+  }
+
+  private async dropRelay(name: 'friend-cam' | 'friend-audio'): Promise<void> {
+    const r = this.relays.get(name);
+    if (!r) return;
+    this.relays.delete(name);
+    await r.stream.cancel().catch(() => {});
+    const sid = await r.published;
+    if (sid && !this.ending) await this.game.localParticipant?.unpublishTrack(sid).catch(() => {});
+    await r.source.close().catch(() => {});
+  }
+
   private relayCallerVideo(track: RemoteTrack): void {
     const source = new VideoSource(OUT_W, OUT_H);
-    this.relaySources.push(source);
     const stream = new VideoStream(track);
-    this.relayStreams.push(stream);
-    void this.game.localParticipant!.publishTrack(
-      LocalVideoTrack.createVideoTrack('friend-cam', source),
-      new TrackPublishOptions({ source: TrackSource.SOURCE_CAMERA, simulcast: false }),
-    ).then(() => log('friend_cam_published')).catch((e) => warn('friend_cam_publish_failed', { error: errText(e) }));
+    this.relay('friend-cam', stream, source, LocalVideoTrack.createVideoTrack('friend-cam', source),
+      new TrackPublishOptions({ source: TrackSource.SOURCE_CAMERA, simulcast: false }));
     void (async () => {
       let frames = 0;
       try {
@@ -193,13 +243,9 @@ export class CallSession {
 
   private relayCallerAudio(track: RemoteTrack): void {
     const source = new AudioSource(48_000, 1, 100);
-    this.relaySources.push(source);
     const stream = new AudioStream(track, { sampleRate: 48_000, numChannels: 1 });
-    this.relayStreams.push(stream);
-    void this.game.localParticipant!.publishTrack(
-      LocalAudioTrack.createAudioTrack('friend-audio', source),
-      new TrackPublishOptions({ source: TrackSource.SOURCE_MICROPHONE }),
-    ).then(() => log('friend_audio_published')).catch((e) => warn('friend_audio_publish_failed', { error: errText(e) }));
+    this.relay('friend-audio', stream, source, LocalAudioTrack.createAudioTrack('friend-audio', source),
+      new TrackPublishOptions({ source: TrackSource.SOURCE_MICROPHONE }));
     void (async () => {
       try { for await (const f of stream) await source.captureFrame(f); }
       catch (e) { warn('caller_audio_ended', { error: errText(e) }); }
@@ -209,27 +255,44 @@ export class CallSession {
   // ── Chert (live) ─────────────────────────────────────────────
 
   private async dial(): Promise<void> {
+    const names = new Set([...this.ft.localParticipant!.trackPublications.values()].map((p) => p.name));
+    if (!names.has('agent-video') || !names.has('quartermaster-audio')) throw new Error('agent tracks not published before dialing');
     const bridgeToken = await mint(this.bridgeIdentity, this.ftRoom, '30m');
+    if (this.ending) return;
     this.dialedAt = Date.now();
-    this.callId = await createCall({
+    const { id, queued } = await createCall({
       destination: this.friend.phoneE164, livekitUrl: env.LIVEKIT_URL,
-      participantToken: bridgeToken, remoteIdentity: AGENT_FT_IDENTITY,
-    }, `${this.keyBase}-create`);
-    log('chert_call_created', { callId: this.callId, ms: Date.now() - this.dialedAt });
-    await noteActiveCall(this.callId, `${this.keyBase}-end`).catch(() => {});
+      participantToken: bridgeToken, remoteIdentity: this.ft.localParticipant!.identity,
+    }, `${this.keyBase}-create`, () => !!this.ending);
+    this.callId = id;
+    log('chert_call_created', { callId: id, queued, ms: Date.now() - this.dialedAt });
+    if (this.ending) {
+      log('chert_call_created_after_end', { callId: id });
+      await this.endChert();
+      return;
+    }
+    if (!queued) this.allocatedAt = Date.now();
+    await noteActiveCall(id, `${this.keyBase}-end`).catch(() => {});
     void this.pollEvents();
+  }
+
+  /** POST /end once per call, whoever asks first. */
+  private endChert(): Promise<number> {
+    this.chertEnd ??= endCall(this.callId!, `${this.keyBase}-end`).catch((e) => { warn('chert_end_failed', { error: errText(e) }); return 0; });
+    return this.chertEnd;
   }
 
   private async pollEvents(): Promise<void> {
     const seen = new Set<string>();
     while (!this.ending && this.callId) {
-      if (!this.bridgeReadyAt && Date.now() - this.dialedAt > ANSWER_TIMEOUT_MS) { await this.end('no_answer', 'failed'); return; }
+      if (!this.allocatedAt) await this.checkQueue();
+      if (this.allocatedAt && !this.bridgeReadyAt && Date.now() - this.allocatedAt > ANSWER_TIMEOUT_MS) { await this.end('no_answer', 'failed'); return; }
       try {
         for (const ev of await getEvents(this.callId)) {
           if (seen.has(ev.id)) continue;
           seen.add(ev.id);
-          log('chert_event', { type: ev.type });
-          this.onChertEvent(ev.type);
+          log('chert_event', { type: ev.type, reason: ev.reason });
+          this.onChertEvent(ev);
           if (this.ending) return;
         }
       } catch (e) { warn('chert_poll_failed', { error: errText(e) }); }
@@ -237,12 +300,22 @@ export class CallSession {
     }
   }
 
-  private onChertEvent(type: string): void {
+  /** While the call waits on the shared line, the no-answer clock has not started. */
+  private async checkQueue(): Promise<void> {
+    const status = await getCallStatus(this.callId!).catch((e) => { warn('chert_status_failed', { error: errText(e) }); return undefined; });
+    if (!status || status === 'queued') return;
+    this.allocatedAt = Date.now();
+    log('chert_call_allocated', { status, queuedMs: this.allocatedAt - this.dialedAt });
+  }
+
+  private onChertEvent(ev: ChertEvent): void {
+    const { type } = ev;
+    if (!this.allocatedAt && type !== 'queued') this.allocatedAt = Date.now();
     if (type === 'bridge_ready' || type === 'call.started') this.onBridgeReady(type);
     else if (/ring|dial|alert/i.test(type) && this.state === 'dialing') this.status('ringing');
     else if (type === 'remote_video_unavailable') this.say('cantSee', PRIORITY.scan);
-    else if (type === 'ended' || type === 'call.ended') void this.end('remote_ended', 'ended', { skipChert: true });
-    else if (type === 'failed' || type === 'call.failed') void this.end('chert_failed', 'failed', { skipChert: true });
+    else if (type === 'ended' || type === 'call.ended') void this.end(ev.reason ?? 'remote_ended', 'ended', { quick: true });
+    else if (type === 'failed' || type === 'call.failed') void this.end(ev.reason ?? 'chert_failed', 'failed', { quick: true });
   }
 
   // ── call flow ────────────────────────────────────────────────
@@ -255,8 +328,10 @@ export class CallSession {
     log('greeting_started', { via, msAfterBridgeReady: Date.now() - this.bridgeReadyAt, cached: !!g.pcm });
     this.status('connected');
     if (this.playerMic) this.mixer.enableMic(this.playerMic);
-    this.timers.push(setTimeout(() => this.say('mustGo', PRIORITY.scan), env.CALL_MAX_MS - MUST_GO_BEFORE_MS));
-    this.timers.push(setTimeout(() => void this.end('time_limit', 'ended'), env.CALL_MAX_MS));
+    // Chert's 5-minute cap may count from allocation, not answer, so the deadline does too.
+    const left = (this.allocatedAt || this.bridgeReadyAt) + env.CALL_MAX_MS - Date.now();
+    this.timers.push(setTimeout(() => this.say('mustGo', PRIORITY.scan), left - MUST_GO_BEFORE_MS));
+    this.timers.push(setTimeout(() => void this.end('time_limit', 'ended'), left));
   }
 
   private say(key: LineKey, priority: number): void {
@@ -274,6 +349,8 @@ export class CallSession {
       case 'boss_spawn': this.say('bossSpawn', PRIORITY.danger); break;
       case 'player_pinned':
         this.say('pinned', PRIORITY.danger);
+        if (this.autoScanUsed) break;
+        this.autoScanUsed = true;
         this.scanRequested = false;
         this.timers.push(setTimeout(() => { if (!this.scanRequested && !this.scanner.scanning) void this.runScan(); }, AUTO_SCAN_AFTER_PIN_MS));
         break;
@@ -293,8 +370,12 @@ export class CallSession {
     if (name) this.narrator.say(`Your ${name} just flattened a suitor. Ha!`, PRIORITY.trickshot);
   }
 
+  /** Every request gets a scan.status reply. A request during a scan repeats the current state. */
   private async runScan(): Promise<void> {
-    if (!this.bridgeReadyAt || this.scanner.scanning || this.awaitingWeapon || this.ending) return;
+    if (this.ending) return;
+    if (!this.bridgeReadyAt) return this.scanStatus('failed', { reason: 'not_connected' });
+    if (this.scanner.scanning) return this.scanStatus('looking');
+    if (this.awaitingWeapon) return this.scanStatus('forging');
     this.scanStatus('looking');
     this.say('scanLooking', PRIORITY.scan);
     let nudged = false;
@@ -311,43 +392,51 @@ export class CallSession {
     this.narrator.say(hit.quip, PRIORITY.scan);
     this.scanStatus('forging', { objectName: hit.objectName, displayName: hit.displayName });
     this.awaitingWeapon = true;
+    this.weaponTimer = setTimeout(() => {
+      if (!this.awaitingWeapon || this.ending) return;
+      this.awaitingWeapon = false;
+      warn('weapon_spawn_timeout', { waitedMs: WEAPON_WAIT_MS });
+      this.scanStatus('failed', { reason: 'forge_timeout' });
+    }, WEAPON_WAIT_MS);
+    this.timers.push(this.weaponTimer);
   }
 
   private onWeapon(w: WeaponSpawn): void {
     this.lastWeapon = w;
+    const fromOurScan = this.awaitingWeapon;
     this.awaitingWeapon = false;
+    if (this.weaponTimer) clearTimeout(this.weaponTimer);
     if (!this.bridgeReadyAt) return;
     this.narrator.say(`The ${w.displayName} is in his hands!`, PRIORITY.weapon);
-    this.scanStatus('done', { objectName: w.objectName, displayName: w.displayName });
+    if (fromOurScan) this.scanStatus('done', { objectName: w.objectName, displayName: w.displayName });
   }
 
   // ── end + cleanup (every exit path goes through here) ────────
 
-  end(reason: string, final: 'ended' | 'failed', opts: { skipChert?: boolean; quick?: boolean } = {}): Promise<void> {
+  end(reason: string, final: 'ended' | 'failed', opts: { quick?: boolean } = {}): Promise<void> {
     this.ending ??= this.doEnd(reason, final, opts);
     return this.ending;
   }
 
-  private async doEnd(reason: string, final: 'ended' | 'failed', opts: { skipChert?: boolean; quick?: boolean }): Promise<void> {
+  /** quick = no farewell (the friend is already gone, or the process is crashing). */
+  private async doEnd(reason: string, final: 'ended' | 'failed', opts: { quick?: boolean }): Promise<void> {
     log('call_ending', { reason, final, callId: this.callId });
     this.status('ending', reason);
     for (const t of this.timers) clearTimeout(t);
     this.scanner.cancel();
     try {
-      if (this.bridgeReadyAt && !opts.skipChert && !opts.quick) {
+      // A connect or a create in flight would otherwise finish after cleanup and leave a room or a call behind.
+      await Promise.race([this.setup?.catch(() => {}), sleep(SETUP_WAIT_MS)]);
+      if (this.bridgeReadyAt && !opts.quick) {
         const f = pick('farewell');
         await Promise.race([this.narrator.sayNow(f.text, PRIORITY.greeting, f.pcm), sleep(FAREWELL_WAIT_MS)]);
       }
-      if (this.callId && !opts.skipChert) {
-        const status = await endCall(this.callId, `${this.keyBase}-end`).catch((e) => { warn('chert_end_failed', { error: errText(e) }); return 0; });
-        log('chert_end', { status });
-      }
+      if (this.callId) log('chert_end', { status: await this.endChert() });
     } finally {
       this.narrator.stop();
       await Promise.allSettled([
-        ...this.relayStreams.map((s) => s.cancel()),
+        ...[...this.relays.values()].flatMap((r) => [r.stream.cancel(), r.source.close()]),
         this.mixer.close(), this.video.close(),
-        ...this.relaySources.map((s) => s.close()),
       ]);
       await Promise.allSettled([this.ft.disconnect(), this.game.disconnect()]);
       await this.roomService().deleteRoom(this.ftRoom).catch((e) => warn('delete_room_failed', { error: errText(e) }));
