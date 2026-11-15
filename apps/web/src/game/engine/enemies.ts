@@ -533,6 +533,9 @@ export class EnemyManager {
     solvePose(e.pose, e.pos, e.yaw, e.look.scale, a);
   }
 
+  /** the player fights with his body (webcam): slower to guard and dodge than a mouse — the wooers give him room */
+  private bodyInput() { return this.hooks.speedScale() >= 1; }
+
   private ringAngles() { return this.hooks.speedScale() < 1 ? RING_ANGLES_KB : RING_ANGLES; }
   /** how far off your view a ring slot may be and still strike (it must be on screen) */
   private onScreenAng() { return this.hooks.speedScale() < 1 ? 0.8 : 0.62; }
@@ -578,8 +581,10 @@ export class EnemyManager {
     // only from where you can see him: a flank slot more than ~35° off your view waits (or moves in, below)
     if (e.ring !== null && e.kind !== 'archer' && Math.abs(this.ringAngles()[e.ring] + (this.hooks.playerYaw?.() ?? 0)) > this.onScreenAng()) return false;
     const planned = this.t + this.arche(e).windup + 0.12;
-    for (const o of this.list) if (o !== e && o.attack && !o.attack.resolved && Math.abs(o.attack.impactAt - planned) < 0.4) return false;
-    return this.t - this.lastImpactAt > 0.2;
+    // blows land at least this far apart — a body (webcam) player raises a guard or leans far slower than a click
+    const gap = this.bodyInput() ? 0.9 : 0.4;
+    for (const o of this.list) if (o !== e && o.attack && !o.attack.resolved && Math.abs(o.attack.impactAt - planned) < gap) return false;
+    return this.t - this.lastImpactAt > (this.bodyInput() ? 0.6 : 0.2);
   }
 
   /** His guard reads your blade: predict where it crosses him 0.18 s ahead and raise high / left / right / low. */
@@ -990,7 +995,8 @@ export class EnemyManager {
     // the damage arc shows the side the blade came from (its lane), exaggerated off the player's eye line
     const from = _v3.subVectors(at.lane, head).multiply(_v2.set(2.6, 1, 1)).add(head);
     // per-wave blow damage (7 / 10 / 12 — wave 1 teaches), fists half; Antinous 22 (30 unblockable)
-    const base = e.kind === 'boss' ? (at.unblockable ? 30 : 22) : [6, 9, 12][Math.min(2, this.hooks.wave() - 1)] * (e.armed ? 1 : 0.5);
+    const base = (e.kind === 'boss' ? (at.unblockable ? 30 : 22) : [6, 9, 12][Math.min(2, this.hooks.wave() - 1)] * (e.armed ? 1 : 0.5))
+      * (this.bodyInput() ? 0.8 : 1); // webcam: blows cost a fifth less
     switch (o) {
       case 'perfect':
         this.addPosture(e, 40, true);
@@ -1563,7 +1569,8 @@ export class EnemyManager {
   /** hurt but not staggered, a wooer standing his ground cuts back at once instead of waiting his turn */
   private lashBack(e: Enemy) {
     // (wave-1 revelers are drunk and slow to answer — the lesson wave)
-    if ((e.state === 'wait' || e.state === 'approach') && e.kind !== 'archer' && this.hooks.wave() >= 2) e.nextAttackAt = Math.min(e.nextAttackAt, this.t + rand(0.2, 0.45));
+    if ((e.state === 'wait' || e.state === 'approach') && e.kind !== 'archer' && this.hooks.wave() >= 2)
+      e.nextAttackAt = Math.min(e.nextAttackAt, this.t + (this.bodyInput() ? rand(0.55, 0.9) : rand(0.2, 0.45)));
   }
 
   private zoneMult(part: number, neck: boolean) {
