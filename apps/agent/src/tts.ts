@@ -9,6 +9,10 @@ export const TTS_SAMPLE_RATE = 48_000;
 const FIRST_BYTE_TIMEOUT_MS = 5_000; // guess: measured TTFB was about 0.26 s
 export const CHUNK_IDLE_MS = 3_000; // guess: a stalled body would otherwise hold the narrator and the mic duck forever
 
+export class TtsHttpError extends Error {
+  constructor(readonly status: number, body: string) { super(`elevenlabs ${status}: ${body.slice(0, 200)}`); }
+}
+
 /** Streams 48 kHz mono Int16 PCM chunks for one line. */
 export async function* ttsStream(text: string): AsyncGenerator<Int16Array> {
   const url = `https://api.elevenlabs.io/v1/text-to-speech/${env.ELEVENLABS_VOICE_ID}/stream?output_format=pcm_48000`;
@@ -20,7 +24,7 @@ export async function* ttsStream(text: string): AsyncGenerator<Int16Array> {
     headers: { 'xi-api-key': env.ELEVENLABS_API_KEY, 'content-type': 'application/json' },
     body: JSON.stringify({ text, model_id: env.ELEVENLABS_MODEL_ID }),
   }).finally(() => clearTimeout(timer));
-  if (!res.ok || !res.body) throw new Error(`elevenlabs ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  if (!res.ok || !res.body) throw new TtsHttpError(res.status, await res.text());
 
   const idle = () => { clearTimeout(timer); timer = setTimeout(() => ctl.abort(new Error('elevenlabs body stalled')), CHUNK_IDLE_MS); };
   idle();

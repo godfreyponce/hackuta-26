@@ -1,6 +1,6 @@
 // The Quartermaster's fixed lines (spec B.6). Every line here is pre-rendered at startup.
 import { log, warn, errText } from './log.ts';
-import { renderCached } from './tts.ts';
+import { renderCached, TtsHttpError } from './tts.ts';
 
 export const LINES = {
   greeting: [
@@ -46,13 +46,22 @@ export async function prerenderLines(): Promise<void> {
   log('tts_cache_ready', { lines: cache.size, of: texts.length, ms: Date.now() - t0 });
 }
 
-/** The greeting must come from the cache (spec B.5), so keep retrying every missing greeting line until all render. */
+/**
+ * The greeting must come from the cache (spec B.5), so keep retrying every missing greeting line until all render.
+ * A 401 or 403 (bad or expired key) cannot fix itself: stop, so the team sees one clear line instead of a retry loop.
+ */
 export async function ensureGreeting(): Promise<void> {
   for (let tries = 1; !greetingReady(); tries++) {
     await new Promise((r) => setTimeout(r, 5_000));
     for (const text of LINES.greeting.filter((t) => !cache.has(t))) {
       try { cache.set(text, await renderCached(text)); log('greeting_rendered', { tries }); }
-      catch (e) { warn('greeting_render_failed', { tries, error: errText(e) }); }
+      catch (e) {
+        if (e instanceof TtsHttpError && (e.status === 401 || e.status === 403)) {
+          warn('ELEVENLABS_KEY_REJECTED_ALL_CALLS_REFUSED', { status: e.status, error: errText(e), fix: 'set a valid ELEVENLABS_API_KEY in apps/agent/.env.local and restart the agent' });
+          return;
+        }
+        warn('greeting_render_failed', { tries, error: errText(e) });
+      }
     }
   }
 }

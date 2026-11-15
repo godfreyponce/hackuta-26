@@ -357,11 +357,19 @@ async function liveFailedEnd(): Promise<void> {
   await g.close();
 }
 
-const health = await (await fetch(`${AGENT}/health`)).json() as { mode: string; chert: string | null };
+const health = await (await fetch(`${AGENT}/health`)).json() as { mode: string; chert: string | null; greetingReady?: boolean };
 out('agent', health);
 if (health.mode === 'live' && !health.chert?.startsWith(`${HUB}/fake-chert`)) {
   out('refused', { why: 'the agent is live against the real Chert; these scenarios would place real calls. Run `pnpm dev:fake-chert`.' });
   process.exit(1);
+}
+check('/health shows greetingReady (integration #8)', health.greetingReady === true, health.greetingReady);
+{
+  out('scenario', { name: 'call.end with no call' });
+  const g = await openGame();
+  g.send('call.end');
+  check('call.end with no call gets ended no_active_call (integration #7)', await waitFor(() => g.msgs.some((m) => m.type === 'call.status' && m.state === 'ended' && m.reason === 'no_active_call'), 3_000));
+  await g.close();
 }
 if (health.mode === 'mock-call') {
   await mockMainLoop();

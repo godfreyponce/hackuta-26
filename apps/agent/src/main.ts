@@ -30,6 +30,7 @@ const hub = new Hub((m: ServerToAgent) => {
   }
   if (active && active.sid === m.sessionId) active.handle(m);
   else if (m.type === 'scan.request') hub.send({ type: 'scan.status', sessionId: m.sessionId, state: 'failed', reason: 'not_connected' });
+  else if (m.type === 'call.end') hub.send({ type: 'call.status', sessionId: m.sessionId, state: 'ended', reason: 'no_active_call' });
 });
 
 function startHealthServer(): void {
@@ -37,7 +38,7 @@ function startHealthServer(): void {
     const url = new URL(req.url ?? '/', 'http://localhost');
     const json = (code: number, body: unknown) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
     if (url.pathname === '/health') {
-      return json(200, { ok: true, mode: env.AGENT_MODE, chert: env.AGENT_MODE === 'live' ? env.CHERT_API_BASE : null, hub: hub.connected, call: active ? { sid: active.sid, state: active.state } : null });
+      return json(200, { ok: true, mode: env.AGENT_MODE, chert: env.AGENT_MODE === 'live' ? env.CHERT_API_BASE : null, hub: hub.connected, greetingReady: greetingReady(), call: active ? { sid: active.sid, state: active.state } : null });
     }
     if (env.AGENT_MODE === 'mock-call' && url.pathname === '/dev/fake-phone') {
       res.writeHead(200, { 'content-type': 'text/html' });
