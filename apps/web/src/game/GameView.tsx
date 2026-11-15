@@ -120,6 +120,9 @@ function EngineMount({ onReady }: { onReady: (e: Engine) => void }) {
       perfAcc.t += delta;
       perfAcc.calls = gl.info.render.calls;
       perfAcc.tris = gl.info.render.triangles;
+      const ring = ((window as unknown as { __calls?: number[] }).__calls ??= []);
+      ring.push(gl.info.render.calls);
+      if (ring.length > 60) ring.shift();
       if (perfAcc.t >= 0.5) {
         const el = document.getElementById('perf');
         if (el) el.textContent = `${Math.round(perfAcc.frames / perfAcc.t)} fps · ${perfAcc.calls} draw calls · ${(perfAcc.tris / 1000).toFixed(0)}k tris`;

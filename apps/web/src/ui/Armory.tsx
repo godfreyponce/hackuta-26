@@ -24,6 +24,7 @@ export function Armory() {
   const [err, setErr] = useState<string | null>(null);
   const [sel, setSel] = useState<ArmoryItem | null>(null);
   const [view, setView] = useState<'3d' | 'photo'>('3d');
+  const [retry, setRetry] = useState(0);
   const back = () => go(prev === 'results' ? 'results' : 'title');
   const ref = useMenuNav<HTMLDivElement>(back);
 
@@ -38,7 +39,7 @@ export function Armory() {
       setSel((s) => (s ? list.find((x) => x.weaponId === s.weaponId) ?? list[0] ?? null : list[0] ?? null));
     }).catch((e) => { if (alive) setErr((e as Error).message); });
     return () => { alive = false; };
-  }, [pulse]);
+  }, [pulse, retry]);
 
   return (
     <div className="screen dim" ref={ref}>
@@ -49,11 +50,11 @@ export function Armory() {
           <h1 className="h2">The Armory</h1>
         </div>
         <div className="spacer" />
-        <span className={`chip ${netMode === 'live' ? 'live' : 'warn'}`}><span className="dot" />{netMode === 'live' ? 'Live · MongoDB Atlas' : 'Mock armory'}</span>
+        <span className={`chip ${err ? 'bad' : netMode === 'live' ? 'live' : 'warn'}`}><span className="dot" />{err ? 'Storeroom offline' : netMode === 'live' ? 'Live · MongoDB Atlas' : 'Mock armory'}</span>
         <span className="muted small num">{items?.length ?? 0} relics</span>
       </div>
       <Meander style={{ marginBottom: 16 }} />
-      {err && <div className="error" role="alert">Couldn’t open the storeroom ({err}). It will refresh when a new weapon is forged.</div>}
+      {err && <div className="error" role="alert">Couldn’t open the storeroom. <Btn variant="link" onClick={() => { setErr(null); setRetry((r) => r + 1); }}>Retry</Btn></div>}
       {!items && !err && <p className="lore">Unbarring the storeroom…</p>}
       {items && items.length === 0 && <p className="lore">Nothing forged yet. Every object a friend holds up becomes a relic here.</p>}
       {items && items.length > 0 && (

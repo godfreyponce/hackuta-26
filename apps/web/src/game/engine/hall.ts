@@ -152,7 +152,7 @@ export function buildHall(world: InstanceType<typeof RAPIER.World> | null): Hall
     const a = Math.random() * Math.PI * 2, r = Math.sqrt(Math.random()) * 0.62;
     const c = new THREE.DodecahedronGeometry(0.05 + Math.random() * 0.05, 0);
     c.translate(HALL.hearth.x + Math.cos(a) * r, 0.36, HALL.hearth.z + Math.sin(a) * r);
-    coalGeo.push(c.toNonIndexed());
+    coalGeo.push(c.index ? c.toNonIndexed() : c); // polyhedra are already non-indexed
   }
   coalGeo.forEach((g) => { for (const k of Object.keys(g.attributes)) if (k !== 'position' && k !== 'normal') g.deleteAttribute(k); });
   group.add(new THREE.Mesh(mergeGeometries(coalGeo), new THREE.MeshStandardMaterial({ color: '#1a0c06', emissive: '#ff4a10', emissiveIntensity: 2.2, roughness: 1 })));

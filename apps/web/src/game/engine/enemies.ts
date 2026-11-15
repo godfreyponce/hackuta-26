@@ -87,6 +87,8 @@ export interface Enemy {
   blockTimes: number[];
   flinch: { t: number; dir: THREE.Vector3; amount: number };
   bleedUntil: number;
+  /** last stagger (anti stun-lock) */
+  staggerT: number;
   /** severed limbs of the realistic body, following their gib bodies */
   gibs: { part: number; mesh: THREE.Object3D }[];
 }
@@ -185,6 +187,7 @@ export class EnemyManager {
   t = 0;
   private bodyTpl: BodyTemplate | null = null;
   private bodies: (SkinnedBody | null)[] = [];
+  private headTmp = new THREE.Vector3();
 
   /** Realistic skinned bodies (Rocketbox). Without a template the capsule mannequins are used. */
   setBodyTemplate(tpl: BodyTemplate | null) { this.bodyTpl = tpl; }
@@ -220,7 +223,7 @@ export class EnemyManager {
       anim: newAnim(), pose: newPose(), ragdoll: null, severed: new Set(), stumps: [], armed: look.prop !== 'none',
       dead: false, diedAt: 0, ring: null, attack: null, nextAttackAt: 0, spot: null, lastHit: new Map(), spawnT: this.t,
       name: boss ? 'Antinous' : undefined, pinned: false, feastSeed: Math.random() * 10, forward: new THREE.Vector3(0, 0, 1),
-      charging: false, blockTimes: [], flinch: { t: -9, dir: new THREE.Vector3(), amount: 0 }, bleedUntil: 0, gibs: [],
+      charging: false, blockTimes: [], flinch: { t: -9, dir: new THREE.Vector3(), amount: 0 }, bleedUntil: 0, gibs: [], staggerT: -9,
     };
     if (kind === 'archer') {
       const side = Math.random() < 0.5 ? -1 : 1;
@@ -229,7 +232,7 @@ export class EnemyManager {
     }
     solvePose(e.pose, e.pos, e.yaw, e.look.scale, e.anim);
     const body = this.bodyFor(slot);
-    if (body) { body.reset(); body.root.visible = true; body.root.scale.setScalar(body.baseScale * look.scale); }
+    if (body) { body.reset(); body.setLook(look); body.root.visible = true; body.root.scale.setScalar(body.baseScale * look.scale); }
     this.list.push(e);
     return e;
   }
@@ -617,6 +620,8 @@ export class EnemyManager {
     if (at.unblockable && (o === 'perfect' || o === 'beat' || o === 'block' || o === 'shield' || o === 'guard')) o = 'hit';
     const contact = at.lane.clone();
     this.hooks.onOutcome(e, at, o, contact);
+    // the damage arc shows the side the blade came from (its lane), exaggerated off the player's eye line
+    const from = _v3.subVectors(at.lane, head).multiply(_v2.set(2.6, 1, 1)).add(head);
     const base = e.kind === 'boss' ? (at.unblockable ? 30 : 22) : 12;
     switch (o) {
       case 'perfect':
@@ -633,7 +638,7 @@ export class EnemyManager {
         if (e.state !== 'broken') this.setState(e, 'recoil', 0.3);
         break;
       case 'guard':
-        this.hooks.onPlayerHit(base * 0.2, 'melee', e.pos, false);
+        this.hooks.onPlayerHit(base * 0.2, 'melee', from, false);
         this.setState(e, 'recover');
         break;
       case 'dodge':
@@ -641,7 +646,7 @@ export class EnemyManager {
         this.setState(e, 'recover', 0.5);
         break;
       case 'hit':
-        this.hooks.onPlayerHit(base, 'melee', e.pos, base > 15);
+        this.hooks.onPlayerHit(base, 'melee', from, base > 15);
         this.setState(e, 'recover');
         break;
     }
@@ -761,7 +766,17 @@ export class EnemyManager {
         }
         if (d2 < r * r) {
           const score = d2 - (i === P.Head ? 0.002 : 0);
-          if (score < bestD) { bestD = score; best = { enemy: e, part: i, point: _c2.clone() }; }
+          if (score < bestD) {
+            bestD = score;
+            // contact on the body's surface toward the blade (not the bone axis): a cut passing under the
+            // jaw reads as the throat, blood and impacts land on the skin
+            const pr = PART_DIM[i].r * e.look.scale;
+            const off = _v.subVectors(_c1, _c2);
+            const len = off.length();
+            const point = _c2.clone();
+            if (len > 1e-5) point.addScaledVector(off, Math.min(len, pr) / len);
+            best = { enemy: e, part: i, point };
+          }
         }
       }
     }
@@ -894,7 +909,9 @@ export class EnemyManager {
       const headBlocked = info.part === P.Head && !arm.neck; // the bronze bell of the helmet
       const greaved = (target === P.LLegL || target === P.LLegR) && e.look.greaves;
       const armored = arm.cls === 'linen' ? 1.3 : 1;          // leather bracers / linen
-      if (need !== undefined && !headBlocked && !greaved && !e.severed.has(target) && info.speed >= need * armored * this.hooks.speedScale()) severPart = target;
+      // Antinous is a boss, not a one-cut kill: his limbs and head come off only once he's broken or nearly spent
+      const bossGuard = e.kind === 'boss' && !e.dead && !broken && e.hp - dmg > e.maxHp * 0.3;
+      if (need !== undefined && !headBlocked && !greaved && !bossGuard && !e.severed.has(target) && info.speed >= need * armored * this.hooks.speedScale()) severPart = target;
     }
     if (broken && info.sharp && (info.part === P.Head || arm.neck)) severPart = P.Head; // finisher: off with his head
     res.damage = dmg;
@@ -937,8 +954,14 @@ export class EnemyManager {
       // hit reaction: flinch (light) or directional stagger (solid/heavy)
       e.flinch = { t: this.t, dir: info.dir.clone(), amount: tier >= 2 ? 1 : 0.6 };
       if (tier >= 2 && e.state !== 'broken' && e.state !== 'maimed') {
-        if (e.state === 'windup' && this.t > (e.attack?.impactAt ?? 0) - 0.2) { /* super-armor in the last 200 ms of his swing */ }
+        // hyper-armour: once his wind-up is 40% done only a heavy blow (≥7 m/s, mouse-scaled) breaks it, and a
+        // wooer can be staggered at most once per 1.5 s — fast sweeps no longer stun-lock him
+        const atk = e.attack;
+        const committed = e.state === 'windup' && !!atk && 1 - (atk.impactAt - this.t) / Math.max(0.1, atk.windup) > 0.4;
+        const heavy = info.speed >= 7 * this.hooks.speedScale();
+        if ((committed && !heavy) || this.t - e.staggerT < 1.5) { /* flinch only */ }
         else {
+          e.staggerT = this.t;
           e.attack = null;
           this.setState(e, 'stagger', tier === 3 ? 1.0 : 0.6);
           e.pos.addScaledVector(_v.copy(info.dir).setY(0).normalize(), tier === 3 ? 0.35 : 0.15);
@@ -1098,7 +1121,7 @@ export class EnemyManager {
     for (const e of this.list) {
       if (e.ragdoll && (e.dead || e.state === 'down')) readRagdoll(e.ragdoll, e.pose);
       const body = this.bodies[e.slot];
-      if (body) body.apply(e.pose);
+      if (body) { body.apply(e.pose); body.setFlash(this.renderer.flash[e.slot]); }
       for (const g of e.gibs) { const p = e.pose[g.part]; g.mesh.position.copy(p.c); g.mesh.quaternion.copy(p.q); }
       this.renderer.write(e.slot, e.pose, e.look, {
         shieldBroken: e.shieldHp <= 0,
@@ -1107,6 +1130,8 @@ export class EnemyManager {
         stumps: e.stumps,
         broken: e.state === 'broken',
         skinned: !!body,
+        shells: !!body?.hasShell,
+        head: body ? body.headAnchor(this.headTmp) : null,
       });
     }
     this.renderer.commit();

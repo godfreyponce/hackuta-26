@@ -5,6 +5,8 @@ import '@fontsource/cormorant-garamond/500.css';
 import '@fontsource/cormorant-garamond/500-italic.css';
 import '@fontsource/cormorant-garamond/600-italic.css';
 import '@fontsource/cinzel/600.css';
+import '@fontsource/cinzel/700.css';
+import '@fontsource/cinzel/900.css';
 import './styles/global.css';
 import { App } from './App';
 import { bootNet, setupInput } from './game/runtime';

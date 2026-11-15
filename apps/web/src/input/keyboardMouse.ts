@@ -207,6 +207,28 @@ export function createKeyboardMouseController(): KeyboardMouseController {
     const now = performance.now();
     cursorHist.push({ t: now, x: aimDir.x * reach, y: aimDir.y * reach, z: aimDir.z * reach });
     while (cursorHist.length > 2 && now - cursorHist[0].t > 250) cursorHist.shift();
+    // a second button pressed while one is held is "chorded": browsers report it only as a pointermove
+    // with e.button set (no pointerdown/up) — e.g. RMB guard while LMB holds the sword
+    if (running && e.button === 2) setRight((e.buttons & 2) !== 0);
+    else if (running && e.button === 0) setLeft((e.buttons & 1) !== 0);
+  }
+  function setLeft(down: boolean) {
+    if (down === lmb) return;
+    lmb = down;
+    if (down) {
+      if (mode.bow) startDraw();
+      else gripHand(mode.activeHand, true);
+    } else if (mode.bow) loose();
+    else {
+      gripHand(mode.activeHand, false);
+      // A left grip latched while Shift was held is released with the button too.
+      if (mode.activeHand === 'right' && hands.left.gripping) gripHand('left', false);
+    }
+  }
+  function setRight(down: boolean) {
+    if (down === rmb) return;
+    rmb = down;
+    emit({ type: down ? 'block_start' : 'block_end' });
   }
   function cursorVel(windowMs: number, out: THREE.Vector3) {
     const now = performance.now();
@@ -219,29 +241,13 @@ export function createKeyboardMouseController(): KeyboardMouseController {
   function onPointerDown(e: PointerEvent) {
     if (!running) return;
     onPointerMove(e);
-    if (e.button === 0) {
-      lmb = true;
-      if (mode.bow) startDraw();
-      else gripHand(mode.activeHand, true);
-    } else if (e.button === 2) {
-      rmb = true;
-      emit({ type: 'block_start' });
-    }
+    if (e.button === 0) setLeft(true);
+    else if (e.button === 2) setRight(true);
   }
   function onPointerUp(e: PointerEvent) {
     if (!running) return;
-    if (e.button === 0) {
-      lmb = false;
-      if (mode.bow) loose();
-      else {
-        gripHand(mode.activeHand, false);
-        // A left grip latched while Shift was held is released with the button too.
-        if (mode.activeHand === 'right' && hands.left.gripping) gripHand('left', false);
-      }
-    } else if (e.button === 2) {
-      rmb = false;
-      emit({ type: 'block_end' });
-    }
+    if (e.button === 0) setLeft(false);
+    else if (e.button === 2) setRight(false);
   }
   function onWheel(e: WheelEvent) {
     if (!running) return;

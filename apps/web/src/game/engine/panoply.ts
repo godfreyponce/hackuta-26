@@ -44,8 +44,8 @@ export function lookFor(kind: EnemyKind, armed: boolean, shield: ShieldKind): Sl
   }
   if (kind === 'archer') {
     return {
-      ...base, scale: rand(0.94, 1.02), skin: C(pick(SKINS)), chiton: C('#B9AD92'),
-      armor: 'linothorax', armorTint: C('#B9AD92'), trim: C('#9a6a2a'),
+      ...base, scale: rand(0.94, 1.02), skin: C(pick(SKINS)), chiton: C('#5C3B2A'),
+      armor: 'linothorax', armorTint: C('#D6CFBC'), trim: C('#9a6a2a'),
       helmet: 'pilos', helmetTint: C('#7A3B1E'), crest: 'none', crestColor: C('#000000'),
       leather: C('#4a3424'), greaves: false, bracers: true, quiver: true, prop: 'bow', shield: 'none',
     };
@@ -67,7 +67,7 @@ export function lookFor(kind: EnemyKind, armed: boolean, shield: ShieldKind): Sl
   const corinthian = Math.random() < 0.35;
   return {
     ...base, scale: rand(0.94, 1.04), skin: C(pick(SKINS)), chiton: C(pick(SUITOR_DYES)),
-    armor: 'linothorax', armorTint: C(pick(['#D8CEB4', '#cdbf9c', '#c2b48e'])), trim: C(BRASS),
+    armor: 'linothorax', armorTint: C(pick(['#E9E4D6', '#E2DCCB', '#DAD3BF'])), trim: C(BRASS), // bleached linen
     helmet: corinthian ? 'corinthian' : 'pilos', helmetTint: C(corinthian ? '#B0804A' : '#5A3A22'),
     crest: corinthian ? 'long' : 'none', crestColor: C(PLUME_RED),
     leather: C('#5A3A22'), greaves: false, lacing: Math.random() < 0.5, bracers: false,

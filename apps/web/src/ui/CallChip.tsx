@@ -4,7 +4,7 @@ import { fmtTime } from './components';
 
 const CALL_MAX_MS = 285_000; // agent hard-stops at 4:45
 
-export function CallChip() {
+export function CallChip({ compact = false }: { compact?: boolean }) {
   const call = useApp((s) => s.call);
   const friend = useApp((s) => s.friend);
   const [, tick] = useState(0);
@@ -22,7 +22,7 @@ export function CallChip() {
       const left = CALL_MAX_MS - el;
       return (
         <span className={`chip ${left < 30_000 ? 'warn' : 'live'}`}>
-          <span className="dot" />{name} · <span className="num">{fmtTime(el)}</span>
+          <span className="dot" />{compact ? null : <>{name} · </>}<span className="num">{fmtTime(el)}</span>
           <span className="muted num">/ 4:45</span>
         </span>
       );

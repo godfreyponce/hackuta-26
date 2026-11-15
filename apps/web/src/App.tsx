@@ -5,7 +5,7 @@ import { Title } from './ui/Title';
 import { Setup } from './ui/Setup';
 import { Calibration } from './ui/Calibration';
 import { Lobby } from './ui/Lobby';
-import { Hud } from './ui/Hud';
+import { Hud, Toasts } from './ui/Hud';
 import { Results } from './ui/Results';
 import { Armory } from './ui/Armory';
 import { Leaderboard } from './ui/Leaderboard';
@@ -37,6 +37,7 @@ export function App() {
       {screen === 'results' && <Results />}
       {screen === 'armory' && <Armory />}
       {screen === 'leaderboard' && <Leaderboard />}
+      {screen !== 'game' && <div className="hud" aria-live="polite"><Toasts /></div>}
       {dev === 'friendview' && <DevFriendView />}
     </>
   );

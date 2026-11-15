@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useApp } from '../state/store';
 import { runtime, persistPlayer } from '../game/runtime';
+import { pushToast } from '../state/store';
 import { setMockFriendName } from '../net';
 import { Btn, Meander, useMenuNav } from './components';
 
@@ -18,6 +19,8 @@ const COUNTRIES: { code: string; dial: string; name: string }[] = [
   { code: 'KR', dial: '+82', name: 'South Korea' },
   { code: 'BR', dial: '+55', name: 'Brazil' },
 ];
+
+class OfflineError extends Error {}
 
 export function Setup() {
   const go = useApp((s) => s.go);
@@ -41,12 +44,26 @@ export function Setup() {
 
   async function savePlayerOnly() {
     const net = runtime.net;
-    if (!net) return;
-    if (!player || player.name !== name.trim()) {
-      const { playerId } = await net.api.createPlayer(name.trim() || 'Odysseus');
-      useApp.setState({ player: { id: playerId, name: name.trim() || 'Odysseus' }, session: null });
+    const nm = name.trim() || 'Odysseus';
+    if (player && player.name === nm) return;
+    try {
+      if (!net) throw new Error('offline');
+      const { playerId } = await net.api.createPlayer(nm);
+      useApp.setState({ player: { id: playerId, name: nm }, session: null });
+    } catch {
+      // server unreachable: keep a local hero so the fight still runs (score just won't post)
+      useApp.setState({ player: { id: `local-${Math.random().toString(36).slice(2, 10)}`, name: nm }, session: null });
+      pushToast({ kind: 'warn', title: 'PLAYING OFFLINE', sub: 'The server is unreachable — Phone a Friend is off' }, 2800);
+      throw new OfflineError();
     }
   }
+
+  const friendly = (e: unknown) => {
+    const m = (e as Error)?.message ?? '';
+    return /internal server error|failed to fetch|network|5\d\d/i.test(m) || !m
+      ? 'Couldn’t reach the server. Try again, or skip and fight alone.'
+      : m;
+  };
 
   async function save() {
     setErr(null);
@@ -63,7 +80,7 @@ export function Setup() {
       persistPlayer();
       go('calibration');
     } catch (e) {
-      setErr((e as Error).message || 'Could not save your friend. Try again.');
+      setErr(e instanceof OfflineError ? 'Couldn’t reach the server. Try again, or skip and fight alone.' : friendly(e));
     } finally {
       setBusy(false);
     }
@@ -71,7 +88,8 @@ export function Setup() {
 
   async function skip() {
     setBusy(true);
-    try { await savePlayerOnly(); persistPlayer(); go('calibration'); } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
+    try { await savePlayerOnly(); } catch (e) { if (!(e instanceof OfflineError)) { setErr(friendly(e)); setBusy(false); return; } }
+    persistPlayer(); setBusy(false); go('calibration');
   }
 
   return (
@@ -85,7 +103,7 @@ export function Setup() {
           <div className="panel-title"><span className="eyebrow">I</span><h2 className="h2">Who returns?</h2></div>
           <div className="field">
             <label htmlFor="pname">Your name (for the leaderboard)</label>
-            <input id="pname" className="input" value={name} maxLength={24} onChange={(e) => setName(e.target.value)} autoComplete="off" />
+            <input id="pname" className="input" data-autofocus autoFocus value={name} maxLength={24} onChange={(e) => setName(e.target.value)} autoComplete="off" />
           </div>
           <p className="lore" style={{ margin: 0 }}>
             Twenty years from home. The hall is full of wooers. Your son is in the storeroom — and he has a phone.
@@ -124,8 +142,11 @@ export function Setup() {
             <span>My friend agreed to receive a FaceTime call from this game.</span>
           </label>
           {err && <div className="error" role="alert">{err}</div>}
+          {!err && (local || consent) && (!validPhone || !consent) && (
+            <div className="muted small">{!validPhone ? 'Enter their full number to continue.' : 'Tick the consent box to continue.'}</div>
+          )}
           <div className="row" style={{ flexWrap: 'wrap' }}>
-            <Btn variant="primary" onClick={save} disabled={busy || !consent || !validPhone}>{busy ? 'Saving…' : 'Save & continue'}</Btn>
+            <Btn variant="primary" onClick={save} disabled={busy}>{busy ? 'Saving…' : 'Save & continue'}</Btn>
             {friend
               ? <Btn onClick={skip} disabled={busy}>Keep {friend.name}</Btn>
               : <Btn variant="link" onClick={skip}>Skip — fight alone</Btn>}

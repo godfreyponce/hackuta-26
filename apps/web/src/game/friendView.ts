@@ -2,7 +2,7 @@
 // 640×360 @ 15 fps. Layout keeps all four corners clear (FaceTime self-view tile + controls live
 // there): status strip top-center, contextual banner bottom-center (≤ 60% width), safe margins
 // 32 px sides / 18 px top-bottom, banner text ≥ 28 px, title cards ≥ 48 px.
-import { useApp } from '../state/store';
+import { useApp, subtitleAt } from '../state/store';
 import { runtime } from './runtime';
 
 const W = 640, H = 360, FPS = 15;
@@ -14,6 +14,7 @@ const thumbCache = new Map<string, HTMLImageElement>();
 let lastTrick: { title: string; at: number } | null = null;
 
 const FONT = "'Montserrat Variable', 'Montserrat', 'Helvetica Neue', Arial, sans-serif";
+const GREEK = "'Cinzel', 'Cormorant Garamond', Georgia, serif"; // title cards
 
 function thumb(url?: string) {
   if (!url) return null;
@@ -32,8 +33,8 @@ function roundRect(c: CanvasRenderingContext2D, x: number, y: number, w: number,
   c.closePath();
 }
 
-function text(c: CanvasRenderingContext2D, s: string, x: number, y: number, size: number, color: string, weight = 800, align: CanvasTextAlign = 'center', track = 0) {
-  c.font = `${weight} ${size}px ${FONT}`;
+function text(c: CanvasRenderingContext2D, s: string, x: number, y: number, size: number, color: string, weight = 800, align: CanvasTextAlign = 'center', track = 0, face = FONT) {
+  c.font = `${weight} ${size}px ${face}`;
   c.textAlign = align;
   c.textBaseline = 'middle';
   (c as CanvasRenderingContext2D & { letterSpacing?: string }).letterSpacing = `${track}px`;
@@ -46,10 +47,10 @@ function text(c: CanvasRenderingContext2D, s: string, x: number, y: number, size
   (c as CanvasRenderingContext2D & { letterSpacing?: string }).letterSpacing = '0px';
 }
 
-function fitText(c: CanvasRenderingContext2D, s: string, maxW: number, size: number, weight = 800) {
+function fitText(c: CanvasRenderingContext2D, s: string, maxW: number, size: number, weight = 800, face = FONT) {
   let sz = size;
-  c.font = `${weight} ${sz}px ${FONT}`;
-  while (sz > 18 && c.measureText(s).width > maxW) { sz -= 2; c.font = `${weight} ${sz}px ${FONT}`; }
+  c.font = `${weight} ${sz}px ${face}`;
+  while (sz > 18 && c.measureText(s).width > maxW) { sz -= 2; c.font = `${weight} ${sz}px ${face}`; }
   return sz;
 }
 
@@ -97,8 +98,8 @@ function draw() {
   if (trick && (!lastTrick || lastTrick.title !== trick.title || now - lastTrick.at > 2000)) lastTrick = { title: trick.title, at: trick.at };
   if (lastTrick && now - lastTrick.at < 1300) {
     const k = Math.min(1, (now - lastTrick.at) / 120);
-    const size = fitText(c, lastTrick.title, 420, 52) * (1.15 - 0.15 * k);
-    text(c, lastTrick.title, W / 2, H * 0.44, size, '#FFE2A0', 900, 'center', 3);
+    const size = fitText(c, lastTrick.title, 420, 52, 900, GREEK) * (1.15 - 0.15 * k);
+    text(c, lastTrick.title, W / 2, H * 0.44, size, '#FFE2A0', 900, 'center', 3, GREEK);
   }
 
   // ── bottom-center contextual banner (≤ 60% width) ──
@@ -112,16 +113,20 @@ function draw() {
   else if (hud.pinnedPrompt || (inGame && hud.health < 25)) banner = { title: 'HE’S PINNED! SEND HELP!', color: '#FF8A70', pulse: true };
   else if (st.scan.state === 'failed') banner = { title: 'TRY AGAIN — HOLD IT CLOSER', color: '#FFB38A' };
 
-  const bw = 384, bx = (W - bw) / 2;
+  // 300 px: same column as the status strip, clear of FaceTime's bottom controls pill (~x ≥ 457)
+  const bw = 300, bx = (W - bw) / 2;
   if (banner) {
     const bh = banner.pct !== undefined ? 80 : 66;
     const by = 318 - bh;
-    const alpha = banner.pulse ? 0.75 + 0.25 * Math.sin(now / 160) : 1;
-    c.globalAlpha = alpha;
-    c.fillStyle = 'rgba(12,9,7,0.82)';
+    // pulse the border only — the text stays at full strength
+    const pulse = banner.pulse ? 0.5 + 0.5 * Math.sin(now / 160) : 0;
+    c.fillStyle = 'rgba(12,9,7,0.86)';
     roundRect(c, bx, by, bw, bh, 12);
     c.fill();
-    c.strokeStyle = '#8A6A40'; c.lineWidth = 2; c.stroke();
+    c.strokeStyle = banner.pulse ? banner.color : '#8A6A40';
+    c.globalAlpha = banner.pulse ? 0.45 + 0.55 * pulse : 1;
+    c.lineWidth = banner.pulse ? 3 : 2; c.stroke();
+    c.globalAlpha = 1;
     const img = thumb(st.lastForged?.thumbUrl ?? undefined);
     const hasThumb = !!img && (st.scan.state === 'forging' || st.scan.state === 'detected' || !!st.incoming);
     const tx = hasThumb ? bx + 76 : bx;
@@ -139,9 +144,10 @@ function draw() {
   } else {
     // subtitles: latest Quartermaster line (22 px, ≤ 2 lines)
     const n = st.narration[st.narration.length - 1];
-    if (n && now - n.at < 5000) {
+    const cur = n ? subtitleAt(n.text, now - n.at, 44) : null;
+    if (n && cur) {
       c.font = `700 22px ${FONT}`;
-      const words = n.text.split(' ');
+      const words = cur.chunk.split(' ');
       const lines: string[] = [];
       let line = '';
       for (const wd of words) {

@@ -279,19 +279,32 @@ export function lacing(): THREE.BufferGeometry {
   return merge(parts);
 }
 /** Gilt circlet / diadem (head part). */
+/** Gilt laurel wreath (Antinous). Origin = skull centre at eye height: rides on the brow, higher at the back. */
 export function circlet(): THREE.BufferGeometry {
-  const band = new THREE.TorusGeometry(0.105, 0.012, 4, 22);
-  band.rotateX(Math.PI / 2 - 0.12);
-  band.translate(0, 0.075, 0.005);
-  const leaf: THREE.BufferGeometry[] = [];
-  for (let i = -3; i <= 3; i++) {
-    const l = new THREE.ConeGeometry(0.012, 0.04, 4);
-    const a = i * 0.32;
-    l.rotateX(-0.3);
-    l.translate(Math.sin(a) * 0.106, 0.1, Math.cos(a) * 0.106);
-    leaf.push(l);
+  const at = (th: number) => new THREE.Vector3(Math.sin(th) * 0.09, 0.052 + 0.03 * (1 - Math.cos(th)) / 2, Math.cos(th) * 0.106);
+  const pts: THREE.Vector3[] = [];
+  for (let i = 0; i < 28; i++) pts.push(at((i / 28) * Math.PI * 2));
+  const band = new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts, true), 56, 0.0035, 4, true);
+  const parts: THREE.BufferGeometry[] = [band];
+  // two branches meeting at the brow: pairs of leaves angled up and down off the band, pointing forward
+  const up = new THREE.Vector3(0, 1, 0);
+  for (const side of [-1, 1]) {
+    for (let k = 0; k < 9; k++) {
+      const th = side * (2.9 - k * 0.3);
+      const p = at(th), tan = at(th + side * -0.01).sub(p).normalize();
+      for (const tilt of [0.55, -0.35]) {
+        const leaf = new THREE.SphereGeometry(1, 6, 4);
+        leaf.scale(0.006, 0.0025, 0.017); // long axis along local z
+        const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), tan);
+        const out = p.clone().setY(0).normalize();
+        q.premultiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3().crossVectors(tan, up).normalize(), tilt));
+        leaf.applyQuaternion(q);
+        leaf.translate(p.x + out.x * 0.006, p.y + tilt * 0.012, p.z + out.z * 0.006);
+        parts.push(leaf);
+      }
+    }
   }
-  return merge([band, ...leaf]);
+  return merge(parts);
 }
 /** Brass embellishment bands for the wooers' linen (torso part): chest band, waist band, shoulder bosses. */
 export function brassTrim(): THREE.BufferGeometry {

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useApp, isCallLive } from '../state/store';
-import { endCall, ensureSession, requestCall, setupInput, startMatch } from '../game/runtime';
+import { endCall, ensureSession, reasonText, requestCall, setupInput, startMatch } from '../game/runtime';
+import { motionAvailable } from '../input';
 import { Btn, useMenuNav } from './components';
 import { CallChip } from './CallChip';
 import { FriendPip } from './FriendPip';
@@ -59,6 +60,10 @@ export function Lobby() {
             {friend ? <span className="muted small">{friend.name} · {friend.phoneMasked}</span> : <span className="muted small">No friend added</span>}
             {netMode === 'live' && mediaStatus === 'failed' && <span className="chip bad"><span className="dot" />Video relay offline</span>}
           </div>
+          {call.state === 'failed' && friend && (
+            <div className="small call-reason" role="status">{reasonText(call.reason)} · press <span className="kbd">C</span> to try again</div>
+          )}
+          {sessionErr && <div className="small call-reason" role="status">The server is unreachable — you can still fight alone.</div>}
           {friend ? (
             live ? (
               <Btn variant="danger" onClick={endCall}>End call</Btn>
@@ -87,15 +92,20 @@ export function Lobby() {
           <div className="field">
             <label>Controls</label>
             <div className="seg" role="group" aria-label="Controls">
-              <button aria-pressed={inputKind === 'motion'} onClick={() => void setupInput('motion')}>Body (webcam)</button>
+              <button aria-pressed={inputKind === 'motion'} disabled={!motionAvailable} title={motionAvailable ? undefined : 'Body tracking isn’t installed in this build'} onClick={() => void setupInput('motion')}>{motionAvailable ? 'Body (webcam)' : 'Body (webcam) · unavailable'}</button>
               <button aria-pressed={inputKind === 'keyboard_mouse'} onClick={() => void setupInput('keyboard_mouse')}>Keyboard &amp; mouse</button>
             </div>
           </div>
           <ul className="muted small" style={{ margin: 0, paddingLeft: 18, lineHeight: 1.7 }}>
             <li>Three waves of wooers, then Antinous behind a table-top shield.</li>
             <li>Pin wooers to the pillars with spears and arrows for slow-motion killcams.</li>
-            <li>When you’re pinned down, <b>make the phone sign</b> (or press <span className="kbd">C</span>).</li>
-            <li><b>Raise both arms</b> (or <span className="kbd">Q</span>) and Telemachus sends whatever he’s holding.</li>
+            {inputKind === 'keyboard_mouse' ? (<>
+              <li>When you’re pinned down, press <span className="kbd">C</span> to call {friend?.name ?? 'Telemachus'}.</li>
+              <li>Press <span className="kbd">Q</span> and {friend?.name ?? 'Telemachus'} sends whatever he’s holding.</li>
+            </>) : (<>
+              <li>When you’re pinned down, <b>make the phone sign</b> (or press <span className="kbd">C</span>).</li>
+              <li><b>Raise both arms</b> (or <span className="kbd">Q</span>) and Telemachus sends whatever he’s holding.</li>
+            </>)}
           </ul>
           <div className="spacer" />
           <Btn variant="primary" big autoFocus={live} onClick={start}>Start the fight</Btn>

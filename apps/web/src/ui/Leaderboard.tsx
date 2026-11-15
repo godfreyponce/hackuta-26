@@ -31,7 +31,8 @@ export function Leaderboard() {
         <Meander style={{ margin: '12px 0 8px' }} />
         {err && <div className="error" role="alert">Couldn’t reach the leaderboard. <Btn variant="link" onClick={() => setTick((t) => t + 1)}>Retry</Btn></div>}
         {!rows && !err && <p className="muted">Loading…</p>}
-        {rows && (
+        {rows && rows.length === 0 && <p className="lore" style={{ margin: '18px 0 6px' }}>No heroes yet — be the first to clear the hall.</p>}
+        {rows && rows.length > 0 && (
           <table>
             <thead><tr><th>#</th><th>Hero</th><th>Trickshots</th><th style={{ textAlign: 'right' }}>Score</th></tr></thead>
             <tbody>

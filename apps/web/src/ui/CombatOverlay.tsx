@@ -19,6 +19,7 @@ export function CombatOverlay() {
     const ctx = cv.getContext('2d')!;
     let raf = 0;
     const v = new THREE.Vector3();
+    const chest = new THREE.Vector3();
     const draw = () => {
       raf = requestAnimationFrame(draw);
       const e = runtime.engine;
@@ -77,13 +78,12 @@ export function CombatOverlay() {
             ctx.beginPath(); ctx.arc(s.x, s.y, 26 * k * pulse, 0, Math.PI * 2); ctx.fill();
             glyph(ctx, s.x, s.y, 14 * k, t.a.unblockable ? 'x' : 'star', t.a.unblockable ? RED : '#fff6e0');
           }
-        } else {
-          // off-screen attacker: chevron at the edge, brass → red near impact
-          const rel = v.copy(t.e.pos).sub(cam.position);
-          const ang = Math.atan2(rel.x, -rel.z) - o.yaw;
-          const ex = cx + Math.sin(ang) * (W / 2 - 40 * k), ey = cy - Math.cos(ang) * 0 + (H * 0.1);
+        } else if (!toScreen(chest.copy(t.e.pos).setY(t.e.pos.y + 1.3)).on) {
+          // attacker's BODY off-screen (not just a blade tip leaving frame): chevron pinned to that edge
+          const rel = chest.copy(t.e.pos).sub(cam.position);
+          const side = Math.sign(Math.sin(Math.atan2(rel.x, -rel.z) - o.yaw)) || 1;
           ctx.globalAlpha = 0.95;
-          chevron(ctx, Math.max(36 * k, Math.min(W - 36 * k, ex)), ey, 16 * k, Math.sign(Math.sin(ang)) || 1, toImpact < 0.6 ? RED : BRASS);
+          chevron(ctx, side > 0 ? W - 36 * k : 36 * k, cy + H * 0.1, 16 * k, side, toImpact < 0.6 ? RED : BRASS);
         }
       }
 
@@ -132,15 +132,27 @@ export function CombatOverlay() {
         ctx.fillRect(s.x - (w / 2) * f, s.y, w * f, h); // grows from the centre
         if (en.state === 'broken') {
           ctx.globalAlpha = 0.6 + 0.4 * Math.sin(performance.now() / 90);
-          ctx.font = `800 ${11 * k}px 'Montserrat Variable', sans-serif`;
+          ctx.font = `700 ${12 * k}px 'Cinzel', serif`;
           ctx.textAlign = 'center';
           ctx.fillStyle = BRASS_HI;
-          ctx.fillText('FINISH HIM', s.x, s.y - 8 * k);
+          ctx.fillText('STAGGERED — STRIKE', s.x, s.y - 8 * k);
         }
       }
 
       // ── counter window after a perfect dodge ──
       if (o.counter) {
+        // label + pulsing ring at the reticle: the window is readable, not just a tint
+        const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 70);
+        ctx.globalAlpha = 0.85;
+        ctx.font = `900 ${20 * k}px 'Cinzel', serif`;
+        ctx.textAlign = 'center';
+        ctx.lineWidth = 4 * k; ctx.strokeStyle = 'rgba(0,0,0,0.7)';
+        ctx.strokeText('COUNTER', cx, cy - 120 * k);
+        ctx.fillStyle = '#A9D8C2';
+        ctx.fillText('COUNTER', cx, cy - 120 * k);
+        ctx.globalAlpha = 0.5 + 0.4 * pulse;
+        ctx.strokeStyle = VERD; ctx.lineWidth = 3 * k;
+        ctx.beginPath(); ctx.arc(cx, cy, (96 + 10 * pulse) * k, 0, Math.PI * 2); ctx.stroke();
         ctx.globalAlpha = 0.18;
         const g = ctx.createRadialGradient(cx, cy, Math.min(W, H) * 0.35, cx, cy, Math.max(W, H) * 0.7);
         g.addColorStop(0, 'rgba(110,156,136,0)');

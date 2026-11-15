@@ -6,6 +6,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { P, RIG, setRig, type PartPose } from './humanoid';
+import { buildShellTemplate, paintShell, shellMaterial, type ShellLook, type ShellTemplate } from './armorShell';
 
 type Key = 'hips' | 'spine0' | 'spine1' | 'chest' | 'neck' | 'head'
   | 'uarmL' | 'larmL' | 'handL' | 'uarmR' | 'larmR' | 'handR'
@@ -78,6 +79,10 @@ export interface BodyTemplate {
   hipsRestQ: THREE.Quaternion;
   hipsY: number;
   spineRest: (THREE.Quaternion | null)[];
+  /** armour grown from the body (null if the model couldn't be analysed) */
+  shell: ShellTemplate | null;
+  /** skull centre at eye height, in the head bone's local space — helmets are fitted to this */
+  headAnchor: THREE.Vector3;
 }
 
 const _q = new THREE.Quaternion();
@@ -144,7 +149,22 @@ export async function loadBodyTemplate(url: string, height = 1.84, timeoutMs = 9
   RIG.torsoA = 0.04;
   setRig({ uarm: d(map.uarmL, map.larmL), larm: d(map.larmL, map.handL) + 0.08, uleg: d(map.thighL, map.calfL), lleg: d(map.calfL, map.footL) });
   const spineRest = [map.spine0, map.spine1].map((b) => (b ? b.getWorldQuaternion(new THREE.Quaternion()) : null));
-  return { scene: holder, scale: s, spineRest, rest, hipsRestQ: map.hips!.getWorldQuaternion(new THREE.Quaternion()), hipsY: hips.y };
+  // the body mesh = the skinned mesh reaching the floor (feet); the head mesh is separate on Rocketbox
+  const skinned: { m: THREE.SkinnedMesh; y: number }[] = [];
+  holder.traverse((o) => {
+    const m = o as THREE.SkinnedMesh;
+    if (m.isSkinnedMesh) skinned.push({ m, y: new THREE.Box3().setFromObject(m).min.y });
+  });
+  skinned.sort((a, b2) => a.y - b2.y);
+  let shell: ShellTemplate | null = null;
+  try { shell = skinned.length ? buildShellTemplate(skinned.map((x) => x.m), map) : null; } catch (err) { console.warn('[body] armour shell failed', err); }
+  // helmet anchor: between the eyes in height, skull centre in depth
+  const eyes: THREE.Vector3[] = [];
+  holder.traverse((o) => { if ((o as THREE.Bone).isBone && /(^|[_ ])[LR]_?Eye$|eye_?[lr]$|(left|right)eye$/i.test(o.name)) eyes.push(wp(o)); });
+  const eye = eyes.length ? eyes.reduce((a, b) => a.add(b), new THREE.Vector3()).multiplyScalar(1 / eyes.length) : head.clone().add(new THREE.Vector3(0, 0.1, 0.09));
+  const anchorW = new THREE.Vector3(head.x, eye.y, eye.z - 0.06);
+  const headAnchor = map.head!.worldToLocal(anchorW.clone());
+  return { scene: holder, scale: s, spineRest, rest, hipsRestQ: map.hips!.getWorldQuaternion(new THREE.Quaternion()), hipsY: hips.y, shell, headAnchor };
 }
 
 /** One warrior's skinned body. */
@@ -153,8 +173,11 @@ export class SkinnedBody {
   private map: BoneMap;
   private meshes: THREE.SkinnedMesh[] = [];
   private collapsed = new Set<Key>();
+  private shell: THREE.SkinnedMesh | null = null;
+  private shellMat: THREE.MeshStandardMaterial | null = null;
 
   get baseScale() { return this.tpl.scale; }
+  get hasShell() { return !!this.shell; }
 
   constructor(private tpl: BodyTemplate) {
     this.root = cloneSkinned(tpl.scene);
@@ -163,6 +186,50 @@ export class SkinnedBody {
       if (m.isSkinnedMesh) { m.frustumCulled = false; m.castShadow = false; this.meshes.push(m); }
     });
     this.map = mapBones(this.root);
+    const t = tpl.shell;
+    const src = t ? this.meshes.find((m) => m.name === t.source) : undefined;
+    if (t && src) {
+      // per-warrior geometry: shared vertex data, own index (which pieces) and own colours/finishes
+      const g = new THREE.BufferGeometry();
+      for (const k of ['position', 'normal', 'uv', 'skinIndex', 'skinWeight', 'aPat']) g.setAttribute(k, t.geometry.getAttribute(k));
+      const n = t.region.length;
+      g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(n * 3), 3));
+      g.setAttribute('aMRN', new THREE.BufferAttribute(new Float32Array(n * 4), 4));
+      g.setIndex(new THREE.BufferAttribute(new Uint32Array(0), 1));
+      this.shellMat = shellMaterial(t.normalMap);
+      const sm = new THREE.SkinnedMesh(g, this.shellMat);
+      sm.name = 'armour-shell';
+      sm.position.copy(src.position); sm.quaternion.copy(src.quaternion); sm.scale.copy(src.scale);
+      sm.bind(src.skeleton, src.bindMatrix);
+      sm.frustumCulled = false;
+      sm.castShadow = false;
+      src.parent!.add(sm);
+      this.shell = sm;
+      this.meshes.push(sm);
+    }
+  }
+
+  /** Dress this warrior: which shell pieces he wears and their finishes. */
+  setLook(look: ShellLook) {
+    const t = this.tpl.shell;
+    if (!t || !this.shell) return;
+    const g = this.shell.geometry;
+    const { index, dye } = paintShell(t, look, g.getAttribute('color') as THREE.BufferAttribute, g.getAttribute('aMRN') as THREE.BufferAttribute);
+    g.setIndex(new THREE.BufferAttribute(index, 1));
+    (this.shellMat!.userData.uDye as { value: THREE.Color }).value.copy(dye);
+    this.shell.visible = index.length > 0;
+  }
+
+  /** Hit flash on the armour (warm bloom, decays from the renderer's per-slot flash). */
+  setFlash(f: number) {
+    if (this.shellMat) this.shellMat.emissive.setRGB(f * 0.55, f * 0.32, f * 0.16);
+  }
+
+  /** Skull centre at eye height, world space (valid after apply()). */
+  headAnchor(out: THREE.Vector3): THREE.Vector3 | null {
+    const h = this.map.head;
+    if (!h || this.collapsed.has('head')) return null;
+    return out.copy(this.tpl.headAnchor).applyMatrix4(h.matrixWorld);
   }
 
   reset() {
@@ -172,7 +239,7 @@ export class SkinnedBody {
 
   /** Pose the bones from our part poses (world space). */
   apply(pose: PartPose[]) {
-    this.root.updateMatrixWorld(true);
+    this.root.updateWorldMatrix(true, false);
     const hips = this.map.hips!;
     const pel = pose[P.Pelvis];
     this.setWorld(hips, _v.copy(pel.c).setY(pel.c.y + (this.tpl.hipsY - RIG.pelvisY)), _q.copy(pel.q).multiply(this.tpl.hipsRestQ));
@@ -195,18 +262,22 @@ export class SkinnedBody {
       }
       this.setWorldRot(b, _q);
     }
-    for (const k of this.collapsed) { const b = this.map[k]; if (b) { b.scale.setScalar(0.001); b.updateMatrixWorld(true); } }
+    for (const k of this.collapsed) { const b = this.map[k]; if (b) b.scale.setScalar(0.001); }
   }
 
   private setWorld(b: THREE.Bone, pos: THREE.Vector3, q: THREE.Quaternion) {
+    b.parent!.updateWorldMatrix(true, false);
     _m.copy(b.parent!.matrixWorld).invert();
     b.position.copy(pos).applyMatrix4(_m);
     this.setWorldRot(b, q);
   }
+  // only the parent chain is refreshed per bone; the renderer's scene pass updates the rest once
   private setWorldRot(b: THREE.Bone, q: THREE.Quaternion) {
-    b.parent!.getWorldQuaternion(_q2);
+    b.parent!.updateWorldMatrix(true, false);
+    _q2.setFromRotationMatrix(_m.extractRotation(b.parent!.matrixWorld));
     b.quaternion.copy(_q2.invert().multiply(q));
-    b.updateMatrixWorld(true);
+    b.updateMatrix();
+    b.matrixWorld.multiplyMatrices(b.parent!.matrixWorld, b.matrix);
   }
 
   /**
@@ -224,7 +295,9 @@ export class SkinnedBody {
     const mats: THREE.Material[] = [];
     for (const mesh of this.meshes) {
       const g = mesh.geometry;
+      if (!mesh.visible || (g.index && g.index.count === 0)) continue;
       const pos = g.attributes.position, uv = g.attributes.uv, si = g.attributes.skinIndex, sw = g.attributes.skinWeight;
+      const extra = (['color', 'aMRN', 'aPat'] as const).map((k) => g.attributes[k] as THREE.BufferAttribute | undefined);
       const bones = mesh.skeleton.bones;
       const inSub = new Uint8Array(pos.count);
       for (let i = 0; i < pos.count; i++) {
@@ -242,6 +315,7 @@ export class SkinnedBody {
       if (!tri.length) continue;
       const p = new Float32Array(tri.length * 3);
       const u = new Float32Array(tri.length * 2);
+      const ex = extra.map((a) => (a ? new Float32Array(tri.length * a.itemSize) : null));
       const tmp = new THREE.Vector3();
       mesh.updateMatrixWorld(true);
       for (let i = 0; i < tri.length; i++) {
@@ -249,10 +323,12 @@ export class SkinnedBody {
         tmp.applyMatrix4(mesh.matrixWorld).applyMatrix4(inv);
         p.set([tmp.x, tmp.y, tmp.z], i * 3);
         if (uv) u.set([uv.getX(tri[i]), uv.getY(tri[i])], i * 2);
+        extra.forEach((a, k) => { const e = ex[k]; if (a && e) for (let j = 0; j < a.itemSize; j++) e[i * a.itemSize + j] = a.getComponent(tri[i], j); });
       }
       const ng = new THREE.BufferGeometry();
       ng.setAttribute('position', new THREE.BufferAttribute(p, 3));
       ng.setAttribute('uv', new THREE.BufferAttribute(u, 2));
+      extra.forEach((a, k) => { const e = ex[k]; if (a && e) ng.setAttribute(['color', 'aMRN', 'aPat'][k], new THREE.BufferAttribute(e, a.itemSize)); });
       ng.computeVertexNormals();
       geos.push(ng);
       mats.push(mesh.material as THREE.Material);

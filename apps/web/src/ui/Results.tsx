@@ -16,7 +16,12 @@ export function Results() {
   const player = useApp((s) => s.player);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const ref = useMenuNav<HTMLDivElement>(() => { runtime.engine?.backToMenu(); go('title'); });
+  const [leaveArmed, setLeaveArmed] = useState(false);
+  // Esc must not silently throw away an unsubmitted score: first press warns, second leaves
+  const ref = useMenuNav<HTMLDivElement>(() => {
+    if (!submitted && !leaveArmed) { setLeaveArmed(true); setErr('Press Esc again to leave without submitting your score.'); return; }
+    runtime.engine?.backToMenu(); go('title');
+  });
 
   if (!r) return null;
 
@@ -66,6 +71,7 @@ export function Results() {
               : <Btn variant="primary" autoFocus onClick={submit} disabled={busy}>{busy ? 'Submitting…' : 'Submit to leaderboard'}</Btn>}
             <Btn onClick={again}>Fight again</Btn>
             <Btn onClick={() => go('armory')}>The Armory</Btn>
+            <Btn onClick={() => go('leaderboard')}>Leaderboard</Btn>
             <Btn variant="link" onClick={title}>Title</Btn>
           </div>
           {err && <div className="error" role="alert">{err}</div>}

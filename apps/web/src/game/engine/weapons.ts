@@ -230,6 +230,7 @@ export class WeaponManager {
   private spearTimer = 0;
   t = 0;
   realT = 0;
+  private speedHist = new Map<number, { t: number; sp: number }[]>();
   private nockedArrow = { show: false, tail: new THREE.Vector3(), dir: new THREE.Vector3() };
   private eventQueue: InstanceType<typeof RAPIER.EventQueue>;
 
@@ -431,6 +432,22 @@ export class WeaponManager {
         const perp = _v3.copy(aimRay.origin).addScaledVector(aimRay.dir, along).distanceTo(gp);
         const tol = 0.12 + along * 0.05;
         if (perp < tol && perp / tol < bestRay / 0.2 + 1e-6) { best = w; bestRay = (perp / tol) * 0.2; }
+      }
+      // a dropped blade on the floor is usually below the view: take the nearest free weapon within 2.5 m
+      // whose bearing is within 35° of where you're pointing
+      if (!best) {
+        let bestScore = Infinity;
+        const fx = aimRay.dir.x, fz = aimRay.dir.z, fl = Math.hypot(fx, fz) || 1;
+        for (const w of this.list) {
+          if (w.state !== 'free' || w.cls === 'arrow') continue;
+          const gp = this.gripWorld(w, _v);
+          const dx = gp.x - aimRay.origin.x, dz = gp.z - aimRay.origin.z, dl = Math.hypot(dx, dz);
+          if (dl > 2.5 || dl < 1e-3) continue;
+          const cos = (dx * fx + dz * fz) / (dl * fl);
+          if (cos < Math.cos(THREE.MathUtils.degToRad(35))) continue;
+          const score = dl * (2 - cos);
+          if (score < bestScore) { bestScore = score; best = w; }
+        }
       }
       if (best) {
         const w = best;
@@ -718,8 +735,16 @@ export class WeaponManager {
       if (w.state === 'held') {
         const sp = w.prevTip.lengthSq() > 0 ? w.tip.distanceTo(w.prevTip) / Math.max(1e-3, realDt) : 0;
         w.speed = sp;
-        if (sp > 1.6 && w.cls !== 'bow') this.tryHit(w, a, b, sp, 'melee', w.tip.clone().sub(w.prevTip).normalize(), realDt);
-        else if (sp > 2.2 && w.cls === 'bow') this.tryHit(w, a, b, sp, 'melee', w.tip.clone().sub(w.prevTip).normalize(), realDt);
+        // contact uses the swing's peak tip speed over the last ~60 ms: the (inflated) hit capsule meets the
+        // smoothed blade early in the arc, before it is at full speed
+        const hist = this.speedHist.get(w.id) ?? [];
+        hist.push({ t: this.realT, sp });
+        while (hist.length && this.realT - hist[0].t > 0.06) hist.shift();
+        this.speedHist.set(w.id, hist);
+        const peak = hist.reduce((m, h) => Math.max(m, h.sp), sp);
+        // slow cuts are never silent: anything above a drift registers (≤1.5 m/s is a touch: tink, no damage)
+        if (sp > 0.8 && w.cls !== 'bow') this.tryHit(w, a, b, peak, 'melee', w.tip.clone().sub(w.prevTip).normalize(), realDt);
+        else if (sp > 2.2 && w.cls === 'bow') this.tryHit(w, a, b, peak, 'melee', w.tip.clone().sub(w.prevTip).normalize(), realDt);
       } else if (w.state === 'free') {
         const lv = w.body.linvel();
         const sp = Math.hypot(lv.x, lv.y, lv.z);

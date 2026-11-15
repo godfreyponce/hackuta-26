@@ -135,6 +135,36 @@ export function pushNarration(text: string, priority: number) {
 /** Subtitle display duration per accessibility guidance: max(1s, chars/17) + 0.3s, capped at 7s. */
 export const subtitleMs = (text: string) => Math.min(7000, Math.max(1000, (text.length / 17) * 1000) + 300);
 
+/** Split a narration line into subtitle chunks of ≤ `max` chars (2 lines), breaking at sentence, clause, then word. */
+export function subtitleChunks(text: string, max = 84): string[] {
+  const out: string[] = [];
+  let rest = text.trim();
+  while (rest.length > max) {
+    const head = rest.slice(0, max + 1);
+    const at = (...seps: string[]) => Math.max(...seps.map((s) => head.lastIndexOf(s)));
+    let cut = at('. ', '! ', '? ', '… ');
+    if (cut < max * 0.4) cut = at(', ', '; ', ': ', ' — ');
+    if (cut < max * 0.4) cut = head.lastIndexOf(' ');
+    if (cut <= 0) cut = max;
+    out.push(rest.slice(0, cut + 1).trim());
+    rest = rest.slice(cut + 1).trim();
+  }
+  if (rest) out.push(rest);
+  return out;
+}
+
+/** The chunk of a narration line on screen `elapsed` ms after it arrived, or null once it has run out. */
+export function subtitleAt(text: string, elapsed: number, max = 84): { chunk: string; index: number; endsIn: number } | null {
+  let t = 0;
+  const chunks = subtitleChunks(text, max);
+  for (let i = 0; i < chunks.length; i++) {
+    const d = subtitleMs(chunks[i]);
+    if (elapsed < t + d) return { chunk: chunks[i], index: i, endsIn: t + d - elapsed };
+    t += d;
+  }
+  return null;
+}
+
 export const setHud = (patch: Partial<Hud>) => useApp.setState((s) => ({ hud: { ...s.hud, ...patch } }));
 
 export const isCallLive = (s: CallState) => s === 'dialing' || s === 'ringing' || s === 'connected';

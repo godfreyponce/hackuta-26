@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { useApp, subtitleMs, isCallLive } from '../state/store';
+import { useApp, subtitleAt, isCallLive } from '../state/store';
 import { endCall, requestCall, requestWeapon, runtime, setMic, setupInput } from '../game/runtime';
-import { isKeyboardMouse } from '../input';
+import { isKeyboardMouse, motionAvailable } from '../input';
 import { Btn, ClassIcon, fmtTime, useMenuNav } from './components';
 import { CallChip } from './CallChip';
 import { FriendPip } from './FriendPip';
@@ -47,7 +47,7 @@ function ScoreBlock() {
   const time = useApp((s) => s.hud.matchTimeMs);
   return (
     <div className="tc">
-      <div className="hud-label" style={{ letterSpacing: '0.3em' }}>Wave {['I', 'II', 'III'][wave - 1] ?? '—'} · <span style={{ color: 'var(--dust)' }}>{title}</span></div>
+      <div className="hud-label wave-label">Wave {['I', 'II', 'III'][wave - 1] ?? '—'} · <span style={{ color: 'var(--dust)' }}>{title}</span></div>
       <div className="tally" aria-label={`${tally.killed} of ${tally.total} wooers slain`}>
         {Array.from({ length: tally.total }, (_, i) => <i key={i} className={i < tally.killed ? 'on' : ''} />)}
       </div>
@@ -148,15 +148,16 @@ function CallPanel() {
   const mic = useApp((s) => s.micEnabled);
   const netMode = useApp((s) => s.netMode);
   const friend = useApp((s) => s.friend);
+  const kb = useApp((s) => s.inputKind === 'keyboard_mouse');
   return (
     <div className="tr">
       <div className="callpanel">
-        <div className="row" style={{ justifyContent: 'space-between' }}>
-          <CallChip />
+        <div className="row" style={{ justifyContent: 'space-between', flexWrap: 'wrap', gap: 6 }}>
+          <CallChip compact />
           {call === 'connected' && <span className={`chip ${mic ? 'ok' : 'bad'}`} title="Push-to-talk (T)"><span className="dot" />{mic ? 'Mic' : 'Muted'}</span>}
         </div>
         {isCallLive(call) && <FriendPip />}
-        {!isCallLive(call) && friend && <div className="muted small">Make the phone sign or press <span className="kbd">C</span> to call {friend.name}.</div>}
+        {!isCallLive(call) && friend && <div className="muted small">{kb ? <>Press <span className="kbd">C</span> to call {friend.name}.</> : <>Make the phone sign (or <span className="kbd">C</span>) to call {friend.name}.</>}</div>}
         {!friend && <div className="muted small">No Telemachus set — fighting alone{netMode === 'mock' ? ' (mock)' : ''}.</div>}
       </div>
       <ForgeCard />
@@ -168,16 +169,18 @@ function Subtitles() {
   const narration = useApp((s) => s.narration);
   const [, force] = useState(0);
   const last = narration[narration.length - 1];
+  const cur = last ? subtitleAt(last.text, performance.now() - last.at) : null;
+  // re-render when this chunk runs out (next chunk, or hide)
   useEffect(() => {
-    if (!last) return;
-    const t = setTimeout(() => force((x) => x + 1), subtitleMs(last.text) + 50);
+    if (!cur) return;
+    const t = setTimeout(() => force((x) => x + 1), cur.endsIn + 30);
     return () => clearTimeout(t);
-  }, [last]);
-  if (!last || performance.now() - last.at > subtitleMs(last.text)) return null;
+  });
+  if (!last || !cur) return null;
   return (
-    <div className="subtitle" aria-live="polite" key={last.id}>
+    <div className="subtitle" aria-live="polite" key={`${last.id}:${cur.index}`}>
       <span className="who">Quartermaster</span>
-      {last.text}
+      {cur.chunk}
     </div>
   );
 }
@@ -191,10 +194,14 @@ function Prompts() {
   const kb = useApp((s) => s.inputKind === 'keyboard_mouse');
   const friend = useApp((s) => s.friend?.name ?? 'Telemachus');
   if (pinned && !isCallLive(call)) {
-    return <div className="prompt big">📞 Make the phone sign to call {friend} {kb && <span className="kbd">C</span>}</div>;
+    return kb
+      ? <div className="prompt big">Press <span className="kbd">C</span> to call {friend}</div>
+      : <div className="prompt big">Make the phone sign to call {friend}</div>;
   }
   if (call === 'connected' && (scan === 'idle' || scan === 'done')) {
-    return <div className="prompt">🙌 Raise both arms to ask {friend} for a weapon {kb && <span className="kbd">Q</span>}</div>;
+    return kb
+      ? <div className="prompt">Press <span className="kbd">Q</span> to ask {friend} for a weapon</div>
+      : <div className="prompt">Raise both arms to ask {friend} for a weapon</div>;
   }
   if (bow && kb) {
     return <div className="prompt">{draw > 0 ? `Drawing… ${Math.round(draw * 100)}%` : 'Bow ready — hold LMB or Space to draw'} <span className="kbd">B</span></div>;
@@ -202,7 +209,7 @@ function Prompts() {
   return null;
 }
 
-function Toasts() {
+export function Toasts() {
   const toasts = useApp((s) => s.toasts);
   return (
     <div className="toasts">
@@ -289,7 +296,7 @@ function PauseMenu({ onResume }: { onResume: () => void }) {
         <div className="field">
           <label>Controls (hot-swap)</label>
           <div className="seg">
-            <button aria-pressed={inputKind === 'motion'} onClick={() => void setupInput('motion')}>Body (webcam)</button>
+            <button aria-pressed={inputKind === 'motion'} disabled={!motionAvailable} title={motionAvailable ? undefined : 'Body tracking isn’t installed in this build'} onClick={() => void setupInput('motion')}>{motionAvailable ? 'Body (webcam)' : 'Body (webcam) · unavailable'}</button>
             <button aria-pressed={inputKind === 'keyboard_mouse'} onClick={() => void setupInput('keyboard_mouse')}>Keyboard &amp; mouse</button>
           </div>
         </div>
@@ -324,6 +331,7 @@ function PauseMenu({ onResume }: { onResume: () => void }) {
 export function Hud() {
   const paused = useApp((s) => s.paused);
   const kb = useApp((s) => s.inputKind === 'keyboard_mouse');
+  const cine = useApp((s) => s.hud.slowmo);
   const [hint, setHint] = useState(true);
 
   useEffect(() => {
@@ -337,14 +345,14 @@ export function Hud() {
       else if (e.code === 'KeyH') setHint((h) => !h);
     };
     window.addEventListener('keydown', onKey);
-    const t = setTimeout(() => setHint(false), 20000);
+    const t = setTimeout(() => setHint(false), 12000);
     return () => { window.removeEventListener('keydown', onKey); clearTimeout(t); };
   }, []);
 
   const resume = () => { useApp.setState({ paused: false }); runtime.engine?.setPaused(false); };
 
   return (
-    <div className="hud">
+    <div className={`hud ${cine ? 'cine' : ''}`}>
       <CombatOverlay />
       <HealthBlock />
       <ScoreBlock />

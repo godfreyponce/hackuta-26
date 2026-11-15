@@ -57,7 +57,7 @@ export function Btn(props: {
   autoFocus?: boolean; disabled?: boolean; hotkey?: string; title?: string; type?: 'button' | 'submit';
 }) {
   const ref = useRef<HTMLButtonElement>(null);
-  useEffect(() => { if (props.autoFocus) ref.current?.focus({ preventScroll: true }); }, [props.autoFocus]);
+  useEffect(() => { if (props.autoFocus) { ref.current?.focus({ preventScroll: true }); ref.current?.scrollIntoView({ block: 'nearest' }); } }, [props.autoFocus]);
   const cls = ['btn', props.variant && props.variant !== 'ghost' ? props.variant : '', props.big ? 'big' : ''].join(' ');
   return (
     <button
@@ -101,7 +101,7 @@ export function useMenuNav<T extends HTMLElement>(onBack?: () => void) {
     window.addEventListener('keydown', onKey);
     // initial focus
     const first = el.querySelector<HTMLElement>('[data-autofocus]') ?? el.querySelector<HTMLElement>(sel);
-    if (first && !el.contains(document.activeElement)) first.focus({ preventScroll: true });
+    if (first && !el.contains(document.activeElement)) { first.focus({ preventScroll: true }); first.scrollIntoView({ block: 'nearest' }); }
     return () => window.removeEventListener('keydown', onKey);
   }, [onBack]);
   return ref;

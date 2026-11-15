@@ -27,6 +27,8 @@ type MotionModule = {
 // Part C's package is optional at build time: the glob resolves to {} until packages/motion exists,
 // so the web app always builds and falls back to keyboard & mouse.
 const motionModules = import.meta.glob<MotionModule>('../../../../packages/motion/src/index.ts');
+/** False until Part C's package exists — the UI disables "Body (webcam)" rather than silently falling back. */
+export const motionAvailable = Object.keys(motionModules).length > 0;
 
 export async function loadMotionModule(): Promise<MotionModule | null> {
   const loader = Object.values(motionModules)[0];

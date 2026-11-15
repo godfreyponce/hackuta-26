@@ -1,5 +1,6 @@
 import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
-import { Canvas, useFrame } from '@react-three/fiber';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import type { WeaponClass } from '@ithaca/shared';
@@ -41,7 +42,21 @@ function Model({ url, cls, speed }: { url: string; cls: WeaponClass; speed: numb
     return () => { alive = false; };
   }, [url, cls]);
   useFrame((_, dt) => { if (spin.current) spin.current.rotation.y += dt * speed; });
-  return <group ref={spin}>{obj && <primitive object={obj} />}</group>;
+  // start three-quarter on (35°), not edge-on
+  return <group ref={spin} rotation={[0, 0.61, 0]}>{obj && <primitive object={obj} />}</group>;
+}
+
+/** Soft studio reflections so bronze/steel read as metal instead of black. */
+function Env() {
+  const { gl, scene } = useThree();
+  useEffect(() => {
+    const pm = new THREE.PMREMGenerator(gl);
+    const tex = pm.fromScene(new RoomEnvironment(), 0.04).texture;
+    scene.environment = tex;
+    scene.environmentIntensity = 0.55;
+    return () => { scene.environment = null; tex.dispose(); pm.dispose(); };
+  }, [gl, scene]);
+  return null;
 }
 
 /** Small turntable for a forged weapon (forge overlay + armory display case). */
@@ -53,7 +68,9 @@ export function Turntable({ url, cls, speed = 1.1 }: { url: string; cls: WeaponC
       <ambientLight intensity={1.4} color="#b8c8dc" />
       <spotLight position={[0.6, 2.4, 2.2]} angle={0.6} penumbra={0.6} intensity={40} color="#ffe2b0" />
       <pointLight position={[1.6, 1.8, 2]} intensity={28} color="#ffb060" />
+      <Env />
       <directionalLight position={[0, 3, 2]} intensity={1.6} color="#ffe2b0" />
+      <directionalLight position={[-1.6, 1.2, 3]} intensity={2.4} color="#fff1dc" />
       <pointLight position={[-2, 0.5, -1.5]} intensity={6} color="#5d7aa0" />
       <hemisphereLight args={['#3a2a1a', '#0a0806', 0.6]} />
       <Suspense fallback={null}>

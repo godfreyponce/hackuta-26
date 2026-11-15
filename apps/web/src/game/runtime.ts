@@ -198,7 +198,7 @@ function onServer(m: ServerToWeb) {
   }
 }
 
-function reasonText(r?: string) {
+export function reasonText(r?: string) {
   switch (r) {
     case 'agent_offline': return 'The Quartermaster is offline — try again shortly';
     case 'line_busy': return 'The line is busy';

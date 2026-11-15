@@ -96,6 +96,7 @@ export class Engine {
   private lastPerfectDodge = -9;
   private counterUntil = 0;
   private kickPitch = 0;
+  private lookDown = 0;
   private kickVel = 0;
   private recoilOff: Record<Hand, THREE.Vector3> = { left: new THREE.Vector3(), right: new THREE.Vector3() };
   private dampUntil: Record<Hand, number> = { left: 0, right: 0 };
@@ -431,7 +432,7 @@ export class Engine {
     const now = this.simT;
     const multi = w ? w.throwKills.filter((t) => now - t < 1.5).length + (w.state === 'free' ? 1 : 0) : 0;
     const res = this.scoring.onKill({
-      t: now, realT: this.realT, zone: how.decapitated ? 'head' : info.zone, distance: Math.hypot(e.pose[P.Torso].c.x - this.eye.x, e.pose[P.Torso].c.z - this.eye.z),
+      t: now, realT: this.realT, zone: how.decapitated ? 'head' : info.source === 'melee' && info.zone === 'head' ? 'torso' : info.zone, /* HEADSHOT: thrown & loosed shots only */ distance: Math.hypot(e.pose[P.Torso].c.x - this.eye.x, e.pose[P.Torso].c.z - this.eye.z),
       airborne: !!(info as HitInfo & { airborne?: boolean }).airborne,
       ricochet: !!w && w.state === 'free' && w.staticHits >= 1,
       multiCount: info.source === 'bomb' ? 0 : multi,
@@ -691,7 +692,10 @@ export class Engine {
       const sh = this.trauma * this.trauma * this.shakeScale;
       const maxRot = THREE.MathUtils.degToRad(2);
       const t = this.realT;
-      const pitch = -0.1 + Math.sin(t * 0.7 * Math.PI * 2) * sway * 0.6 + (Math.sin(t * 37) * 0.5 + Math.sin(t * 23) * 0.5) * maxRot * sh;
+      // keyboard/mouse: pushing the cursor to the bottom edge tilts the view down (legs, dropped blades)
+      const cy = isKeyboardMouse(this.input) ? this.input.cursor.y : 0;
+      this.lookDown = damp(this.lookDown, cy < -0.55 ? Math.min(1, (-0.55 - cy) / 0.4) * 0.42 : 0, 5, realDt);
+      const pitch = -0.1 - this.lookDown + Math.sin(t * 0.7 * Math.PI * 2) * sway * 0.6 + (Math.sin(t * 37) * 0.5 + Math.sin(t * 23) * 0.5) * maxRot * sh;
       const yaw = this.yaw + Math.sin(t * 0.43 * Math.PI * 2) * sway + Math.sin(t * 31 + 1) * maxRot * sh;
       const roll = Math.sin(t * 29 + 2) * maxRot * 0.5 * sh;
       // camera kick: 60 ms out, ~180 ms back (critically damped spring)
@@ -703,7 +707,7 @@ export class Engine {
     }
     this.trauma = Math.max(0, this.trauma - realDt * 1.5);
     if (Math.abs(cam.fov - this.fov) > 0.01) { cam.fov = this.fov; cam.updateProjectionMatrix(); }
-    if (isKeyboardMouse(this.input)) this.input.setCamera({ fovY: THREE.MathUtils.degToRad(cam.fov), aspect: cam.aspect, pitch: -0.1 });
+    if (isKeyboardMouse(this.input)) this.input.setCamera({ fovY: THREE.MathUtils.degToRad(cam.fov), aspect: cam.aspect, pitch: -0.1 - this.lookDown });
   }
 
   private updatePost(realDt: number) {
