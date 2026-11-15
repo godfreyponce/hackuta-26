@@ -176,7 +176,7 @@ export const GUIDE_STEPS: StepDef[] = [
         hint: (c) =>
           c.flags?.nocked
             ? `draw ${fmt(c.state.bowDraw * 100, 0)}% · needs > ${fmt(config.bowMinDraw * 100, 0)}% before you open`
-            : 'Arrow dropped. Fist back on your left wrist to nock again',
+            : 'Arrow dropped: your left arm bent or dropped. Straighten it, then fist back on your left wrist to nock again',
       },
     ],
   },
@@ -265,6 +265,8 @@ export class GestureGuide {
   private elapsedMs = 0;
   private lastTick = -1;
   private nearMiss = '';
+  /** Last near miss in this step; survives the restart so the FAIL says what happened. */
+  private lastNearMiss = '';
   private flash: { kind: 'pass' | 'fail'; until: number } | null = null;
   private paused = false;
   private unsub: (() => void) | null = null;
@@ -345,7 +347,7 @@ export class GestureGuide {
       return;
     }
     if (this.elapsedMs >= STEP_TIMEOUT_MS) {
-      const hint = this.nearMiss || this.liveHint(state) || 'Not detected';
+      const hint = this.nearMiss || (this.lastNearMiss && `Last try: ${this.lastNearMiss}`) || this.liveHint(state) || 'Not detected';
       this.finishStep(false, `${st?.say ?? ''}: not detected. ${hint}`, now);
     }
   }
@@ -368,7 +370,7 @@ export class GestureGuide {
                 ? (this.details[this.index] ?? '')
                 : this.paused
                   ? "I can't see you. Step back into the frame"
-                  : this.nearMiss || this.liveHint(state) || '',
+                  : this.nearMiss || [this.lastNearMiss && `Last try: ${this.lastNearMiss}`, this.liveHint(state)].filter(Boolean).join(' · '),
               stage: this.stage + 1,
               stages: def.stages.length,
               remainingMs: Math.max(0, STEP_TIMEOUT_MS - this.elapsedMs),
@@ -407,6 +409,7 @@ export class GestureGuide {
     this.elapsedMs = 0;
     this.lastTick = -1;
     this.nearMiss = '';
+    this.lastNearMiss = '';
     this.flash = null;
     this.status[i] = 'active';
     this.details[i] = '';
@@ -420,6 +423,7 @@ export class GestureGuide {
     if (r.ok) this.passStage(r.detail);
     else {
       this.nearMiss = r.hint;
+      this.lastNearMiss = r.hint;
       if (r.restart) this.stage = 0;
     }
   }

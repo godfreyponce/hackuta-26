@@ -45,6 +45,8 @@ export class Body {
   readonly elbow = perHand(() => v3());
   readonly wrist = perHand(() => v3());
   readonly wristVis = perHand(() => 0);
+  /** Pose-wrist speed in the image plane, converted to game m/s (smoothed). Sees throws the depth axis misses. */
+  readonly wristImgSpeed = perHand(() => 0);
   /** Hand landmarks assigned to each side this frame (kept from the last run when hands were skipped). */
   readonly hand = perHand<RawHand | null>(() => null);
   /** True if the hand model ran this frame and found this hand. */
@@ -77,6 +79,8 @@ export class Mapper {
   private readonly velFilter = perHand(() => new OneEuro3(5, 0));
   private readonly prevTarget = perHand(() => v3());
   private readonly wasVisible = perHand(() => false);
+  private readonly prevWristImg = perHand(() => v2());
+  private readonly hasPrevWrist = perHand(() => false);
   private readonly bodyLean = { lean: 0, crouch: 0, yaw: 0 };
   private autoNeutral: { x: number; y: number; swImg: number; n: number } = { x: 0, y: 0, swImg: 0, n: 0 };
 
@@ -86,6 +90,8 @@ export class Mapper {
       this.posFilter[h].reset();
       this.velFilter[h].reset();
       this.wasVisible[h] = false;
+      this.hasPrevWrist[h] = false;
+      this.body.wristImgSpeed[h] = 0;
       this.body.hand[h] = null;
     }
     this.autoNeutral = { x: 0, y: 0, swImg: 0, n: 0 };
@@ -114,6 +120,8 @@ export class Mapper {
     if (!poseImage || !poseWorld || poseImage.length < 33 || poseWorld.length < 33) {
       b.ok = false;
       for (const h of HANDS) {
+        this.hasPrevWrist[h] = false;
+        b.wristImgSpeed[h] = 0;
         b.handFresh[h] = false;
         this.loseHand(h, state);
       }
@@ -152,6 +160,16 @@ export class Mapper {
       toGame(b.elbow[h], w[ix.elbow]);
       toGame(b.wrist[h], w[ix.wrist]);
       b.wristVis[h] = poseImage[ix.wrist]?.visibility ?? 0;
+      const wi = img[ix.wrist] as Vec2, pw = this.prevWristImg[h];
+      if (this.hasPrevWrist[h] && b.wristVis[h] >= config.wristMinVisibility) {
+        const sp = (dist2(wi, pw) / b.dt) * b.mPerImg * s;
+        b.wristImgSpeed[h] += (sp - b.wristImgSpeed[h]) * 0.5;
+      } else {
+        b.wristImgSpeed[h] = 0;
+      }
+      pw.x = wi.x;
+      pw.y = wi.y;
+      this.hasPrevWrist[h] = b.wristVis[h] >= config.wristMinVisibility;
       const ws = w[ix.shoulder] ?? ZERO, we = w[ix.elbow] ?? ZERO, ww = w[ix.wrist] ?? ZERO;
       b.armLenWorld[h] =
         Math.hypot(ws.x - we.x, ws.y - we.y, ws.z - we.z) + Math.hypot(we.x - ww.x, we.y - ww.y, we.z - ww.z);

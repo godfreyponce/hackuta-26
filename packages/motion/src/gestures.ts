@@ -74,6 +74,8 @@ export class Gestures {
   private blockBrokenSince = -1;
   private nocked = false;
   private bowLostSince = -1;
+  private bowOpenFrames = 0;
+  private bowDraw = 0;
   /** Last frame's diagnostics for the lab. */
   readonly debug = {
     callShape: { left: false, right: false } as Record<Hand, boolean>,
@@ -82,6 +84,8 @@ export class Gestures {
     blockPose: false,
     leftArmExtended: false,
     nocked: false,
+    /** Why the last nocked arrow was dropped (lab/guide feedback). */
+    bowDropReason: '',
   };
 
   reset(): void {
@@ -96,6 +100,8 @@ export class Gestures {
     this.blockSince = this.blockBrokenSince = -1;
     this.nocked = false;
     this.bowLostSince = -1;
+    this.bowOpenFrames = 0;
+    this.bowDraw = 0;
   }
 
   update(body: Body, grip: GripTracker, state: PlayerInputState, emit: Emit): void {
@@ -203,27 +209,40 @@ export class Gestures {
         if (body.meters(rp, body.img[POSE_IDX.left.wrist] as Vec2) < config.bowNockDist) {
           this.nocked = true;
           this.bowLostSince = -1;
+          this.bowOpenFrames = 0;
+          this.bowDraw = 0;
+          this.debug.bowDropReason = '';
           emit({ type: 'bow_nock' });
         }
       }
     } else {
-      const draw = clamp(dist3(R.pos, L.pos) / config.gameArmReach, 0, 1);
+      // Keep drawing while the pose still tracks the right wrist; hold the last draw through blips.
+      if (body.ok && R.visible) this.bowDraw = clamp(dist3(R.pos, L.pos) / config.gameArmReach, 0, 1);
+      const draw = this.bowDraw;
       state.bowDraw = draw;
-      if (!grip.isGripping('right')) {
+
+      // Loose only on a real open: the hand model sees the right hand open for N frames.
+      // Ignored until the draw is meaningful — a sideways hand by the face misreads as "open".
+      const seenOpen = body.ok && !!body.hand.right && body.handFresh.right && R.grip < config.bowReleaseGrip;
+      this.bowOpenFrames = seenOpen ? this.bowOpenFrames + 1 : 0;
+      if (this.bowOpenFrames >= Math.max(1, Math.round(config.bowReleaseFrames)) && draw > Math.max(config.bowMinDraw, config.bowLooseMinDraw)) {
         this.nocked = false;
         state.bowDraw = 0;
-        if (draw > config.bowMinDraw) {
-          const aim = normalize3(sub3(v3(), L.pos, body.shoulder.right));
-          emit({ type: 'bow_release', draw, aim });
-        }
-      } else if (!extended) {
-        if (this.bowLostSince < 0) this.bowLostSince = t;
-        if (t - this.bowLostSince > config.bowCancelMs) {
-          this.nocked = false;
-          state.bowDraw = 0;
-        }
+        const aim = normalize3(sub3(v3(), L.pos, body.shoulder.right));
+        emit({ type: 'bow_release', draw, aim });
       } else {
-        this.bowLostSince = -1;
+        // The left arm may soften while pulling; only a clearly bent/dropped arm cancels.
+        const holding =
+          body.ok && L.visible && body.elbowAngle.left > config.bowHoldElbowAngle && L.pos.z < config.bowHoldWristForwardZ;
+        if (holding) this.bowLostSince = -1;
+        else {
+          if (this.bowLostSince < 0) this.bowLostSince = t;
+          if (t - this.bowLostSince > config.bowCancelMs) {
+            this.nocked = false;
+            state.bowDraw = 0;
+            this.debug.bowDropReason = 'left arm bent or dropped';
+          }
+        }
       }
     }
     this.debug.nocked = this.nocked;

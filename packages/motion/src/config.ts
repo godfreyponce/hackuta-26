@@ -44,6 +44,10 @@ export const DEFAULT_CONFIG = {
   releaseWindowMs: 80,
   /** … ending this long before the release fired (compensates grip-filter lag). */
   releaseLagMs: 0,
+  /** Look this far back before a release for the throw's peak speed. */
+  releasePeakWindowMs: 300,
+  /** Hard cap on the look-back when it is extended over a hand-lost (motion blur) stretch. */
+  releaseMaxLookbackMs: 700,
 
   // ── call_sign / request_weapon (C.5) ──
   /** Palm center within this of an ear (m). */
@@ -77,7 +81,16 @@ export const DEFAULT_CONFIG = {
   bowNockDist: 0.15,
   bowMinDraw: 0.2,
   /** Left arm may drop this long before a nocked arrow is cancelled. */
-  bowCancelMs: 400,
+  bowCancelMs: 700,
+  /** Once nocked, the left elbow only has to stay above this (the arm softens while pulling). */
+  bowHoldElbowAngle: 125,
+  /** Left wrist must stay at least this far forward while nocked (a hanging arm is straight too). */
+  bowHoldWristForwardZ: -0.3,
+  /** Right hand must read below this grip, seen by the hand model for bowReleaseFrames, to loose the arrow. */
+  bowReleaseGrip: 0.25,
+  bowReleaseFrames: 3,
+  /** Opens below this draw are treated as tracking noise (sideways hand near the face): arrow stays nocked. */
+  bowLooseMinDraw: 0.3,
 
   // ── calibration (C.6) ──
   /** Wall-clock safety net for the whole calibration (frames stopped arriving). */
@@ -136,6 +149,8 @@ export const CONFIG_RANGES: Record<string, Partial<Record<keyof MotionConfig, [n
     gripHoldMs: [0, 1000, 50],
     releaseWindowMs: [16, 250, 4],
     releaseLagMs: [0, 150, 4],
+    releasePeakWindowMs: [40, 500, 10],
+    releaseMaxLookbackMs: [100, 1500, 50],
   },
   'Call sign / request weapon': {
     callEarDist: [0.04, 0.3, 0.01],
@@ -163,6 +178,11 @@ export const CONFIG_RANGES: Record<string, Partial<Record<keyof MotionConfig, [n
     bowWristForwardZ: [-0.8, -0.1, 0.01],
     bowNockDist: [0.05, 0.4, 0.01],
     bowMinDraw: [0, 0.8, 0.01],
-    bowCancelMs: [0, 1500, 50],
+    bowCancelMs: [0, 2000, 50],
+    bowHoldElbowAngle: [90, 170, 1],
+    bowHoldWristForwardZ: [-0.8, 0, 0.01],
+    bowReleaseGrip: [0.05, 0.6, 0.01],
+    bowReleaseFrames: [1, 8, 1],
+    bowLooseMinDraw: [0, 0.8, 0.01],
   },
 };

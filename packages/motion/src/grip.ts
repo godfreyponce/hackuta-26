@@ -35,7 +35,8 @@ export function curlInput(lm: { world: RawLandmark[] | null; image: RawLandmark[
   return lm.world ?? lm.image;
 }
 
-interface VelSample { t: number; x: number; y: number; z: number }
+/** v = filtered 3D hand velocity; s = max(|v|, image-plane wrist speed). */
+interface VelSample { t: number; x: number; y: number; z: number; s: number }
 
 class HandGrip {
   readonly filter = new OneEuro(4, 0);
@@ -44,30 +45,52 @@ class HandGrip {
   below = 0;
   lostSince = -1;
   /** Ring buffer of recent velocities for release.vel. */
-  readonly hist: VelSample[] = Array.from({ length: 32 }, () => ({ t: -1e9, x: 0, y: 0, z: 0 }));
+  readonly hist: VelSample[] = Array.from({ length: 64 }, () => ({ t: -1e9, x: 0, y: 0, z: 0, s: 0 }));
   head = 0;
+  /** Last stretch where the hand model lost this hand (motion blur during a throw). */
+  lastLostFrom = -1;
+  lastLostTo = -1;
 
-  push(t: number, v: Vec3): void {
+  push(t: number, v: Vec3, imgSpeed: number): void {
     const s = this.hist[this.head] as VelSample;
     s.t = t; s.x = v.x; s.y = v.y; s.z = v.z;
+    s.s = Math.max(Math.hypot(v.x, v.y, v.z), imgSpeed);
     this.head = (this.head + 1) % this.hist.length;
   }
 
-  /** Mean velocity over [now − lag − window, now − lag]. Falls back to the newest sample. */
-  releaseVel(now: number): Vec3 {
+  /**
+   * Throw velocity. The open hand is usually detected after the arm has already stopped (grip
+   * filter + hysteresis lag, and the hand landmarker loses a fast-moving hand to motion blur), so
+   * the last 80 ms are near zero. Instead: find the PEAK speed in the last releasePeakWindowMs —
+   * extended back over a recent hand-lost stretch — and average releaseWindowMs around that peak.
+   * Speed also counts image-plane wrist motion, so a throw the depth axis under-reads still registers;
+   * the direction comes from the 3D velocity (or the forearm if that is ~0).
+   */
+  releaseVel(now: number, forward: Vec3): Vec3 {
     const hi = now - config.releaseLagMs;
-    const lo = hi - config.releaseWindowMs;
-    let n = 0, x = 0, y = 0, z = 0;
-    for (const s of this.hist) {
-      if (s.t >= lo && s.t <= hi) {
-        n++; x += s.x; y += s.y; z += s.z;
-      }
+    let lo = hi - config.releasePeakWindowMs;
+    if (this.lastLostTo >= 0 && now - this.lastLostTo < config.releasePeakWindowMs) {
+      lo = Math.max(Math.min(lo, this.lastLostFrom - 50), hi - config.releaseMaxLookbackMs);
     }
-    if (!n) {
+    let peak: VelSample | null = null;
+    for (const s of this.hist) if (s.t >= lo && s.t <= hi && (!peak || s.s > peak.s)) peak = s;
+    if (!peak) {
       const last = this.hist[(this.head + this.hist.length - 1) % this.hist.length] as VelSample;
       return { x: last.x, y: last.y, z: last.z };
     }
-    return { x: x / n, y: y / n, z: z / n };
+    const half = config.releaseWindowMs / 2;
+    let n = 0, x = 0, y = 0, z = 0, sp = 0;
+    for (const s of this.hist) {
+      if (s.t >= lo && s.t <= hi && Math.abs(s.t - peak.t) <= half) {
+        n++; x += s.x; y += s.y; z += s.z; sp += s.s;
+      }
+    }
+    x /= n; y /= n; z /= n; sp /= n;
+    const m = Math.hypot(x, y, z);
+    const mag = Math.max(m, sp);
+    if (m > 0.3) return { x: (x / m) * mag, y: (y / m) * mag, z: (z / m) * mag };
+    const fl = Math.hypot(forward.x, forward.y, forward.z) || 1;
+    return { x: (forward.x / fl) * mag, y: (forward.y / fl) * mag, z: (forward.z / fl) * mag };
   }
 }
 
@@ -80,7 +103,7 @@ export class GripTracker {
       g.filter.reset();
       g.gripping = false;
       g.above = g.below = 0;
-      g.lostSince = -1;
+      g.lostSince = g.lastLostFrom = g.lastLostTo = -1;
       for (const s of g.hist) s.t = -1e9;
     }
   }
@@ -103,7 +126,7 @@ export class GripTracker {
     for (const h of HANDS) {
       const g = this.hand[h];
       const hs = state.hands[h];
-      if (hs.visible) g.push(t, hs.vel);
+      if (hs.visible) g.push(t, hs.vel, body.wristImgSpeed[h]);
       if (handsSkipped) continue;
 
       const hd = body.hand[h];
@@ -114,6 +137,10 @@ export class GripTracker {
         if (g.gripping && t - g.lostSince > config.gripHoldMs) hs.grip = 1;
         g.above = g.below = 0;
         continue;
+      }
+      if (g.lostSince >= 0) {
+        g.lastLostFrom = g.lostSince;
+        g.lastLostTo = t;
       }
       g.lostSince = -1;
 
@@ -141,7 +168,7 @@ export class GripTracker {
         if (g.below >= frames) {
           g.gripping = false;
           g.below = 0;
-          emit({ type: 'release', hand: h, vel: g.releaseVel(t) });
+          emit({ type: 'release', hand: h, vel: g.releaseVel(t, hs.forward) });
         }
       }
     }
