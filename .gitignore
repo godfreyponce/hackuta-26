@@ -1,4 +1,4 @@
-
+event/
 # ithaca
 node_modules/
 .env
@@ -17,4 +17,3 @@ coverage/
 # recordings & generated temp assets
 /tmp/
 *.webm
-event/
