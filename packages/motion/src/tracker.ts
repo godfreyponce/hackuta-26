@@ -106,6 +106,8 @@ export class Tracker {
   private lastTs = 0;
   private lastVideoTime = -1;
   private frameNo = 0;
+  private watchdog = 0;
+  private lastTickAt = 0;
   private fpsCount = 0;
   private fpsWindowStart = 0;
   private slowWindows = 0;
@@ -137,12 +139,30 @@ export class Tracker {
       throw new Error(msg);
     }
     this.running = true;
-    this.startedAt = this.fpsWindowStart = performance.now();
+    this.startedAt = this.fpsWindowStart = this.lastTickAt = performance.now();
     this.schedule();
+    // Keep-alive, independent of the video's frame callbacks: the browser PAUSES a <video> that is removed from or
+    // moved around the page (e.g. a calibration screen that showed it and handed it back), and a paused video sends
+    // no frame callbacks — the loop would stop and the player freeze on his last pose. Resume it and re-arm the loop.
+    window.clearInterval(this.watchdog);
+    this.watchdog = window.setInterval(() => this.keepAlive(), 500);
+  }
+
+  private keepAlive(): void {
+    if (!this.running) return;
+    const v = this.video;
+    if (v.paused && v.srcObject) void v.play().catch(() => {});
+    if (!v.paused && performance.now() - this.lastTickAt > 1000) {
+      if (this.usingRvfc) this.video.cancelVideoFrameCallback(this.loopHandle);
+      else cancelAnimationFrame(this.loopHandle);
+      this.lastTickAt = performance.now();
+      this.schedule();
+    }
   }
 
   stop(): void {
     this.running = false;
+    window.clearInterval(this.watchdog);
     if (this.usingRvfc) this.video.cancelVideoFrameCallback(this.loopHandle);
     else cancelAnimationFrame(this.loopHandle);
     this.stream?.getTracks().forEach((t) => t.stop());
@@ -278,6 +298,7 @@ export class Tracker {
 
   private readonly tick = (): void => {
     if (!this.running) return;
+    this.lastTickAt = performance.now();
     try {
       this.process();
     } catch (err) {
@@ -288,6 +309,8 @@ export class Tracker {
 
   private process(): void {
     const v = this.video;
+    // the browser pauses a <video> that is removed from (or moved around) the page — e.g. a calibration screen
+    // that showed it and handed it back. A paused camera means no new frames and a frozen player: resume it.
     if (!this.pose || v.readyState < 2 || v.currentTime === this.lastVideoTime) return;
     this.lastVideoTime = v.currentTime;
 

@@ -113,7 +113,11 @@ export function Calibration() {
     return () => {
       off?.(); cancelAnimationFrame(raf); window.clearInterval(poll);
       const v = video as HTMLVideoElement | null;
-      if (v && host?.contains(v)) host.removeChild(v);
+      if (v && host?.contains(v)) {
+        host.removeChild(v);
+        // removing a <video> from the page pauses it: the tracker would freeze on its last frame — keep it running
+        void v.play().catch(() => {});
+      }
     };
   }, [motion, inputKind]);
 
