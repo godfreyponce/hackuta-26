@@ -116,7 +116,8 @@ export class VideoRelay {
   /** Shows text as a caption until the next call; null clears it. */
   setCaption(text: string | null): void {
     this.captionText = text;
-    if (text === null) { this.caption = null; return; }
+    this.caption = null; // a line that fails to render must not keep the old caption up
+    if (text === null) return;
     void renderCaption(text).then(
       (c) => { if (this.captionText === text) this.caption = c; },
       (e) => warn('caption_render_failed', { error: errText(e) }),

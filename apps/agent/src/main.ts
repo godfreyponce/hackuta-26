@@ -14,9 +14,21 @@ import { recoverLeftovers } from './recovery.ts';
 let active: CallSession | null = null;
 const attempts = new Map<string, number>();
 const BOOT_ID = randomBytes(3).toString('hex');
+/**
+ * A call.end can pass the server's call.start (the server checks Mongo first). We already told the web "ended", so a
+ * call.start that follows soon after must not dial. 5 s is a guess, far above two Mongo round trips.
+ */
+const LATE_START_MS = 5_000;
+const endedEarly = new Map<string, number>();
 
 const hub = new Hub((m: ServerToAgent) => {
   if (m.type === 'call.start') {
+    const endedAt = endedEarly.get(m.sessionId);
+    endedEarly.delete(m.sessionId);
+    if (endedAt !== undefined && Date.now() - endedAt < LATE_START_MS) {
+      hub.send({ type: 'call.status', sessionId: m.sessionId, state: 'ended', reason: 'no_active_call' });
+      return;
+    }
     if (active || !greetingReady()) {
       hub.send({ type: 'call.status', sessionId: m.sessionId, state: 'failed', reason: active ? 'line_busy' : 'tts_not_ready' });
       return;
@@ -30,7 +42,10 @@ const hub = new Hub((m: ServerToAgent) => {
   }
   if (active && active.sid === m.sessionId) active.handle(m);
   else if (m.type === 'scan.request') hub.send({ type: 'scan.status', sessionId: m.sessionId, state: 'failed', reason: 'not_connected' });
-  else if (m.type === 'call.end') hub.send({ type: 'call.status', sessionId: m.sessionId, state: 'ended', reason: 'no_active_call' });
+  else if (m.type === 'call.end') {
+    endedEarly.set(m.sessionId, Date.now());
+    hub.send({ type: 'call.status', sessionId: m.sessionId, state: 'ended', reason: 'no_active_call' });
+  }
 });
 
 function startHealthServer(): void {

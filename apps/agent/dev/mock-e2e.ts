@@ -369,6 +369,11 @@ check('/health shows greetingReady (integration #8)', health.greetingReady === t
   const g = await openGame();
   g.send('call.end');
   check('call.end with no call gets ended no_active_call (integration #7)', await waitFor(() => g.msgs.some((m) => m.type === 'call.status' && m.state === 'ended' && m.reason === 'no_active_call'), 3_000));
+  g.msgs.length = 0;
+  g.send('call.request', { friendId: 'friend-1' }); // the server's call.start arriving after the web's call.end
+  await sleep(2_000);
+  const after = await (await fetch(`${AGENT}/health`)).json() as { call: unknown };
+  check('a call.start right after that end is not dialed (review: end/start race)', after.call === null && !g.has('call.status', 'dialing') && !g.has('call.status', 'ringing') && g.has('call.status', 'ended'), { call: after.call, msgs: g.msgs.map((m) => `${m.type} ${m.state ?? ''} ${m.reason ?? ''}`) });
   await g.close();
 }
 if (health.mode === 'mock-call') {

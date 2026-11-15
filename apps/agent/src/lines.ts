@@ -57,7 +57,7 @@ export async function ensureGreeting(): Promise<void> {
       try { cache.set(text, await renderCached(text)); log('greeting_rendered', { tries }); }
       catch (e) {
         if (e instanceof TtsHttpError && (e.status === 401 || e.status === 403)) {
-          warn('ELEVENLABS_KEY_REJECTED_ALL_CALLS_REFUSED', { status: e.status, error: errText(e), fix: 'set a valid ELEVENLABS_API_KEY in apps/agent/.env.local and restart the agent' });
+          warn('ELEVENLABS_REJECTED_GREETING_ALL_CALLS_REFUSED', { status: e.status, error: errText(e), fix: 'check ELEVENLABS_API_KEY and the ElevenLabs quota (error.detail.status says which), then restart the agent' });
           return;
         }
         warn('greeting_render_failed', { tries, error: errText(e) });
