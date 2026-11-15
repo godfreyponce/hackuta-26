@@ -2,7 +2,7 @@ import { Fragment, useEffect, useRef, useState } from 'react';
 import { useApp } from '../state/store';
 import { runtime, setupInput } from '../game/runtime';
 import { CALIBRATION_ORDER, type CalibrationStepInfo } from '../input';
-import { Btn, isBodyInput, useMenuNav } from './components';
+import { Btn, FrameGuide, StanceChecklist, isBodyInput, useMenuNav } from './components';
 
 const STEPS = [
   // wording follows Part C's checks (packages/motion/src/calibration.ts) so the player does what is measured
@@ -150,15 +150,19 @@ export function Calibration() {
       <div className="calib">
         {motion ? (
           <div className="col calib-left">
-            <div className="cam" ref={camRef}>
+            <div className={`cam ${hasVideo ? 'live' : ''} ${status === 'ok' ? 'ok' : ''}`} ref={camRef}>
               <canvas />
+              {/* where to stand: head near the top, hips above the bottom edge — fades once you're calibrated */}
+              <FrameGuide className="cam-guide" />
               {!hasVideo && (
                 <div className="cam-note">
                   {replay ? <><b>Replaying a recorded webcam session</b><span>No live camera — the recording moves your hands.</span></> : <><b>Starting the camera…</b><span>Allow camera access when Chrome asks.</span></>}
                 </div>
               )}
+              {hasVideo && status !== 'ok' && <div className="cam-hint">Fit your head and hips inside the outline</div>}
               {status === 'ok' && <div className="cam-ok"><span className="chip ok"><span className="dot" />Calibrated</span></div>}
             </div>
+            <StanceChecklist compact />
             <section className="panel moves-panel">
               <div className="h3">In the hall</div>
               <BodyMoves friend={friend} limit={5} />
@@ -181,7 +185,7 @@ export function Calibration() {
                 {STEPS.map((s, i) => (
                   <div key={s.id} className={`step ${i === step && status === 'running' ? 'on' : ''} ${done[i] ? 'done' : ''}`}>
                     <span className="ix">{done[i] ? '✓' : i + 1}</span>
-                    <div><div className="h3">{s.label}</div><div className="muted small">{i === step && status === 'running' && live.hint ? live.hint : s.hint}</div>
+                    <div className="step-body"><div className="step-t">{s.label}</div><div className={`small ${i === step && status === 'running' && live.hint ? 'step-live' : 'muted'}`}>{i === step && status === 'running' && live.hint ? live.hint : s.hint}</div>
                       {i === step && status === 'running' && live.progress > 0 && <div className="calib-progress"><i style={{ width: `${Math.round(live.progress * 100)}%` }} /></div>}</div>
                   </div>
                 ))}
@@ -190,9 +194,12 @@ export function Calibration() {
               <div className="row" style={{ flexWrap: 'wrap' }}>
                 {status !== 'ok' && <Btn variant="primary" autoFocus onClick={run} disabled={status === 'running'}>{status === 'running' ? 'Calibrating…' : status === 'failed' ? 'Try again' : 'Start calibration'}</Btn>}
                 {status === 'ok' && <Btn variant="primary" autoFocus onClick={() => go('lobby')}>Continue</Btn>}
-                <Btn variant="link" onClick={() => switchTo('keyboard_mouse')}>Use keyboard &amp; mouse instead</Btn>
               </div>
-              <Btn variant="link" onClick={() => go('lobby')}>Skip calibration</Btn>
+              <div className="row calib-links">
+                <Btn variant="link" onClick={() => switchTo('keyboard_mouse')}>Use keyboard &amp; mouse instead</Btn>
+                <span className="muted" aria-hidden>·</span>
+                <Btn variant="link" onClick={() => go('lobby')}>Skip calibration</Btn>
+              </div>
             </>
           ) : (
             <>

@@ -27,6 +27,58 @@ export function HelmetEmblem({ size = 64 }: { size?: number }) {
   );
 }
 
+/** Webcam framing guide: corner brackets + a dashed figure from head to hips — where your body should sit in the
+ *  camera's view (head near the top, hips above the bottom edge, hands free at the sides). 16:9 like the Mac camera. */
+export function FrameGuide({ className = '', labels = true }: { className?: string; labels?: boolean }) {
+  const c = (x: number, y: number, dx: number, dy: number) => `M${x} ${y + dy * 12} V${y} H${x + dx * 12}`;
+  return (
+    <svg className={`frame-guide ${className}`} viewBox="0 0 160 90" preserveAspectRatio="xMidYMid meet" aria-hidden>
+      <g fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" className="fg-corners">
+        <path d={c(6, 5, 1, 1)} /><path d={c(154, 5, -1, 1)} /><path d={c(6, 85, 1, -1)} /><path d={c(154, 85, -1, -1)} />
+      </g>
+      <g fill="none" stroke="currentColor" strokeWidth="1.1" strokeDasharray="2.4 2" strokeLinejoin="round" className="fg-figure">
+        <circle cx="80" cy="19" r="7" />
+        <path d="M74 27.5 Q80 30 86 27.5 M62 35 Q80 28 98 35 L95 66 H65 Z M62 35 L55 58 M98 35 L105 58 M68 66 L66 88 M92 66 L94 88" />
+      </g>
+      <path d="M48 66 H112" stroke="currentColor" strokeWidth="0.8" strokeDasharray="1 2.4" className="fg-hips" />
+      {labels && (
+        <g className="fg-labels" fill="currentColor" fontSize="3.6" fontWeight="700" letterSpacing="0.5">
+          <text x="114" y="67.3">HIPS</text>
+          <text x="90" y="14.5">HEAD</text>
+        </g>
+      )}
+    </svg>
+  );
+}
+
+/** The three things that make webcam tracking work — shown before calibration and whenever we lose the player. */
+export function StanceChecklist({ compact = false }: { compact?: boolean }) {
+  const items: [ReactNode, ReactNode, ReactNode][] = [
+    [
+      <path key="d" d="M3 12h18M3 12l4-4M3 12l4 4M21 12l-4-4M21 12l-4 4" />,
+      'About 2 m back', 'head to hips in the frame',
+    ],
+    [
+      <g key="l"><circle cx="12" cy="12" r="4" /><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1" /></g>,
+      'Light in front', 'a lamp or window facing you, not behind',
+    ],
+    [
+      <path key="h" d="M7 13V6.5a1.5 1.5 0 0 1 3 0V12M10 11V4.5a1.5 1.5 0 0 1 3 0V11M13 11V5.5a1.5 1.5 0 0 1 3 0V12M16 12V8a1.5 1.5 0 0 1 3 0v6.5c0 4-2.8 6.5-6.5 6.5-2.6 0-4.2-1.2-5.6-3.3L4.5 14a1.5 1.5 0 0 1 2.4-1.7L7 13" />,
+      'Hands in view', 'palms toward the camera',
+    ],
+  ];
+  return (
+    <ul className={`stance ${compact ? 'compact' : ''}`}>
+      {items.map(([icon, k, v], i) => (
+        <li key={i}>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>{icon}</svg>
+          <span><b>{k}</b>{compact ? null : <> — {v}</>}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 export function ClassIcon({ cls, size = 22 }: { cls: WeaponClass; size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 200 200" aria-hidden>

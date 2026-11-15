@@ -3,40 +3,95 @@ import type { Hand } from '@ithaca/shared';
 import { useApp, subtitleAt, isCallLive } from '../state/store';
 import { endCall, requestCall, requestWeapon, runtime, setMic, setupInput } from '../game/runtime';
 import { isKeyboardMouse, motionAvailable } from '../input';
-import { Btn, ClassIcon, fmtTime, isBodyInput, useMenuNav } from './components';
+import { Btn, ClassIcon, FrameGuide, StanceChecklist, fmtTime, isBodyInput, useMenuNav } from './components';
 import { CallChip } from './CallChip';
 import { FriendPip } from './FriendPip';
 import { Turntable } from './Turntable';
 import { CombatOverlay } from './CombatOverlay';
 import { BodyMoves, KEYMAP } from './Calibration';
 
-function HealthBlock() {
+const LOW_HP = 35;
+
+function HealthBlock({ quiver }: { quiver: number }) {
   const health = useApp((s) => s.hud.health);
   const posture = useApp((s) => s.hud.posture);
   const blocking = useApp((s) => s.hud.blocking);
   const [ghost, setGhost] = useState(health);
   const [active, setActive] = useState(false);
+  // every blow taken restarts a short shake + red flash on the bar (two alternating animations, so back-to-back hits replay)
+  const [hits, setHits] = useState(0);
+  const prev = useRef(health);
   useEffect(() => {
+    if (health < prev.current - 0.5) setHits((n) => n + 1);
+    prev.current = health;
     setActive(true);
     const a = setTimeout(() => setGhost(health), 350);
     const b = setTimeout(() => setActive(false), 2000);
     return () => { clearTimeout(a); clearTimeout(b); };
   }, [health]);
+  const low = health < LOW_HP;
+  const p = Math.min(1, posture / 100);
   return (
-    <div className={`vitals ${active || health < 35 ? 'on' : ''}`}>
-      <div className="row" style={{ justifyContent: 'space-between' }}>
-        <span className="hud-label">Odysseus</span>
-        <span className="row" style={{ gap: 8 }}>
-          {blocking && <span className="hud-label" style={{ color: 'var(--verdigris-hi)' }}>Guard</span>}
-          <span className="hud-label num">{Math.round(health)}</span>
-        </span>
+    <div className={`vitals ${active || low ? 'on' : ''} ${low ? 'low' : ''} ${hits ? `hit-${hits % 2}` : ''}`}>
+      <div className="vitals-head">
+        <span className="vitals-name">Odysseus</span>
+        {blocking && <span className="guard-tag">Guard</span>}
+        <span className="spacer" />
+        {quiver > 0 && <span className="quiver-tag" title="Arrows"><ArrowGlyph />{quiver}</span>}
+        <span className="hp-num num">{Math.round(health)}</span>
       </div>
-      {posture > 1 && <div className="posture"><i style={{ transform: `scaleX(${Math.min(1, posture / 100)})` }} /></div>}
       <div className="health" role="meter" aria-label="Health" aria-valuenow={Math.round(health)} aria-valuemin={0} aria-valuemax={100}>
         <b style={{ transform: `scaleX(${Math.max(0, ghost) / 100})` }} />
-        <i className={health < 35 ? 'low' : ''} style={{ transform: `scaleX(${Math.max(0, health) / 100})` }} />
+        <i className={low ? 'low' : ''} style={{ transform: `scaleX(${Math.max(0, health) / 100})` }} />
+        <span className="ticks" aria-hidden />
       </div>
+      {/* posture: fills as blows land on your guard — full means the guard breaks */}
+      {posture > 1 && (
+        <div className={`posture ${p > 0.7 ? 'hot' : ''}`} aria-label="Posture">
+          <i style={{ transform: `scaleX(${p})` }} />
+        </div>
+      )}
     </div>
+  );
+}
+
+/** Red edges that breathe while you're badly hurt (slow, low-contrast pulse — no strobing). */
+function LowHealthVignette() {
+  const health = useApp((s) => s.hud.health);
+  if (health >= LOW_HP || health <= 0) return null;
+  const k = Math.min(1, (LOW_HP - health) / LOW_HP);
+  return <div className="hurt-vignette" style={{ ['--hurt' as string]: (0.45 + 0.55 * k).toFixed(2) }} aria-hidden />;
+}
+
+/** Small line glyphs for the HUD (drawn here, no icon font). */
+function ArrowGlyph() {
+  return (
+    <svg className="glyph" width="14" height="14" viewBox="0 0 16 16" aria-hidden>
+      <path d="M2 14 L13 3 M9 3 H13 V7 M2 14 l1.5-3.5 M2 14 l3.5-1.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+type HandState = 'open' | 'fist' | 'unread' | 'unseen' | 'kb';
+/** A hand as the camera reads it: open palm, closed fist, or struck through (not seen); colour carries the rest
+ *  (amber palm = arm seen but fingers not read). */
+function HandGlyph({ state }: { state: HandState }) {
+  const fist = state === 'fist';
+  return (
+    <svg className="glyph hand-glyph" width="18" height="18" viewBox="0 0 24 24" aria-hidden>
+      {fist ? (
+        <g fill="currentColor">
+          <rect x="5" y="7" width="14" height="12" rx="4" />
+          <path d="M9 7v5M12.5 7v5M16 7v5" stroke="rgba(10,8,6,0.75)" strokeWidth="1.3" />
+          <rect x="3.5" y="13" width="9" height="4" rx="2" stroke="rgba(10,8,6,0.75)" strokeWidth="1" />
+        </g>
+      ) : (
+        <g fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M7 13V6.5a1.5 1.5 0 0 1 3 0V12M10 11V4.5a1.5 1.5 0 0 1 3 0V11M13 11V5.5a1.5 1.5 0 0 1 3 0V12M16 12V8a1.5 1.5 0 0 1 3 0v6.5c0 4-2.8 6.5-6.5 6.5-2.6 0-4.2-1.2-5.6-3.3L4.5 14a1.5 1.5 0 0 1 2.4-1.7L7 13" />
+          {state === 'unseen' && <path d="M3 3l18 18" strokeWidth="2" />}
+        </g>
+      )}
+    </svg>
   );
 }
 
@@ -100,15 +155,18 @@ function HandsBlock({ hands, body }: { hands: HandsSnap; body: boolean }) {
   const slot = (side: Hand, label: string) => {
     const h = hands[side];
     const driven = hands.driven === side;
-    // webcam: a dot per hand — green open, brass fist, amber arm seen but fingers not read (a fist can't register),
-    // red not seen at all (the in-game hand ghosts and holds still)
-    const status = !body ? '' : !h.seen ? 'unseen' : !h.read ? 'unread' : h.fist ? 'fist' : 'open';
+    // webcam: a hand glyph per hand — verdigris open, brass fist, amber arm seen but fingers not read (a fist can't
+    // register), red struck-through not seen at all (the in-game hand ghosts and holds still)
+    const status: HandState = !body ? 'kb' : !h.seen ? 'unseen' : !h.read ? 'unread' : h.fist ? 'fist' : 'open';
+    const what = h.held ?? (status === 'unseen' ? 'not seen' : status === 'unread' ? 'show your palm' : 'empty');
+    const tip = status === 'unseen' ? 'The camera can’t see this hand' : status === 'unread' ? 'Arm seen, fingers not read — a fist can’t register yet' : undefined;
     return (
-      <span className={`hand-slot ${h.held ? 'on' : ''} ${driven ? 'driven' : ''} ${status}`}>
-        {body && <i className="dot" aria-hidden />}
-        {label} · {h.held ?? (body && !h.seen ? 'not seen' : body && !h.read ? 'open your hand to the camera' : 'empty')}
-        {body && !h.seen && h.held && <em className="unseen-tag"> · not seen</em>}
-        {driven ? ' ◂ mouse' : ''}
+      <span className={`hand-chip ${status} ${h.held ? 'on' : ''} ${driven ? 'driven' : ''}`} title={tip}>
+        {body ? <HandGlyph state={status} /> : null}
+        <b className="side">{label}</b>
+        <span className="what">{what}</span>
+        {body && h.held && status === 'unseen' && <em className="flag">not seen</em>}
+        {driven && <em className="flag">mouse</em>}
       </span>
     );
   };
@@ -116,8 +174,7 @@ function HandsBlock({ hands, body }: { hands: HandsSnap; body: boolean }) {
     <div className="hands-slots" aria-label="What you hold">
       {slot('left', 'L')}
       {slot('right', 'R')}
-      <span>Arrows · {hands.quiver}</span>
-      {hands.driven === 'right' && <em className="muted">Shift: left hand</em>}
+      {hands.driven === 'right' && <em className="hands-hint">Shift — mouse drives the left hand</em>}
     </div>
   );
 }
@@ -128,15 +185,20 @@ function ScoreBlock() {
   const title = useApp((s) => s.hud.waveTitle);
   const tally = useApp((s) => s.hud.tally);
   const time = useApp((s) => s.hud.matchTimeMs);
+  const cleared = tally.total > 0 && tally.killed >= tally.total;
   return (
     <div className="tc">
-      <div className="hud-label wave-label">Wave {['I', 'II', 'III'][wave - 1] ?? '—'} · <span style={{ color: 'var(--dust)' }}>{title}</span></div>
-      <div className="tally" aria-label={`${tally.killed} of ${tally.total} wooers slain`}>
+      <div className="hud-label wave-label">
+        <span className="wave-num">Wave {['I', 'II', 'III'][wave - 1] ?? '—'}</span>
+        {title && <span className="wave-title">{title}</span>}
+      </div>
+      <div className={`tally ${cleared ? 'cleared' : ''}`} aria-label={`${tally.killed} of ${tally.total} wooers slain`}>
         {Array.from({ length: tally.total }, (_, i) => <i key={i} className={i < tally.killed ? 'on' : ''} />)}
       </div>
-      <div className="row" style={{ gap: 14 }}>
-        <span className="score-sm num">{score.toLocaleString()}</span>
-        <span className="hud-label num" style={{ color: 'var(--dust)' }}>{fmtTime(time)}</span>
+      <div className="score-row">
+        {/* keyed on the score: each gain replays a short brass flare */}
+        <span key={score} className={`score-sm num ${score > 0 ? 'bump' : ''}`}>{score.toLocaleString()}</span>
+        <span className="score-time num">{fmtTime(time)}</span>
       </div>
     </div>
   );
@@ -151,16 +213,23 @@ function BossBar() {
     return () => clearTimeout(t);
   }, [boss?.hp, boss]);
   if (!boss) return null;
+  const shield = Math.max(0, Math.min(1, boss.shield));
+  const posture = Math.min(1, boss.posture ?? 0);
   return (
-    <div className="bossbar">
-      <div className="row" style={{ justifyContent: 'space-between' }}>
+    <div className="bossbar" role="meter" aria-label={`${boss.name} health`} aria-valuenow={Math.round(boss.hp * 100)} aria-valuemin={0} aria-valuemax={100}>
+      <div className="boss-head">
+        <span className="boss-rule" aria-hidden />
         <span className="boss-name">{boss.name}</span>
-        {boss.shield > 0 && <span className="hud-label" style={{ color: 'var(--brass)' }}>Gilded shield {Math.round(boss.shield * 100)}%</span>}
+        <span className="boss-rule" aria-hidden />
       </div>
-      {(boss.posture ?? 0) > 0.01 && <div className="boss-posture"><i style={{ transform: `scaleX(${Math.min(1, boss.posture ?? 0)})` }} /></div>}
       <div className="boss-hp">
         <b style={{ width: `${Math.max(boss.hp, trail) * 100}%` }} />
         <i style={{ width: `${boss.hp * 100}%` }} />
+        {shield > 0 && <s className="boss-shield" style={{ width: `${shield * 100}%` }} />}
+      </div>
+      <div className="boss-sub">
+        {shield > 0 ? <span className="boss-shield-tag">Gilded shield · {Math.round(shield * 100)}%</span> : <span />}
+        {posture > 0.01 && <span className={`boss-posture ${posture > 0.7 ? 'hot' : ''}`} title="Posture — fill it to stagger him"><i style={{ transform: `scaleX(${posture})` }} /></span>}
       </div>
     </div>
   );
@@ -317,14 +386,19 @@ export function Toasts() {
         const big = toasts.filter((t) => t.kind === 'trickshot' || t.kind === 'wave' || t.kind === 'gift').slice(-1);
         const rest = toasts.filter((t) => t.kind !== 'trickshot' && t.kind !== 'wave' && t.kind !== 'gift' && (!big.length || t.kind === 'warn')).slice(-2);
         return [...big, ...rest];
-      })().map((t) => (
-        <div key={t.id} className={`toast ${t.kind}`} style={{ ['--out' as string]: t.kind === 'trickshot' ? '1.2s' : t.kind === 'info' ? '0.6s' : '2.2s' }}>
-          <div className="t">{t.title}</div>
-          {t.kind === 'trickshot' && <div className="band" />}
-          {t.sub && <div className="s">{t.sub}</div>}
-          {t.points ? <div className="p">+{t.points.toLocaleString()}</div> : null}
-        </div>
-      ))}
+      })().map((t) => {
+        // "WAVE I · THE BOW IS STRUNG" → a title card: the numeral as an eyebrow between rules, the name large
+        const [eyebrow, main] = t.kind === 'wave' && t.title.includes(' · ') ? t.title.split(' · ', 2) : [null, t.title];
+        return (
+          <div key={t.id} className={`toast ${t.kind}`} style={{ ['--out' as string]: t.kind === 'trickshot' ? '1.2s' : t.kind === 'info' ? '0.6s' : '2.2s' }}>
+            {eyebrow && <div className="eb"><i aria-hidden />{eyebrow}<i aria-hidden /></div>}
+            <div className="t">{main}</div>
+            {t.kind === 'trickshot' && <div className="band" />}
+            {t.sub && <div className="s">{t.sub}</div>}
+            {t.points ? <div className="p">+{t.points.toLocaleString()}</div> : null}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -376,10 +450,10 @@ function TrackingOverlay() {
     return (
       <div className="overlay-center" role="alert">
         <div className="lost">
-          <svg width="90" height="120" viewBox="0 0 64 86" aria-hidden><circle cx="32" cy="14" r="10" fill="#6e665b" /><path d="M14 84 L18 40 Q32 28 46 40 L50 84 Z" fill="#6e665b" /></svg>
+          <FrameGuide className="lost-guide" />
           <h2 className="h2">We lost you</h2>
           <p className="lore" style={{ margin: 0 }}>Step back into the light. The hall waits — time is slowed.</p>
-          <p className="muted small" style={{ margin: 0 }}>Stand about 2 m from the camera, hips in view, a light in front of you.</p>
+          <StanceChecklist />
           <div className="pointer" style={{ pointerEvents: 'auto' }}><Btn onClick={() => void setupInput('keyboard_mouse')}>Switch to keyboard &amp; mouse</Btn></div>
         </div>
       </div>
@@ -399,7 +473,8 @@ function PauseMenu({ onResume }: { onResume: () => void }) {
   return (
     <div className="overlay-center" style={{ pointerEvents: 'auto' }}>
       <div className="panel pause" ref={ref}>
-        <h2 className="h2">Paused</h2>
+        <div className="pause-main">
+        <div className="pause-head"><h2 className="h2">Paused</h2><span className="muted small">The hall holds its breath.</span></div>
         <Btn variant="primary" autoFocus onClick={onResume} hotkey="Esc">Resume</Btn>
         <div className="field">
           <label>Controls (hot-swap)</label>
@@ -428,18 +503,21 @@ function PauseMenu({ onResume }: { onResume: () => void }) {
             ? <Btn variant="call" onClick={requestCall} hotkey="C">📞 Call {friend.name}</Btn>
             : <p className="muted small" style={{ margin: 0 }}>Fighting alone — add a Telemachus from the title screen to call for weapons.</p>}
         <Btn variant="danger" onClick={() => { onResume(); runtime.engine?.quit(); }}>End the fight</Btn>
-        {body && (
-          <details open>
-            <summary className="muted small" style={{ cursor: 'pointer' }}>Body controls</summary>
-            <div style={{ marginTop: 10 }}><BodyMoves friend={!!friend} /></div>
-          </details>
-        )}
-        <details>
-          <summary className="muted small" style={{ cursor: 'pointer' }}>Keyboard controls</summary>
-          <div className="keys" style={{ marginTop: 10 }}>
-            {KEYMAP.map(([k, v]) => <span key={k} style={{ display: 'contents' }}><span className="kbd">{k}</span><span>{v}</span></span>)}
-          </div>
-        </details>
+        </div>
+        {/* the reference column: always open, no scrolling hunt for "how do I guard again?" */}
+        <aside className="pause-ref">
+          <div className="h3">{body ? 'Body controls' : 'Keyboard controls'}</div>
+          {body ? (
+            <>
+              <BodyMoves friend={!!friend} />
+              <StanceChecklist compact />
+            </>
+          ) : (
+            <div className="keys">
+              {KEYMAP.map(([k, v]) => <span key={k} style={{ display: 'contents' }}><span className="kbd">{k}</span><span>{v}</span></span>)}
+            </div>
+          )}
+        </aside>
       </div>
     </div>
   );
@@ -510,10 +588,11 @@ export function Hud() {
 
   return (
     <div className={`hud ${cine ? 'cine' : ''}`}>
+      <LowHealthVignette />
       <CombatOverlay />
       <div className="dock-bl">
         <HandsBlock hands={hands} body={body} />
-        <HealthBlock />
+        <HealthBlock quiver={hands.quiver} />
       </div>
       <ScoreBlock />
       <CallPanel />
@@ -521,9 +600,10 @@ export function Hud() {
       <BossIntro />
       <Toasts />
       <GestureRing />
+      {/* what to do sits above what is being said: subtitles keep the bottom line, like film */}
       <div className="bc">
-        <Subtitles />
         <Prompts hands={hands} />
+        <Subtitles />
       </div>
       {/* the boss bar and the big banners take the top of the screen: the cheat sheet steps aside meanwhile */}
       {hint && !boss && <ControlsCard body={body} hidden={banner} />}

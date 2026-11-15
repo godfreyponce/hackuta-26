@@ -3,7 +3,7 @@ import { useApp } from '../state/store';
 import { runtime, persistPlayer } from '../game/runtime';
 import { pushToast } from '../state/store';
 import { setMockFriendName } from '../net';
-import { Btn, Meander, useMenuNav } from './components';
+import { Btn, Meander, StanceChecklist, isBodyInput, useMenuNav } from './components';
 
 const COUNTRIES: { code: string; dial: string; name: string }[] = [
   { code: 'US', dial: '+1', name: 'United States' },
@@ -34,6 +34,7 @@ export function Setup() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const ref = useMenuNav<HTMLDivElement>(() => go('title'));
+  const body = useApp((s) => isBodyInput(s.inputKind));
 
   const dial = COUNTRIES.find((c) => c.code === country)?.dial ?? '+1';
   const e164 = useMemo(() => {
@@ -108,6 +109,13 @@ export function Setup() {
           <p className="lore" style={{ margin: 0 }}>
             Twenty years from home. The hall is full of wooers. Your son is in the storeroom — and he has a phone.
           </p>
+          {body && (
+            <div className="setup-ready">
+              <div className="h3">Before you fight</div>
+              <p className="muted small" style={{ margin: 0 }}>You play with your body in front of the webcam. Clear a little space, then:</p>
+              <StanceChecklist />
+            </div>
+          )}
         </section>
 
         <section className="panel col">
