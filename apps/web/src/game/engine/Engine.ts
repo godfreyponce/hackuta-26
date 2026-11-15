@@ -35,6 +35,9 @@ export interface PostState { sat: number; chroma: number; flash: number; letterb
 
 const FIXED = 1 / 60;
 
+const _sv1 = new THREE.Vector3();
+const _sv2 = new THREE.Vector3();
+
 export class Engine {
   readonly scene: THREE.Scene;
   readonly camera: THREE.PerspectiveCamera;
@@ -318,7 +321,7 @@ export class Engine {
         this.weapons.release(e.hand, v, this.handViews[e.hand]);
         break;
       }
-      case 'swing': audio.whoosh(e.speed); break;
+      case 'swing': break; // the continuous per-hand swing voice (updateTrails) carries this now
       case 'block_start': this.blocking = true; this.weapons.blocking = true; this.guardAt = this.realT; this.weapons.guardChangeT = this.realT; break;
       case 'block_end': this.blocking = false; this.weapons.blocking = false; this.weapons.guardChangeT = this.realT; break;
       case 'bow_nock':
@@ -777,7 +780,7 @@ export class Engine {
       this.input.setCamera({ fovY: THREE.MathUtils.degToRad(cam.fov), aspect: cam.aspect, pitch: -0.1 - this.lookDown });
       for (const h of ['left', 'right'] as const) {
         const w = this.weapons.heldBy(h);
-        this.input.setArmed(h, !!w && w.cls !== 'bow' && w.cls !== 'shield', w ? w.segB.length() : undefined, !!w);
+        this.input.setArmed(h, !!w && w.cls !== 'bow' && w.cls !== 'shield', w ? w.segB.length() : undefined, !!w, w?.spec.massKg);
       }
       // hover: with a hand free, the weapon under the cursor glows and is named (10 Hz pick)
       if (this.mode === 'match') {
@@ -938,6 +941,11 @@ export class Engine {
     this.recoilOff[hand].copy(dir).multiplyScalar(-dist);
     this.recoilOff[hand].y = Math.abs(this.recoilOff[hand].y) * 0.5;
     this.dampUntil[hand] = this.realT + dampMs / 1000;
+    // and the blade itself rebounds (angular kick, then the spring settles it)
+    if (isKeyboardMouse(this.input)) {
+      const d = dir.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), -this.yaw);
+      this.input.kickBlade(hand, d, Math.min(1, dist / 0.2));
+    }
   }
 
   private kick(deg: number) { this.kickVel += THREE.MathUtils.degToRad(deg) * 16; }
@@ -971,9 +979,14 @@ export class Engine {
   private updateTrails(dt: number) {
     for (const side of ['left', 'right'] as const) {
       const w = this.weapons.heldBy(side);
-      if (!w || w.cls === 'bow' || w.cls === 'shield' || !w.spec.sharp && w.cls !== 'blunt') { this.trails.updatePlayer(side, null, null, 0, dt); continue; }
+      if (!w || w.cls === 'bow' || w.cls === 'shield' || !w.spec.sharp && w.cls !== 'blunt') { this.trails.updatePlayer(side, null, null, 0, dt); audio.swing(side, 0, 0, 0); continue; }
       const t = w.body.translation();
       this.trails.updatePlayer(side, new THREE.Vector3(t.x, t.y, t.z), w.tip, w.speed, dt);
+      // swing voice: speed of the point; the whistle needs the blade moving across its axis (edge/flat leading)
+      const axis = _sv1.subVectors(w.tip, w.center).normalize();
+      const mv = _sv2.subVectors(w.tip, w.prevTip);
+      const edge = mv.lengthSq() > 1e-8 ? 1 - Math.abs(axis.dot(mv.normalize())) : 0;
+      audio.swing(side, w.speed, edge, audio.pan(w.tip));
     }
     const list: { base: THREE.Vector3; tip: THREE.Vector3 }[] = [];
     for (const e of this.enemies.list) {

@@ -510,7 +510,9 @@ export class EnemyManager {
       if (distPlayer < 10 || e.ring !== null) this.assignRing(e);
       if (e.ring !== null) {
         const ang = RING_ANGLES[e.ring];
-        const r = RING_R * (e.kind === 'boss' ? 1.08 : 1);
+        // they wait just out of your reach and step in to strike (spacing matters; your idle blade doesn't rest in them)
+        const striking = e.state === 'windup' || e.state === 'strike';
+        const r = (striking ? RING_R : 1.55) * (e.kind === 'boss' ? 1.08 : 1);
         target = _v3.set(Math.sin(ang) * r, 0, -Math.cos(ang) * r);
       } else {
         const ang = ((e.id * 0.618) % 1) * 2.2 - 1.1;
@@ -578,6 +580,11 @@ export class EnemyManager {
     if (e.look.shield !== 'none' && e.shieldHp > 0 && !e.severed.has(P.LArmL)) a.armL = [1.15, 0.05, 1.3];
 
     const atRing = e.ring !== null && target && Math.hypot(e.pos.x - target.x, e.pos.z - target.z) < 0.4;
+    // step in during the first part of the wind-up
+    if ((e.state === 'windup' || e.state === 'strike') && target && e.kind !== 'archer') {
+      const k = 1 - Math.exp(-7 * dt);
+      e.pos.x += (target.x - e.pos.x) * k; e.pos.z += (target.z - e.pos.z) * k;
+    }
     const diff = this.hooks.difficultyMult();
     this.updateGuard(e, distPlayer, a, dt);
 

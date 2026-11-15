@@ -27,7 +27,9 @@ export interface KeyboardMouseController extends InputController {
   /** Tab held: glance down at the weapon table. */
   readonly glancing: boolean;
   /** The engine reports which hands actually hold a melee weapon (drives the visible-blade "lever" pose). */
-  setArmed(hand: Hand, armed: boolean, bladeM?: number, holding?: boolean): void;
+  setArmed(hand: Hand, armed: boolean, bladeM?: number, holding?: boolean, massKg?: number): void;
+  /** blade bounces off something: angular kick away from `dir` (body frame), 0..1 strength */
+  kickBlade(hand: Hand, dir: { x: number; y: number; z: number }, k: number): void;
 }
 
 // resting hands sit low, out of the way of the view (and of the weapon table when you glance down)
@@ -63,6 +65,7 @@ class HandTrack {
   /** holding anything (blade, shield, bow) — grips are sticky */
   holding = false;
   shield = false;
+  mass = 1.1;
   /** blade direction + angular velocity (damped angular spring → visible drag, then whip) */
   bdir = new THREE.Vector3(0.1, 0.25, -1).normalize();
   omega = new THREE.Vector3();
@@ -422,7 +425,8 @@ export function createKeyboardMouseController(): KeyboardMouseController {
         // then it whips through and settles — heavier/longer weapons are slower (Mordhau-style turn cap)
         const want = tmp3.copy(goal).sub(active.pos).normalize();
         if (!active.bladeInit) { active.bdir.copy(want); active.omega.set(0, 0, 0); active.bladeInit = true; }
-        const wn = clamp(16 * Math.sqrt(0.65 / Math.max(0.3, active.blade)), 7, 19);
+        // heavier / longer weapons turn slower (spear ≈ 8.8 rad/s vs xiphos ≈ 16)
+        const wn = clamp(16 * Math.sqrt(0.65 / Math.max(0.3, active.blade)) * Math.sqrt(1.1 / Math.max(0.3, active.mass)), 6, 19);
         springBlade(active, want, dt, wn, 0.55, wn > 12 ? 12 : 8);
         const prev = tmp4.copy(active.tip);
         active.tip.copy(active.pos).addScaledVector(active.bdir, active.blade);
@@ -495,7 +499,14 @@ export function createKeyboardMouseController(): KeyboardMouseController {
     on(cb) { listeners.add(cb); return () => listeners.delete(cb); },
     onMode(cb) { modeListeners.add(cb); return () => modeListeners.delete(cb); },
     setCamera(m) { cam = m; },
-    setArmed(h, a, bladeM, holding) { const t = hands[h]; if (!a) t.bladeInit = false; t.armed = a; if (bladeM) t.blade = bladeM; t.holding = holding ?? a; t.shield = !!t.holding && !a && !(mode.bow && h === 'left'); },
+    kickBlade(h, dir, k) {
+      const tr = hands[h];
+      if (!tr.armed) return;
+      // rotate the blade back against its motion (14 rad/s at full strength) — it visibly rebounds and settles
+      const ax = tmp.crossVectors(tr.bdir, tmp2.set(-dir.x, -dir.y, -dir.z)).normalize();
+      if (ax.lengthSq() > 0.5) tr.omega.addScaledVector(ax, 14 * Math.max(0.3, Math.min(1, k)));
+    },
+    setArmed(h, a, bladeM, holding, massKg) { const t = hands[h]; if (massKg) t.mass = massKg; if (!a) t.bladeInit = false; t.armed = a; if (bladeM) t.blade = bladeM; t.holding = holding ?? a; t.shield = !!t.holding && !a && !(mode.bow && h === 'left'); },
     setTarget(el) { attach(el); },
     getDebugVideo: () => null,
   };

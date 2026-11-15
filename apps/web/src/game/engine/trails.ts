@@ -2,7 +2,7 @@
 // during their active strike frames). One additive triangle strip per trail.
 import * as THREE from 'three';
 
-const N = 10; // samples kept per trail
+const N = 24; // samples kept per trail (3 interpolated per frame so fast arcs stay round)
 
 const VERT = /* glsl */ `
   attribute float aAlpha;
@@ -62,8 +62,12 @@ class Trail {
   update(base: THREE.Vector3 | null, tip: THREE.Vector3 | null, active: boolean, dt: number, life = 0.15) {
     for (let i = 0; i < this.age.length; i++) this.age[i] += dt;
     if (active && base && tip) {
+      const pb = this.base[0], pt = this.tip[0];
+      if (pb && pt && this.age[0] < dt * 1.5) {
+        for (const k of [1 / 3, 2 / 3]) { this.base.unshift(pb.clone().lerp(base, k)); this.tip.unshift(pt.clone().lerp(tip, k)); this.age.unshift(dt * (1 - k)); }
+      }
       this.base.unshift(base.clone()); this.tip.unshift(tip.clone()); this.age.unshift(0);
-      if (this.base.length > N) { this.base.pop(); this.tip.pop(); this.age.pop(); }
+      while (this.base.length > N) { this.base.pop(); this.tip.pop(); this.age.pop(); }
     }
     while (this.age.length && this.age[this.age.length - 1] > life) { this.base.pop(); this.tip.pop(); this.age.pop(); }
     const n = this.base.length;
@@ -92,7 +96,7 @@ export class Trails {
     for (let i = 0; i < 3; i++) { const t = new Trail('#a8321f', '#ffd28a'); this.enemy.push(t); this.group.add(t.mesh); }
   }
   updatePlayer(side: 'left' | 'right', base: THREE.Vector3 | null, tip: THREE.Vector3 | null, speed: number, dt: number) {
-    this.player[side].update(base, tip, speed > 3, dt, 0.15);
+    this.player[side].update(base, tip, speed > 2.5, dt, 0.1 + 0.08 * Math.min(1, Math.max(0, (speed - 3) / 7)));
   }
   updateEnemies(list: { base: THREE.Vector3; tip: THREE.Vector3 }[], dt: number) {
     for (let i = 0; i < this.enemy.length; i++) {

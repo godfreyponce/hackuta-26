@@ -146,6 +146,40 @@ class Audio {
 
   private ready() { return this.enabled && !!this.ctx && this.ctx.state === 'running'; }
 
+  // ── swing voice (continuous, per hand): band follows blade speed; a narrow whistle when the edge leads ──
+  private swingV: Record<string, { bp: BiquadFilterNode; wh: BiquadFilterNode; g: GainNode; gw: GainNode; pan: StereoPannerNode } | undefined> = {};
+  swing(key: string, v: number, edge: number, pan: number) {
+    if (!this.ready()) return;
+    const ctx = this.ctx!;
+    let s = this.swingV[key];
+    if (!s) {
+      if (v < 2.5) return;
+      const src = ctx.createBufferSource(); src.buffer = this.noiseBuf; src.loop = true;
+      const bp = ctx.createBiquadFilter(); bp.type = 'bandpass';
+      const wh = ctx.createBiquadFilter(); wh.type = 'bandpass';
+      const g = ctx.createGain(); g.gain.value = 0;
+      const gw = ctx.createGain(); gw.gain.value = 0;
+      const pn = ctx.createStereoPanner();
+      src.connect(bp).connect(g).connect(pn);
+      src.connect(wh).connect(gw).connect(pn);
+      pn.connect(this.sfx);
+      const rs = ctx.createGain(); rs.gain.value = 0.08; pn.connect(rs).connect(this.reverbSend);
+      src.start();
+      s = this.swingV[key] = { bp, wh, g, gw, pan: pn };
+    }
+    const t = ctx.currentTime;
+    const x = clamp01((v - 2.5) / (14 - 2.5));
+    const e = clamp01(edge);
+    s.bp.frequency.setTargetAtTime(Math.min(3200, 220 + 120 * v) * this.rate, t, 0.015);
+    s.bp.Q.setTargetAtTime(Math.min(2.4, 1 + 0.12 * v), t, 0.015);
+    s.g.gain.setTargetAtTime(Math.min(0.5, 0.12 + 0.5 * x * x * x) * (v < 2.5 ? 0 : 1), t, v < 2.5 ? 0.06 : 0.015);
+    const d = 0.045 + (0.006 - 0.045) * e;
+    s.wh.frequency.setTargetAtTime(Math.max(150, Math.min(1400, (0.2 * v) / d)) * this.rate, t, 0.015);
+    s.wh.Q.setTargetAtTime(1.2 + 12.8 * e * e, t, 0.015);
+    s.gw.gain.setTargetAtTime(v < 2.5 ? 0 : 0.35 * x * x * x * (0.2 + 0.8 * e * e), t, v < 2.5 ? 0.06 : 0.015);
+    s.pan.pan.setTargetAtTime(Math.max(-0.8, Math.min(0.8, pan)), t, 0.03);
+  }
+
   // ── impact engine ────────────────────────────────────────────────
   pan(p?: { x: number; y: number; z: number } | null) { return p && this.panOf ? this.panOf(p.x, p.y, p.z) : 0; }
   /** One impact voice: gain by intensity (−22…0 dB along I^0.7, ±1.5 dB), brightness lowpass, pan, reverb. */
