@@ -11,11 +11,11 @@ import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { resolve } from 'node:path';
 import sharp from 'sharp';
 import { RoomServiceClient } from 'livekit-server-sdk';
-import { GAME_BOTTOM, OUT_H } from '../src/video.ts';
+import { FRIEND_VIEW_BANNER_BOTTOM } from '../src/video.ts';
 import WebSocket from 'ws';
 
-const HUB = 'http://localhost:8787';
-const AGENT = 'http://localhost:8788';
+const HUB = process.env.E2E_HUB_URL || 'http://localhost:8787';
+const AGENT = process.env.E2E_AGENT_URL || 'http://localhost:8788';
 const t0 = Date.now();
 const out = (event: string, f: Record<string, unknown> = {}) => console.log(JSON.stringify({ ms: Date.now() - t0, event, ...f }));
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -37,7 +37,7 @@ async function openGame() {
   const { sessionId: sid } = await post('/api/sessions', { playerId: 'e2e' }) as { sessionId: string };
   const tok = await post('/api/livekit/token', { sessionId: sid }) as { url: string; token: string };
   const msgs: Msg[] = [];
-  const ws = new WebSocket(`ws://localhost:8787/ws?role=web&sessionId=${sid}`);
+  const ws = new WebSocket(`${HUB.replace(/^http/, 'ws')}/ws?role=web&sessionId=${sid}`);
   await new Promise((r) => ws.on('open', r));
   ws.on('message', (raw) => { const m = { ...(JSON.parse(raw.toString()) as Msg), at: Date.now() }; msgs.push(m); out('hub->web', { type: m.type, state: m.state, text: m.text, reason: m.reason }); });
   const send = (type: string, extra: Record<string, unknown> = {}) => ws.send(JSON.stringify({ v: 1, type, sessionId: sid, ts: Date.now(), ...extra }));
@@ -45,10 +45,20 @@ async function openGame() {
 
   const room = new Room();
   const tracks: string[] = [];
+  /** The face box's input: quartermaster-voice loudness, mean RMS per 500 ms. */
+  const voice = { rms: [] as number[] };
   /** What the game's PIP would show: friend-cam frames, and the brightest frame's mean RGB (0 = black). */
   const friendCam = { frames: 0, maxMean: 0, lastMean: 0 };
   room.on(RoomEvent.TrackSubscribed, (t: RemoteTrack, pub: RemoteTrackPublication, p: RemoteParticipant) => {
     tracks.push(pub.name ?? ''); out('game_sub', { name: pub.name, from: p.identity });
+    if (pub.name === 'quartermaster-voice') void (async () => {
+      let acc = 0, n = 0;
+      for await (const f of new AudioStream(t, { sampleRate: 48000, numChannels: 1 })) {
+        let sum = 0; for (const x of f.data) sum += x * x;
+        acc += Math.sqrt(sum / f.data.length); n++;
+        if (n === 50) { voice.rms.push(Math.round(acc / n)); acc = 0; n = 0; }
+      }
+    })().catch(() => {});
     if (pub.name === 'friend-cam') void (async () => {
       for await (const { frame } of new VideoStream(t)) {
         if (friendCam.frames++ % 10) continue;
@@ -74,7 +84,7 @@ async function openGame() {
   const agentPubs = (name: string) => [...room.remoteParticipants.values()].filter((p) => p.identity === 'quartermaster-relay')
     .flatMap((p) => [...p.trackPublications.values()]).filter((t) => t.name === name).length;
   const close = async () => { micOn = false; clearInterval(fvTimer); await room.disconnect().catch(() => {}); ws.close(); };
-  return { sid, msgs, send, has, room, tracks, friendCam, agentPubs, close };
+  return { sid, msgs, send, has, room, tracks, friendCam, voice, agentPubs, close };
 }
 
 /** The phone side: joins the FaceTime room as the bridge and publishes the caller's camera and mic. */
@@ -117,24 +127,29 @@ async function openPhone(url: string, token: string) {
 }
 
 /**
- * The caption as the friend sees it: black text and the blue key word in the agent-video frame. The check waits for a
- * bright game frame, so inside the game rows only caption text is dark. Saves the frame as a PNG for a human to look at.
+ * The caption as the friend sees it: an off-white pill with black text and the blue key word in the agent-video frame.
+ * The check waits for a mid-gray game frame, so only the pill is near white. Saves the frame as a PNG for a human to look at.
  */
 async function captionCheck(latest: () => VideoFrame | null): Promise<void> {
-  // The e2e game cycles its shade 0..248; wait for a bright one so the dark band stands out from the game above the bar.
+  // The e2e game cycles its shade 0..248; wait for one bright enough for dark text to stand out, dim enough to tell from the pill.
   const gameShade = (g: VideoFrame) => g.data[(40 * g.width + g.width / 2) * 4 + 1]!;
   let f: VideoFrame | null = null;
   for (const until = Date.now() + 4_000; Date.now() < until; await sleep(30)) {
     const frame = latest()?.convert(VideoBufferType.RGBA);
-    if (frame && gameShade(frame) > 120) { f = frame; break; }
+    if (frame && gameShade(frame) > 120 && gameShade(frame) < 220) { f = frame; break; }
   }
-  if (!f) return check('caption: a bright-game agent-video frame reached the phone', false);
-  let n = 0, blue = 0, minX = f.width, maxX = -1, minY = f.height, maxY = -1;
-  for (let y = GAME_BOTTOM - OUT_H; y < GAME_BOTTOM; y++) for (let x = 0; x < f.width; x++) {
+  if (!f) return check('caption: a mid-gray-game agent-video frame reached the phone', false);
+  let minX = f.width, maxX = -1, minY = f.height, maxY = -1;
+  for (let y = 0; y < f.height; y++) for (let x = 0; x < f.width; x++) {
+    const i = (y * f.width + x) * 4;
+    if (f.data[i]! > 235 && f.data[i + 1]! > 235 && f.data[i + 2]! > 235) { minX = Math.min(minX, x); maxX = Math.max(maxX, x); minY = Math.min(minY, y); maxY = Math.max(maxY, y); }
+  }
+  let n = 0, blue = 0;
+  for (let y = minY; y <= maxY; y++) for (let x = minX; x <= maxX; x++) {
     const i = (y * f.width + x) * 4, r = f.data[i]!, g = f.data[i + 1]!, b = f.data[i + 2]!;
     const isBlue = b > 200 && r < 120;
     if (isBlue) blue++;
-    if (isBlue || (r < 70 && g < 70 && b < 70)) { n++; minX = Math.min(minX, x); maxX = Math.max(maxX, x); minY = Math.min(minY, y); maxY = Math.max(maxY, y); }
+    if (isBlue || (r < 70 && g < 70 && b < 70)) n++;
   }
   const dir = resolve('.cache/e2e');
   mkdirSync(dir, { recursive: true });
@@ -142,11 +157,12 @@ async function captionCheck(latest: () => VideoFrame | null): Promise<void> {
   await sharp(Buffer.from(f.data), { raw: { width: f.width, height: f.height, channels: 4 } }).png().toFile(png);
   const box = { captionPixels: n, keyWordPixels: blue, x: [minX, maxX], y: [minY, maxY], size: `${f.width}x${f.height}`, png };
   check('caption burned into agent-video during the greeting (captions)', n > 200, box);
-  check('caption whole inside the game, in its lower half (captions)', n > 0 && minX >= 16 && maxX < f.width - 16 && minY >= f.height / 2 && maxY < GAME_BOTTOM, box);
-  // The last game rows above the bottom letterbox bar must keep the game shade: the pill ends above them.
+  // Owner, call 8: the pill covered the game's bottom banner (TURN YOUR PHONE SIDEWAYS); it now sits at the frame's bottom edge.
+  check('caption pill at the bottom edge, below the game banner (call 8)', n > 0 && minX >= 16 && maxX < f.width - 16 && minY > FRIEND_VIEW_BANNER_BOTTOM && maxY < f.height - 1, box);
+  // The game rows the banner uses keep the game shade: the caption band starts below them.
   let sum = 0, px = 0;
-  for (let y = GAME_BOTTOM - 4; y < GAME_BOTTOM; y++) for (let x = 100; x < f.width - 100; x++) { sum += f.data[(y * f.width + x) * 4 + 1]!; px++; }
-  check('caption band ends above the bottom letterbox bar (captions)', Math.abs(sum / px - gameShade(f)) < 20, { gapGreen: Math.round(sum / px), gameGreen: gameShade(f), rows: [GAME_BOTTOM - 4, GAME_BOTTOM - 1] });
+  for (let y = FRIEND_VIEW_BANNER_BOTTOM - 4; y <= FRIEND_VIEW_BANNER_BOTTOM; y++) for (let x = 100; x < f.width - 100; x++) { sum += f.data[(y * f.width + x) * 4 + 1]!; px++; }
+  check('caption band starts below the game banner rows (call 8)', Math.abs(sum / px - gameShade(f)) < 20, { bannerRowsGreen: Math.round(sum / px), gameGreen: gameShade(f), rows: [FRIEND_VIEW_BANNER_BOTTOM - 4, FRIEND_VIEW_BANNER_BOTTOM] });
 }
 
 const mockPhone = async (sid: string) => {
@@ -179,6 +195,10 @@ async function mockMainLoop(): Promise<void> {
   check('agent video is 3:2 (call 3)', !!vw && !!vh && Math.abs(vw / vh - 1.5) < 0.02, phone.s.agentVideoSize);
   check('friend-cam and friend-audio relayed', g.tracks.includes('friend-cam') && g.tracks.includes('friend-audio'), g.tracks);
   check('friend-cam frames reach the game and are not black (live 1 #2)', g.friendCam.frames > 10 && g.friendCam.maxMean > 20, g.friendCam);
+  const firstLoud = g.voice.rms.findIndex((r) => r > 500);
+  check('quartermaster-voice reaches the game and carries the greeting (face box)', g.tracks.includes('quartermaster-voice') && firstLoud >= 0, g.voice.rms);
+  // The player mic (a 440 Hz tone at 8000) runs nonstop from bridge_ready, before the greeting: any leak keeps every window loud.
+  check('quartermaster-voice goes quiet in pauses: no player mic in it (face box)', firstLoud >= 0 && g.voice.rms.slice(firstLoud).some((r) => r < 100), { voice: g.voice.rms, phone: phone.s.rms });
 
   const camFramesBefore = g.friendCam.frames;
   await phone.republishCam(); // review #11

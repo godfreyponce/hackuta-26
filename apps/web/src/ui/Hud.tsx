@@ -6,6 +6,7 @@ import { isKeyboardMouse, motionAvailable } from '../input';
 import { Btn, ClassIcon, FrameGuide, StanceChecklist, fmtTime, isBodyInput, useMenuNav } from './components';
 import { CallChip } from './CallChip';
 import { FriendPip } from './FriendPip';
+import { QmFace } from '../call/QmFace';
 import { Turntable } from './Turntable';
 import { CombatOverlay } from './CombatOverlay';
 import { BodyMoves, KEYMAP } from './Calibration';
@@ -315,6 +316,7 @@ function CallPanel() {
           <CallChip compact />
           {call === 'connected' && <span className={`chip ${mic ? 'ok' : 'bad'}`} title="Push-to-talk (T)"><span className="dot" />{mic ? 'Mic' : 'Muted'}</span>}
         </div>
+        {isCallLive(call) && <QmFace />}
         {isCallLive(call) && <FriendPip />}
         {!isCallLive(call) && friend && <div className="muted small">{kb ? <>Press <span className="kbd">C</span> to call {friend.name}.</> : <>Make the phone sign by your ear (or <span className="kbd">C</span>) to call {friend.name}.</>}</div>}
       </div>

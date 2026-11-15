@@ -46,19 +46,22 @@ export type Caption = { data: Uint8Array; top: number; height: number };
 
 /**
  * Owner pick, caption style 5 (big short chunks): one short phrase at a time in 40 px heavy black sans on an off-white
- * pill, one key word in blue, the pill's bottom 14 px above the game's bottom. Sizes and colors are the owner's mockup.
+ * pill, one key word in blue, at the frame's bottom edge (owner, call 8: below the game's banner, half over the bottom
+ * letterbox bar). Sizes and colors are the owner's mockup.
  * A portrait iPhone shows the 640 px frame at about 0.61x, so 40 px is about 24 pt.
  */
 const CAPTION_SIZE = 40;
 const CAPTION_FONT = 'Helvetica Neue, Helvetica, Arial, sans-serif';
 const INK = '#111', KEY_BLUE = '#2f6bff';
-const PILL_H = 64, PILL_PAD_X = 28, PILL_GAP = 14;
+const PILL_H = 64, PILL_PAD_X = 28;
 const PILL_MAX_W = AGENT_W - 2 * 24;
 /** Guess: the mockup's heavy sans runs about 0.48 em per character; 0.6 leaves room for wide words. */
 const EM_PER_CHAR = 0.6;
 export const CHUNK_MAX_CHARS = Math.floor((PILL_MAX_W - 2 * PILL_PAD_X) / (CAPTION_SIZE * EM_PER_CHAR));
 /** First row of the bottom letterbox bar: friend-view is OUT_W x OUT_H (640x360 by contract, callMedia.ts), centered. */
-export const GAME_BOTTOM = (AGENT_H + OUT_H) / 2;
+const GAME_BOTTOM = (AGENT_H + OUT_H) / 2;
+/** Last agent-video row of friend-view's bottom banner (apps/web/src/game/friendView.ts draws it to game row 318). */
+export const FRIEND_VIEW_BANNER_BOTTOM = GAME_BOTTOM - OUT_H + 318;
 /** For a streamed line, whose length is unknown. Measured: the 22 cached ElevenLabs lines run 11 to 19 characters per second, 16.1 over all. */
 export const SPEECH_CHARS_PER_S = 16;
 /**
@@ -170,7 +173,7 @@ function captionSvg(chunk: string, size: number, pillW: number): string {
 }
 
 /**
- * One chunk as a pill near the bottom of the game, above the letterbox bar. The text is measured first so the pill
+ * One chunk as a pill at the bottom edge of the frame, with 1 row to spare. The text is measured first so the pill
  * fits it; a chunk too wide for the pill (one long word) gets a smaller font instead of running past it.
  */
 export async function renderCaption(chunk: string): Promise<Caption> {
@@ -180,7 +183,7 @@ export async function renderCaption(chunk: string): Promise<Caption> {
   const size = textW > room ? Math.floor((CAPTION_SIZE * room) / textW) : CAPTION_SIZE;
   const pillW = Math.round((textW * size) / CAPTION_SIZE) + 2 * PILL_PAD_X;
   const data = new Uint8Array(await sharp(Buffer.from(captionSvg(chunk, size, pillW))).ensureAlpha().raw().toBuffer());
-  return { data, top: GAME_BOTTOM - PILL_GAP - PILL_H - 1, height: PILL_H + 2 };
+  return { data, top: AGENT_H - PILL_H - 3, height: PILL_H + 2 };
 }
 
 /** Blends the caption into an AGENT_W x AGENT_H RGBA buffer in place. */

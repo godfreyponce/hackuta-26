@@ -10,6 +10,8 @@ const schema = z.object({
   AGENT_SHARED_SECRET: z.string().min(1),
   AGENT_MODE: z.enum(['live', 'mock-call']).default('live'),
   AGENT_HEALTH_PORT: z.coerce.number().default(8788),
+  // A second agent on the same LiveKit project (a dev stack beside a live one) must not delete the live call's ft- room.
+  AGENT_SKIP_ROOM_CLEANUP: z.enum(['0', '1']).default('0'),
   CHERT_API_BASE: z.string().default('https://facetime.trychert.com/api/v1'),
   CHERT_FACETIME_TOKEN: z.string().default(''),
   CHERT_PROJECT_ID: z.string().default(''),

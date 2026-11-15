@@ -1,12 +1,13 @@
 // Captions burned into agent-video (owner pick: style 5, big short chunks): one short phrase at a time, large heavy
-// black sans on a small off-white pill, one key word in blue, near the bottom of the game. Each chunk sits whole
-// inside the game (above the bottom letterbox bar of the 3:2 frame) and leaves no pixels behind once it clears.
+// black sans on a small off-white pill, one key word in blue, at the bottom edge of the 3:2 frame. Each chunk sits below
+// the game's own bottom banner (owner, call 8: the pill covered TURN YOUR PHONE SIDEWAYS) and leaves no pixels behind
+// once it clears.
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { dispose, type VideoFrame } from '@livekit/rtc-node';
 import { LINES, pick } from '../src/lines.ts';
-import { AGENT_H, AGENT_W, CAPTION_LINGER_MS, CHUNK_MAX_CHARS, captionChunks, drawCaption, GAME_BOTTOM, keyWord, renderCaption, SPEECH_CHARS_PER_S, VideoRelay } from '../src/video.ts';
+import { AGENT_H, AGENT_W, CAPTION_LINGER_MS, CHUNK_MAX_CHARS, captionChunks, drawCaption, FRIEND_VIEW_BANNER_BOTTOM, keyWord, renderCaption, SPEECH_CHARS_PER_S, VideoRelay } from '../src/video.ts';
 
 /** Grey frame, caption chunk drawn: bounding box of every changed pixel (the pill), and the count of blue pixels. */
 async function pillBox(chunk: string) {
@@ -27,14 +28,14 @@ const quip = 'Behold, the Enchanted Golden Frying Pan of the Western Isles, forg
 const longWord = 'Behold the Antidisestablishmentarianismophobicbroomstickofdoom, Warrior Godfrey!';
 const TEXTS = [...Object.values(LINES).flat(), quip, longWord, 'W'.repeat(22), 'm'.repeat(22), 'Behold the Megasledgehammer of doom!', 'Your Enchanted Golden Frying Pan of Ithaca just flattened one of his men. Ha!'];
 
-test('every fixed line and a long forge quip: one short line per chunk, pill whole inside the game, nothing in the bottom bar', async () => {
+test('every fixed line and a long forge quip: one short line per chunk, pill below the game banner and inside the frame', async () => {
   for (const text of TEXTS) {
     for (const chunk of captionChunks(text)) {
       assert.ok(chunk.length >= 1 && chunk.length <= CHUNK_MAX_CHARS, `${text}: chunk "${chunk}" is ${chunk.length} chars`);
       const b = await pillBox(chunk);
       assert.ok(b.maxX >= 0 && b.minX >= SIDE && b.maxX < AGENT_W - SIDE, `${chunk}: pill x ${b.minX}..${b.maxX}`);
-      assert.ok(b.minY >= AGENT_H / 2, `${chunk}: pill starts at y ${b.minY}`);
-      assert.ok(b.maxY < GAME_BOTTOM, `${chunk}: pill ends at y ${b.maxY}`);
+      assert.ok(b.minY > FRIEND_VIEW_BANNER_BOTTOM, `${chunk}: pill starts at y ${b.minY}, banner ends at ${FRIEND_VIEW_BANNER_BOTTOM}`);
+      assert.ok(b.maxY < AGENT_H - 1, `${chunk}: pill ends at y ${b.maxY}`);
     }
   }
 });
