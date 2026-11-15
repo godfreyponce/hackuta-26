@@ -219,6 +219,23 @@ button, input, select { font: inherit; color: inherit; }
 .hand-slot.unseen { color: #ffb38a; }
 .hand-slot.unseen .dot { background: var(--alarm); box-shadow: 0 0 6px var(--alarm); animation: blink 1s steps(2) infinite; }
 .hand-slot .unseen-tag { color: #ffb38a; }
+.hud.cine .hands-slots { opacity: 0; }
+/* webcam glove chips: live (seen) · ghost (just lost) · lost, and a bar for how closed the hand is */
+.glove-chips { position: absolute; left: 48px; bottom: 122px; display: flex; gap: 8px; transition: opacity 0.25s; }
+.hud.cine .glove-chips { opacity: 0; }
+.glove-chip { display: inline-flex; align-items: center; gap: 7px; padding: 4px 10px 4px 6px; border-radius: 999px; background: rgba(10, 8, 6, 0.7); border: 1px solid rgba(168, 159, 142, 0.3); color: var(--linen); font-size: 11px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; }
+.glove-chip b { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; font-size: 10px; background: var(--brass-hi); color: #1a120a; }
+.glove-chip em { font-style: normal; min-width: 34px; color: var(--dust); }
+.glove-chip .grip { width: 34px; height: 4px; border-radius: 2px; background: rgba(214, 204, 186, 0.18); overflow: hidden; }
+.glove-chip .grip i { display: block; height: 100%; background: var(--brass-hi); transform-origin: left center; transform: scaleX(0); transition: transform 0.08s linear; }
+.glove-chip.live { border-color: rgba(196, 154, 74, 0.6); }
+.glove-chip.live em { color: var(--linen); }
+.glove-chip.holding b { box-shadow: 0 0 8px var(--brass-hi); }
+.glove-chip.ghost b { background: transparent; color: #e8f4ff; border: 1.5px solid #e8f4ff; }
+.glove-chip.ghost em { color: #cfe3f2; }
+.glove-chip.lost { border-color: rgba(194, 59, 46, 0.7); }
+.glove-chip.lost b { background: var(--alarm, #C23B2E); color: #fff; }
+.glove-chip.lost em { color: #ff9a85; }
 .vitals .health { height: 8px; border-radius: 1px; border-color: rgba(196,154,74,0.8); }
 .vitals .health > i { background: linear-gradient(180deg, #efe6d4, #cfc4ae); }
 .vitals .health > i.low { background: linear-gradient(180deg, #ff6a4a, #a32a1c); }

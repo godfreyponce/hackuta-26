@@ -83,6 +83,8 @@ export interface WeaponHooks {
   shake(v: number): void;
   playerPos(): THREE.Vector3;
   kbPull(): boolean;
+  /** a weapon has just settled in a hand (after a pull or a direct grab) */
+  onTake?(w: WeaponEnt, side: Hand): void;
 }
 
 export interface HandView {
@@ -108,6 +110,8 @@ const _m = new THREE.Matrix4();
 const _st1 = new THREE.Vector3();
 const _st2 = new THREE.Vector3();
 const _st3 = new THREE.Vector3();
+const _cv = new THREE.Vector3();
+const _cv2 = new THREE.Vector3();
 const Y = new THREE.Vector3(0, 1, 0);
 
 // ── arrow instancing (player + enemy arrows, one draw call per skin) ──────
@@ -476,6 +480,86 @@ export class WeaponManager {
     }
     return best;
   }
+  /**
+   * Webcam targeting (Meta-style distance grab): the weapon nearest in angle to the eye → hand direction,
+   * taken within `enterDeg` and kept until it leaves `exitDeg` (hysteresis against monocular depth noise).
+   * Five points along each weapon count, so pointing at the blade or the hilt both work. The bow and arrows
+   * are never targets (the bow is taken with the left hand / the nock gesture), nor free weapons > 3 m away.
+   */
+  coneTarget(eye: THREE.Vector3, hand: THREE.Vector3, prev: WeaponEnt | null, enterDeg = 15, exitDeg = 22): WeaponEnt | null {
+    const dir = _cv.subVectors(hand, eye);
+    if (dir.lengthSq() < 1e-6) return null;
+    dir.normalize();
+    const enter = THREE.MathUtils.degToRad(enterDeg), exit = THREE.MathUtils.degToRad(exitDeg);
+    let best: WeaponEnt | null = null, bestA = enter;
+    for (const w of this.list) {
+      if ((w.state !== 'racked' && w.state !== 'free') || w.cls === 'arrow' || w.cls === 'bow' || this.inFlight(w)) continue;
+      if (w.state === 'free' && w.center.distanceTo(eye) > 3) continue;
+      const a = this.angleTo(w, eye, dir);
+      if (w === prev && a < exit) return w; // the current target holds until it leaves the wider cone
+      if (a < bestA) { bestA = a; best = w; }
+    }
+    return best;
+  }
+  /** The racked/loose bow if the eye → hand direction points at it within `deg`, else null. */
+  bowInCone(eye: THREE.Vector3, hand: THREE.Vector3, deg = 10): WeaponEnt | null {
+    const dir = _cv.subVectors(hand, eye);
+    if (dir.lengthSq() < 1e-6) return null;
+    dir.normalize();
+    const bow = this.list.find((w) => w.cls === 'bow' && (w.state === 'racked' || w.state === 'free'));
+    return bow && this.angleTo(bow, eye, dir) < THREE.MathUtils.degToRad(deg) ? bow : null;
+  }
+  /** angle (rad) between the eye → hand direction and the nearest of 5 points along the weapon */
+  angleFromEye(w: WeaponEnt, eye: THREE.Vector3, hand: THREE.Vector3) {
+    const dir = _cv.subVectors(hand, eye);
+    if (dir.lengthSq() < 1e-6) return Math.PI;
+    return this.angleTo(w, eye, dir.normalize());
+  }
+  /** smallest angle between `dir` (unit, from `eye`) and 5 points from the weapon's grip to its tip */
+  private angleTo(w: WeaponEnt, eye: THREE.Vector3, dir: THREE.Vector3) {
+    let a = Math.PI;
+    const tip = w.tip.lengthSq() > 0 ? w.tip : w.center;
+    for (let i = 0; i <= 4; i++) {
+      const p = _cv2.copy(w.center).lerp(tip, i / 4).sub(eye);
+      const l = p.length();
+      if (l < 1e-4) continue;
+      a = Math.min(a, Math.acos(clamp(p.dot(dir) / l, -1, 1)));
+    }
+    return a;
+  }
+  /** a loose weapon still flying or tumbling (> 1.5 m/s) — a webcam hand never re-targets what it just threw */
+  private inFlight(w: WeaponEnt) {
+    if (w.state !== 'free') return false;
+    const v = w.body.linvel();
+    return v.x * v.x + v.y * v.y + v.z * v.z > 2.25;
+  }
+  /** a weapon already flying into this hand (point-and-grip pull or Telemachus' gift) */
+  incomingTo(side: Hand) { return this.list.some((w) => w.state === 'incoming' && w.incoming?.toHand === side); }
+  /** Within reach of the hand (the proximity part of grab): no bow, no arrows. */
+  reachFor(h: HandView): WeaponEnt | null {
+    const moving = h.vel.length() > 0.4;
+    let best: WeaponEnt | null = null, bestD = Infinity;
+    for (const w of this.list) {
+      if ((w.state !== 'racked' && w.state !== 'free') || w.cls === 'arrow' || w.cls === 'bow' || this.inFlight(w)) continue;
+      const gp = this.gripWorld(w, _v);
+      const d = gp.distanceTo(h.pos);
+      const r = moving && _v2.subVectors(gp, h.pos).dot(h.vel) > 0 ? 0.5 : 0.35;
+      if (d < r && d < bestD) { best = w; bestD = d; }
+    }
+    return best;
+  }
+  /** Return-to-sender: snatch an enemy arrow out of the air into this (empty) hand. */
+  catchArrowInto(h: HandView): boolean {
+    if (this.held[h.side]) return false;
+    const ar = this.enemies.catchArrow(h.pos, 0.42);
+    if (!ar) return false;
+    const w = this.create('arrow', ARROW_SPEC, null, 'Returned Arrow');
+    w.returnToSender = true;
+    this.attach(w, h);
+    this.fx.sparks(h.pos, null, 10, '#fff1b8');
+    audio.parry();
+    return true;
+  }
   setHover(w: WeaponEnt | null, t: number) {
     if (this.hovered !== w) {
       if (this.hovered?.obj) glow(this.hovered.obj, 0);
@@ -500,17 +584,7 @@ export class WeaponManager {
       if (d < r && d < bestD) { best = w; bestD = d; }
     }
     // return-to-sender: snatch an enemy arrow out of the air
-    if (!best && !rayOnly) {
-      const ar = this.enemies.catchArrow(h.pos, 0.42);
-      if (ar) {
-        const w = this.create('arrow', ARROW_SPEC, null, 'Returned Arrow');
-        w.returnToSender = true;
-        this.attach(w, h);
-        this.fx.sparks(h.pos, null, 10, '#fff1b8');
-        audio.parry();
-        return;
-      }
-    }
+    if (!best && !rayOnly && this.catchArrowInto(h)) return;
     // keyboard/mouse "gravity pull": point at a weapon and grab it from range
     if (!best && aimRay && this.hooks.kbPull()) {
       let bestRay = 0.2;
@@ -590,6 +664,7 @@ export class WeaponManager {
     if (wasLodged) this.stabs.regrab(w); // your hand closes on the hilt still in him
     audio.metal(0.3, 1900);
     if (w.cls === 'bow') audio.lyre([0], 0, 196);
+    this.hooks.onTake?.(w, h.side);
   }
 
   /** what each hand holds moves to the other (the sword goes right so the aspis can go on the left arm) */
