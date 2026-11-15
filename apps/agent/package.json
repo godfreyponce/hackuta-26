@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "tsx --env-file=.env.local src/main.ts",
     "fake-hub": "tsx --env-file=.env.local dev/fake-hub.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "e2e": "tsx --env-file=.env.local dev/mock-e2e.ts"
   },
   "dependencies": {
     "@livekit/rtc-node": "0.13.35",
