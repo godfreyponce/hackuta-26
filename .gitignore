@@ -1,0 +1,11 @@
+# Private team context (research, hub, briefs). Never commit: this repo goes public.
+event/
+.claude/skills/refresh-discord
+
+# Keys and installs stay out of git.
+.env*
+!.env.example
+node_modules/
+
+# Call frames (faces) and logs from local test calls.
+chert/agent/runs/
