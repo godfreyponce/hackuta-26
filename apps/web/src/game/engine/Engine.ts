@@ -234,6 +234,19 @@ export class Engine {
       difficultyMult: () => (this.difficulty === 'easy' ? 0.75 : 1),
       wave: () => Math.max(1, this.director.wave),
       playerYaw: () => this.yaw,
+      playerAiming: () => this.weapons.drawing,
+      onBash: (_e, guarded) => {
+        // a shield driven into a raised guard breaks it (the next blow lands unless you dodge); unguarded it shoves you
+        if (guarded) this.addPlayerPosture(100);
+        else { this.addTrauma(0.3); this.kick(1.4); }
+        this.tutorial('bash', 'SHIELD BASH', 'Hiding behind your guard invites it — lean away from the ✕, or strike first');
+      },
+      onTactic: (_e, kind) => {
+        if (kind === 'read') this.tutorial('read', 'THEY READ YOUR CUTS', 'Change your line — high, low, the other side, a thrust');
+        else if (kind === 'shield') this.tutorial('aspis', 'THE ASPIS TURNS YOUR BLADE', 'Go round it — his sword side, his legs — or batter it aside');
+        else if (kind === 'shieldAside') this.tutorial('aside', 'SHIELD BEATEN ASIDE', 'He is open — strike now');
+        // (a split shield has its own toast in onWeaponHit)
+      },
       playerBlades: () => {
         const out: { tip: THREE.Vector3; vel: THREE.Vector3; base: THREE.Vector3 }[] = [];
         for (const side of ['right', 'left'] as const) {
@@ -319,7 +332,7 @@ export class Engine {
     this.scene.add(this.hands.left.root, this.hands.right.root);
 
     this.director = new Director({
-      spawn: (kind, at) => !!this.enemies.spawn(kind, at),
+      spawn: (kind, at, shield) => !!this.enemies.spawn(kind, at, { shield }),
       aliveCount: () => this.enemies.aliveCount,
       onWaveStart: (w) => this.onWaveStart(w),
       onWaveCleared: (w) => {

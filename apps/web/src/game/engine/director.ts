@@ -9,6 +9,8 @@ export interface WaveDef {
   title: string;
   sub: string;
   spawns: EnemyKind[];
+  /** indices into `spawns` of the men who carry the aspis */
+  shields: number[];
   maxAlive: number;
   interval: [number, number];
 }
@@ -16,11 +18,14 @@ export interface WaveDef {
 // Lines quoted from Odyssey XXII, tr. Butcher & Lang (1879, public domain).
 export const WAVES: WaveDef[] = [
   { n: 1, title: 'The Bow Is Strung', sub: '“Lo, now is this terrible trial ended at last.”',
-    spawns: ['suitor', 'suitor', 'suitor', 'suitor', 'suitor', 'suitor'], maxAlive: 4, interval: [1.4, 2.4] },
+    // a couple of the revelers snatched the old feast-hall shields off the wall
+    spawns: ['suitor', 'suitor', 'suitor', 'suitor', 'suitor', 'suitor'], shields: [2, 4], maxAlive: 4, interval: [1.4, 2.4] },
   { n: 2, title: 'The Wooers Rally', sub: '“Draw your blades, and hold up the tables.”',
-    spawns: ['suitor', 'suitor', 'archer', 'suitor', 'suitor', 'suitor', 'archer', 'suitor', 'suitor', 'suitor'], maxAlive: 5, interval: [1.2, 2.2] },
+    // about half the swordsmen hold up shields (and Melanthius brings more from the storeroom)
+    spawns: ['suitor', 'suitor', 'archer', 'suitor', 'suitor', 'suitor', 'archer', 'suitor', 'suitor', 'suitor'], shields: [1, 3, 5, 8], maxAlive: 5, interval: [1.2, 2.2] },
   { n: 3, title: 'Antinous', sub: 'The first of the wooers, and the last.',
-    spawns: ['boss', 'suitor', 'suitor', 'suitor', 'suitor', 'suitor', 'suitor'], maxAlive: 5, interval: [1.6, 2.6] },
+    // the hoplite core round Antinous (he has his gilded shield until it falls in phase 2)
+    spawns: ['boss', 'suitor', 'suitor', 'suitor', 'suitor', 'suitor', 'suitor'], shields: [1, 2, 4, 5], maxAlive: 5, interval: [1.6, 2.6] },
 ];
 
 const SPAWN_BENCHES: [number, number][] = [[-2.6, -8.4], [2.6, -9.6], [-2.6, -11.2], [2.6, -12.4], [-2.4, -7.2], [2.4, -10.6]];
@@ -28,7 +33,8 @@ const SPAWN_BENCHES: [number, number][] = [[-2.6, -8.4], [2.6, -9.6], [-2.6, -11
 export type DirectorPhase = 'intro' | 'fight' | 'cleared' | 'done';
 
 export interface DirectorHooks {
-  spawn(kind: EnemyKind, at: THREE.Vector3): boolean;
+  /** `shield`: this man carries the aspis (undefined: the default for his kind) */
+  spawn(kind: EnemyKind, at: THREE.Vector3, shield?: boolean): boolean;
   aliveCount(): number;
   onWaveStart(w: WaveDef): void;
   onWaveCleared(w: WaveDef): void;
@@ -106,7 +112,9 @@ export class Director {
         const at = kind === 'boss' ? new THREE.Vector3(rand(-0.6, 0.6), 0, -9.5)
           : k % 3 === 2 ? new THREE.Vector3(door.x + rand(-0.5, 0.5), 0, door.z + 0.6)
           : new THREE.Vector3(bench[0] + rand(-0.3, 0.3), 0, bench[1] + rand(-0.6, 0.6));
-        if (this.hooks.spawn(kind, at)) {
+        // the director says who carries a shield; Melanthius's storeroom (wave 2, 30 s in) arms some of the rest
+        const shield = d.shields.includes(this.spawnIdx) ? true : d.n === 2 ? undefined : false;
+        if (this.hooks.spawn(kind, at, shield)) {
           this.spawnIdx++;
           if (kind === 'boss') this.hooks.onBoss();
           this.nextSpawn = rand(d.interval[0], d.interval[1]);

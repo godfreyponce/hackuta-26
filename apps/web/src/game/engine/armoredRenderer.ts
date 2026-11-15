@@ -148,7 +148,9 @@ export class ArmoredRenderer {
     add('xiphos', xiphos.geometry, xiphos.materials, 1, false, false);
     add('spear', spear.geometry, spear.materials, 1, false, false);
     add('bow', bowGeo, weaponSkin('bow-wood') ?? new THREE.MeshStandardMaterial({ color: '#3b2a1c', roughness: 0.7 }), 1, false, false);
-    add('aspis-scorpion', aspisFace(0.86), shieldMat('scorpion', 'bronze'), 1, true, false);
+    // (the revelers' feast-hall shields: painted hide over a thin bronze facing — duller than a storeroom aspis, so the
+    // device reads in the firelight instead of a black mirror filling your view)
+    add('aspis-scorpion', aspisFace(0.86), shieldMat('scorpion', 'bronze', 0.35), 1, true, false);
     add('aspis-boar-blue', aspisFace(0.9), shieldMat('boar', 'blue', 0.12), 1, true, false);
     add('aspis-lion-gilt', aspisFace(1.0), shieldMat('lion', 'gilt', 0.9), 1, false, false);
     add('aspis-boar-worn', aspisFace(0.9), shieldMat('boar', 'worn', 0.7), 1, false, false);
