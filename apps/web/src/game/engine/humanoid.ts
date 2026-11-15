@@ -41,11 +41,15 @@ export const newPose = (): PartPose[] => Array.from({ length: PART_COUNT }, () =
 
 /** Joint angles driving the FK pose. Angles in radians; "fwd" positive = toward the wooer's front. */
 export interface Anim {
-  armL: [number, number, number]; // fwd swing, abduction, elbow bend
-  armR: [number, number, number];
-  legL: [number, number];         // fwd swing, knee bend
-  legR: [number, number];
+  /** fwd swing, abduction, elbow bend, (optional) roll of the upper arm (+ = forearm swings outward) */
+  armL: [number, number, number, number?];
+  armR: [number, number, number, number?];
+  /** fwd swing, knee bend, (optional) abduction (+ = foot out from the midline) */
+  legL: [number, number, number?];
+  legR: [number, number, number?];
   lean: number; twist: number; bob: number; headPitch: number;
+  /** (optional) the pelvis shifted toward his left (+) / right (−), rig metres — weight onto one foot */
+  sway?: number;
 }
 export const newAnim = (): Anim => ({ armL: [0, 0.12, 0.2], armR: [0, 0.12, 0.2], legL: [0, 0.05], legR: [0, 0.05], lean: 0, twist: 0, bob: 0, headPitch: 0 });
 
@@ -69,7 +73,8 @@ function setPart(p: PartPose, a: THREE.Vector3, b: THREE.Vector3, q: THREE.Quate
  */
 export function solvePose(out: PartPose[], pos: THREE.Vector3, yaw: number, s: number, an: Anim) {
   const root = _root.setFromAxisAngle(_v.set(0, 1, 0), yaw);
-  const W = (lx: number, ly: number, lz: number, o: THREE.Vector3) => o.set(lx * s, (ly + an.bob) * s, lz * s).applyQuaternion(root).add(pos);
+  const sway = an.sway ?? 0;
+  const W = (lx: number, ly: number, lz: number, o: THREE.Vector3) => o.set((lx + sway) * s, (ly + an.bob) * s, lz * s).applyQuaternion(root).add(pos);
 
   // pelvis (static-ish), torso rotates around the spine joint
   const pelvisQ = _q.copy(root);
@@ -94,10 +99,10 @@ export function solvePose(out: PartPose[], pos: THREE.Vector3, yaw: number, s: n
   out[P.Head].b.copy(out[P.Head].c).addScaledVector(_v.set(0, 0.02 * s, 0).applyQuaternion(headQ), 1);
 
   // arms (side: +1 = left (+X), -1 = right)
-  const arm = (side: 1 | -1, ang: [number, number, number], up: P, lo: P) => {
+  const arm = (side: 1 | -1, ang: [number, number, number, number?], up: P, lo: P) => {
     const sh = tLocal(RIG.shoulderX * side, RIG.shoulderY, 0, new THREE.Vector3());
     const uq = new THREE.Quaternion().copy(torsoQ)
-      .multiply(_qT.setFromEuler(_e.set(-ang[0], 0, ang[1] * side, 'ZXY')));
+      .multiply(_qT.setFromEuler(_e.set(-ang[0], (ang[3] ?? 0) * side, ang[1] * side, 'ZXY')));
     const el = _v.copy(DOWN).applyQuaternion(uq).multiplyScalar(RIG.uarm * s).add(sh);
     setPart(out[up], sh, el, uq);
     const lq = new THREE.Quaternion().copy(uq).multiply(_qT.setFromAxisAngle(X, -ang[2]));
@@ -107,9 +112,10 @@ export function solvePose(out: PartPose[], pos: THREE.Vector3, yaw: number, s: n
   arm(1, an.armL, P.UArmL, P.LArmL);
   arm(-1, an.armR, P.UArmR, P.LArmR);
 
-  const leg = (side: 1 | -1, ang: [number, number], up: P, lo: P) => {
+  const leg = (side: 1 | -1, ang: [number, number, number?], up: P, lo: P) => {
     const hip = W(RIG.hipX * side, RIG.hipY, 0, new THREE.Vector3());
-    const uq = new THREE.Quaternion().copy(root).multiply(_qT.setFromAxisAngle(X, -ang[0]));
+    const abd = ang[2] ?? 0;
+    const uq = new THREE.Quaternion().copy(root).multiply(abd ? _qT.setFromEuler(_e.set(-ang[0], 0, abd * side, 'ZXY')) : _qT.setFromAxisAngle(X, -ang[0]));
     const kn = _v.copy(DOWN).applyQuaternion(uq).multiplyScalar(RIG.uleg * s).add(hip);
     setPart(out[up], hip, kn, uq);
     const lq = new THREE.Quaternion().copy(uq).multiply(_qT.setFromAxisAngle(X, ang[1]));
