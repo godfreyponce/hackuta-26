@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
 import { useApp } from '../state/store';
 import { runtime, setupInput } from '../game/runtime';
-import type { CalibrationStepInfo } from '../input';
+import { CALIBRATION_ORDER, type CalibrationStepInfo } from '../input';
 import { Btn, useMenuNav } from './components';
 
 const STEPS = [
@@ -34,6 +34,8 @@ export function Calibration() {
   const [step, setStep] = useState(0);
   const [done, setDone] = useState<boolean[]>([false, false, false, false]);
   const [status, setStatus] = useState<'idle' | 'running' | 'ok' | 'failed'>('idle');
+  // live feedback from Part C's calibration (what it sees right now, progress within the step, why it failed)
+  const [live, setLive] = useState<{ hint: string; progress: number; failed: string }>({ hint: '', progress: 0, failed: '' });
   const [loading, setLoading] = useState(false);
   const camRef = useRef<HTMLDivElement>(null);
   const ref = useMenuNav<HTMLDivElement>(() => go('setup'));
@@ -53,8 +55,10 @@ export function Calibration() {
     }
     const ext = c as unknown as { onCalibrationStep?: (cb: (s: CalibrationStepInfo) => void) => () => void; drawOverlay?: (ctx: CanvasRenderingContext2D, w: number, h: number) => void };
     const off = ext?.onCalibrationStep?.((s) => {
-      setStep(s.index);
-      if (s.done) setDone((d) => d.map((v, i) => (i === s.index ? true : v)));
+      if (s.index >= 1) setStep(s.index - 1); // C numbers the 4 steps from 1 (0 = done/failed)
+      if (s.step === 'done') setDone([true, true, true, true]);
+      else setDone(CALIBRATION_ORDER.map((n) => !!s.passed?.includes(n)));
+      setLive({ hint: s.hint || s.message || '', progress: s.progress ?? 0, failed: s.step === 'failed' ? (s.failedReason ?? '') : '' });
     });
     // skeleton overlay if Part C exposes a drawer
     let raf = 0;
@@ -74,6 +78,7 @@ export function Calibration() {
     const c = runtime.input;
     if (!c?.calibrate) { setStatus('ok'); setDone([true, true, true, true]); return; }
     setStatus('running');
+    setLive({ hint: '', progress: 0, failed: '' });
     try {
       const r = await Promise.race([c.calibrate(), new Promise<never>((_, rej) => setTimeout(() => rej(new Error('timeout')), 45_000))]);
       if (r.ok) { setStatus('ok'); setDone([true, true, true, true]); } else setStatus('failed');
@@ -118,11 +123,12 @@ export function Calibration() {
                 {STEPS.map((s, i) => (
                   <div key={s.id} className={`step ${i === step && status === 'running' ? 'on' : ''} ${done[i] ? 'done' : ''}`}>
                     <span className="ix">{done[i] ? '✓' : i + 1}</span>
-                    <div><div className="h3">{s.label}</div><div className="muted small">{s.hint}</div></div>
+                    <div><div className="h3">{s.label}</div><div className="muted small">{i === step && status === 'running' && live.hint ? live.hint : s.hint}</div>
+                      {i === step && status === 'running' && live.progress > 0 && <div className="calib-progress"><i style={{ width: `${Math.round(live.progress * 100)}%` }} /></div>}</div>
                   </div>
                 ))}
               </div>
-              {status === 'failed' && <div className="error">Couldn’t see you clearly. Face a light, step back, and try again — or use the keyboard.</div>}
+              {status === 'failed' && <div className="error">{live.failed || 'Couldn’t see you clearly.'} Face a light, step back, and try again — or use the keyboard.</div>}
               <div className="row" style={{ flexWrap: 'wrap' }}>
                 {status !== 'ok' && <Btn variant="primary" autoFocus onClick={run} disabled={status === 'running'}>{status === 'running' ? 'Calibrating…' : status === 'failed' ? 'Try again' : 'Start calibration'}</Btn>}
                 {status === 'ok' && <Btn variant="primary" autoFocus onClick={() => go('lobby')}>Continue</Btn>}

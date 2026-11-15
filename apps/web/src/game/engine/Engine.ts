@@ -356,6 +356,8 @@ export class Engine {
       }
       case 'release': {
         const v = this.bodyToWorldDir(new THREE.Vector3(e.vel.x, e.vel.y, e.vel.z));
+        // webcam throws: the speed is good but the direction is 35–56° off (Part C) — steer toward the wooer you meant
+        if (this.input?.kind !== 'keyboard_mouse' && this.weapons.heldBy(e.hand)) this.throwAssist(v);
         this.weapons.release(e.hand, v, this.handViews[e.hand]);
         break;
       }
@@ -371,7 +373,8 @@ export class Engine {
         break;
       }
       case 'drink':
-        if (!this.weapons.drink(e.hand)) this.cb.toast({ kind: 'info', title: 'NOTHING TO DRINK', sub: 'Ask Telemachus for a bottle' }, 1200);
+        // the body tracker can read a drink during a bow draw or a block (Part C): only the keyboard's E gets a reply
+        if (!this.weapons.drink(e.hand) && this.input?.kind === 'keyboard_mouse') this.cb.toast({ kind: 'info', title: 'NOTHING TO DRINK', sub: 'Ask Telemachus for a bottle' }, 1200);
         break;
       case 'call_sign': this.cb.requestCall(); break;
       case 'request_weapon': this.cb.requestWeapon(); break;
@@ -393,6 +396,29 @@ export class Engine {
   }
 
   private bodyToWorldDir(v: THREE.Vector3) { return v.applyAxisAngle(new THREE.Vector3(0, 1, 0), this.yaw); }
+
+  /** Aim assist for a tracked (webcam) throw: the nearest living wooer within 40° of the throw, in front of you,
+   *  takes it — the direction turns to his chest (with a little lob for the distance), the speed stays yours. */
+  private throwAssist(v: THREE.Vector3) {
+    const sp = v.length();
+    if (sp < 2.5) return; // a drop, not a throw
+    const dirH = new THREE.Vector3(v.x, 0, v.z);
+    if (dirH.lengthSq() < 1e-4) return;
+    dirH.normalize();
+    let best: THREE.Vector3 | null = null, bestCos = Math.cos(THREE.MathUtils.degToRad(40));
+    for (const en of this.enemies.list) {
+      if (en.dead || en.kind === 'hero' || en.state === 'idle') continue;
+      const to = new THREE.Vector3().subVectors(en.pose[P.Torso].c, this.eye);
+      const d = Math.hypot(to.x, to.z);
+      if (d < 0.6 || d > 14) continue;
+      const c = (to.x * dirH.x + to.z * dirH.z) / d;
+      if (c > bestCos) { bestCos = c; best = to; }
+    }
+    if (!best) return;
+    const d = Math.hypot(best.x, best.z);
+    best.y += Math.min(0.6, d * d * 0.012); // gravity drop over the distance
+    v.copy(best.normalize().multiplyScalar(sp));
+  }
 
   // ── modes ──
   private setupMenu() {

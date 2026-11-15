@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ComponentType } from 'react';
 import { getFriendViewStream } from '../game/friendView';
-import { loadMotionModule } from '../input';
+import { loadMotionLab } from '../input';
 
 /** ?dev=friendview — shows the friend-view MediaStream in a phone-sized frame with FaceTime chrome mocked in. */
 export function DevFriendView() {
@@ -30,7 +30,7 @@ export function DevMotionLab() {
   const [Comp, setComp] = useState<ComponentType | null>(null);
   const [missing, setMissing] = useState(false);
   useEffect(() => {
-    loadMotionModule().then((m) => { if (m?.MotionLab) setComp(() => m.MotionLab!); else setMissing(true); });
+    loadMotionLab().then((L) => { if (L) setComp(() => L); else setMissing(true); });
   }, []);
   if (Comp) return <div style={{ position: 'fixed', inset: 0, overflow: 'auto', background: '#0b0907', zIndex: 10 }}><Comp /></div>;
   return <div className="devframe"><p className="lore">{missing ? 'Motion Lab not installed yet (packages/motion).' : 'Loading Motion Lab…'}</p></div>;
