@@ -1,0 +1,4 @@
+# Fetched by: pnpm --filter @ithaca/motion fetch-models
+*.task
+*.part
+wasm/
