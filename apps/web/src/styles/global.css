@@ -181,6 +181,8 @@ button, input, select { font: inherit; color: inherit; }
 .vitals.on { opacity: 1; }
 .hands-slots { position: absolute; left: 48px; bottom: 96px; display: flex; gap: 14px; font-size: 11px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--dust); text-shadow: 0 1px 3px #000; }
 .hands-slots .on { color: var(--brass-hi); }
+.hands-slots .driven { color: var(--parchment, #f3e6c4); border-bottom: 1px solid var(--brass-hi); }
+.hands-slots em { font-style: normal; font-weight: 600; letter-spacing: 0.08em; }
 .hud.cine .hands-slots { opacity: 0; }
 .vitals .health { height: 8px; border-radius: 1px; border-color: rgba(196,154,74,0.8); }
 .vitals .health > i { background: linear-gradient(180deg, #efe6d4, #cfc4ae); }

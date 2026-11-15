@@ -38,6 +38,8 @@ export interface WeaponEnt {
   attachT?: number;
   segA: THREE.Vector3; segB: THREE.Vector3; radius: number;
   prevTip: THREE.Vector3; prevCenter: THREE.Vector3; tip: THREE.Vector3; center: THREE.Vector3;
+  /** last step's world blade segment (hilt end → gameplay tip), for swept cut tests */
+  segPrevA: THREE.Vector3; segPrevB: THREE.Vector3; segPrevT: number;
   speed: number;
   prevVel: THREE.Vector3;
   thrownAt: number; throwOrigin: THREE.Vector3;
@@ -98,6 +100,8 @@ const _v = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
 const _v3 = new THREE.Vector3();
 const _q = new THREE.Quaternion();
+const _sa = new THREE.Vector3();
+const _sb = new THREE.Vector3();
 const _m = new THREE.Matrix4();
 const Y = new THREE.Vector3(0, 1, 0);
 
@@ -314,6 +318,7 @@ export class WeaponManager {
       id: this.nextId++, key: `${cls}-${this.nextId}`, cls, spec, name, forged: null, obj, body, collider,
       state: 'racked', hand: null, rackPose: null, rackKind: null,
       segA, segB, radius, prevTip: new THREE.Vector3(), prevCenter: new THREE.Vector3(), tip: new THREE.Vector3(), center: new THREE.Vector3(),
+      segPrevA: new THREE.Vector3(), segPrevB: new THREE.Vector3(), segPrevT: -1,
       speed: 0, prevVel: new THREE.Vector3(), thrownAt: 0, throwOrigin: new THREE.Vector3(), staticHits: 0, throwKills: [],
       alignFlight: false, pin: null, durability: 9999, kills: 0, restT: 0, incoming: null, returnToSender: false, hitCd: new Map(), spinDir: 1, byPlayer: true,
     };
@@ -551,6 +556,15 @@ export class WeaponManager {
     w.hitCd.clear();
     audio.metal(0.3, 1900);
     if (w.cls === 'bow') audio.lyre([0], 0, 196);
+  }
+
+  /** what each hand holds moves to the other (the sword goes right so the aspis can go on the left arm) */
+  swapHands() {
+    const L = this.held.left, R = this.held.right;
+    if (L?.cls === 'bow' || R?.cls === 'bow') return;
+    this.held.left = R; this.held.right = L;
+    if (L) L.hand = 'right';
+    if (R) R.hand = 'left';
   }
 
   release(side: Hand, velBody: THREE.Vector3, h: HandView) {
@@ -840,8 +854,11 @@ export class WeaponManager {
         this.speedHist.set(w.id, hist);
         const peak = hist.reduce((m, h) => (this.realT - h.t <= 0.06 ? Math.max(m, h.sp) : m), sp);
         // slow cuts are never silent: anything above a drift registers (≤1.5 m/s is a touch: tink, no damage)
+        _sa.copy(a); _sb.subVectors(b, a);
+        _sb.addScaledVector(_sb, w.spec.sharp ? 0.12 / Math.max(1e-3, _sb.length()) : 0).add(a);
         if (sp > 0.8 && w.cls !== 'bow') this.tryHit(w, a, b, peak, 'melee', w.tip.clone().sub(w.prevTip).normalize(), realDt);
         else if (sp > 2.2 && w.cls === 'bow') this.tryHit(w, a, b, peak, 'melee', w.tip.clone().sub(w.prevTip).normalize(), realDt);
+        w.segPrevA.copy(_sa); w.segPrevB.copy(_sb); w.segPrevT = this.realT;
       } else if (w.state === 'free') {
         const lv = w.body.linvel();
         const sp = Math.hypot(lv.x, lv.y, lv.z);
@@ -918,7 +935,7 @@ export class WeaponManager {
     const sweepA = w.state === 'held' ? w.prevTip : w.prevCenter;
     const sweepB = w.state === 'held' ? w.tip : w.center;
     const hasSweep = sweepA.lengthSq() > 0 && sweepA.distanceTo(sweepB) < speed * dt * 3 + 0.5;
-    const magnet = w.state === 'held' && speed > 3.5 ? 0.12 : 0;
+    const magnet = w.state === 'held' && speed > 3.5 ? 0.07 : 0;
     // blade meets blade. A CHAMBER (his attack cancelled) needs intent: late in his wind-up (≥ 60%), at speed
     // (≥ 4 m/s on mouse) and driving into his blade. Anything else is a CLASH: ring, sparks, both blades bounce.
     if (w.state === 'held' && speed > 1.2) {
@@ -930,21 +947,40 @@ export class WeaponManager {
           w.hitCd.set(key, this.realT);
           const intent = clash.windupProgress >= 0.6 && speed >= 6 * this.hooks.speedScale() && (dir.dot(_v2.subVectors(clash.e.pos, clash.point).setY(0).normalize()) > 0.3 || Math.abs(dir.dot(clash.bladeDir)) < 0.6);
           if (intent && this.enemies.chamber(clash.e, clash.point)) { this.hooks.onChamber(w, clash.point); return; }
-          const I = Math.min(1, Math.max(0, (speed - 1.5) / 10.5));
-          this.fx.contact(clash.point, dir.clone().negate(), clash.bladeDir, speed, speed >= 2 ? 'clash' : 'block');
+          // intensity in the input's own speed range (a hard mouse cut ≈ a hard real one)
+          const I = Math.min(1, Math.max(0, (speed - 1.0) / (10.5 * this.hooks.speedScale())));
+          if (w.cls === 'shield') {
+            // his blade bites the aspis: wood and bronze rim, not a sword ring
+            this.fx.contact(clash.point, dir.clone().negate(), clash.bladeDir, speed, 'shield');
+            audio.shieldWood(I, audio.pan(clash.point));
+          } else {
+            this.fx.contact(clash.point, dir.clone().negate(), clash.bladeDir, speed, speed >= 2 ? 'clash' : 'block');
+            audio.clashEdge(I, audio.pan(clash.point));
+          }
           this.enemies.onClash(clash.e, speed);
-          audio.clashEdge(I, audio.pan(clash.point));
           this.hooks.onRecoil(w.hand ?? 'right', dir, 0.1, 150);
           return;
         }
       }
     }
-    const hit = this.enemies.testSegment(a, longB, w.radius, hasSweep ? sweepA : undefined, hasSweep ? sweepB : undefined, magnet);
+    // a held edge that crossed a neck this step is judged at the neck, whatever it brushed first
+    const neckHit = w.state === 'held' && w.spec.sharp && w.cls !== 'bow' && this.realT - w.segPrevT < 0.05
+      ? this.enemies.neckCross(a, longB, w.segPrevA, w.segPrevB) : null;
+    const neckFree = neckHit && this.realT - (w.hitCd.get(neckHit.enemy.id * 16 + 14) ?? -1) >= 0.25;
+    const hit = neckFree ? neckHit : this.enemies.testSegment(a, longB, w.radius, hasSweep ? sweepA : undefined, hasSweep ? sweepB : undefined, magnet);
     if (!hit) return;
-    const key = hit.enemy.id * 16 + hit.part;
+    const key = hit.enemy.id * 16 + (neckFree && hit === neckHit ? 14 : hit.part); // the neck keeps its own cooldown
     const last = w.hitCd.get(key) ?? -1;
     if (this.realT - last < 0.25) return;
     w.hitCd.set(key, this.realT);
+    // one real wound per man per swing window (0.45 s): a sweep that brushes three of his parts doesn't cut three
+    // times. Later contacts are grazes (20%, no sever, no stagger); the neck is always judged on its own.
+    const isNeck = !!neckFree && hit === neckHit;
+    const woundKey = hit.enemy.id * 16 + 13;
+    const inWindow = w.state === 'held' && this.realT - (w.hitCd.get(woundKey) ?? -1) < 0.45;
+    const graze = inWindow && !isNeck;
+    const neckRepeat = inWindow && isNeck;
+    if (w.state === 'held' && !inWindow) w.hitCd.set(woundKey, this.realT);
     const zone = this.enemies.zoneOf(hit.part);
     // arrows: damage follows the draw (60 m/s full draw → the old 22 m/s cap; a tap → about a third)
     let relSpeed = source === 'arrow' ? Math.min(22, speed * 0.367) : Math.min(speed, 32);
@@ -966,6 +1002,9 @@ export class WeaponManager {
       strokeLen = 0;
       for (let i = 1; i < recent.length; i++) strokeLen += Math.hypot(recent[i].x - recent[i - 1].x, recent[i].y - recent[i - 1].y, recent[i].z - recent[i - 1].z);
       strokeTurn = 0;
+      // the turn is judged over the stroke itself (last 80 ms), so a back-swing that set it up isn't a "wiggle"
+      const turnWin = hs.filter((h) => this.realT - h.t <= 0.08);
+      if (turnWin.length >= 3) recent.splice(0, recent.length, ...turnWin);
       if (recent.length >= 3) {
         const m = Math.floor(recent.length / 2);
         const d1 = new THREE.Vector3(recent[m].x - recent[0].x, recent[m].y - recent[0].y, recent[m].z - recent[0].z);
@@ -977,7 +1016,10 @@ export class WeaponManager {
       amount: 0, zone, part: hit.part, point: hit.point, dir: dir.clone(), speed: relSpeed, sharp: w.spec.sharp,
       source, impulse: relSpeed * w.spec.massKg * (w.cls === 'blunt' || w.cls === 'shield' ? 14 : 7) + 40, weaponEntId: w.id,
       bladeAxis: w.cls === 'arrow' ? dir.clone() : axis.clone(), massKg: w.spec.massKg * (w.state === 'held' ? HELD_MULT : 1), classDamage: w.spec.damage,
-      bladeA: a.clone(), bladeB: b.clone(), contactFrac, contactSpeed, strokeLen, strokeTurn, noCut: !!cap && !cap.driven,
+      bladeA: a.clone(), bladeB: longB.clone(),
+      bladePrevA: w.state === 'held' && this.realT - w.segPrevT < 0.05 ? w.segPrevA.clone() : undefined,
+      bladePrevB: w.state === 'held' && this.realT - w.segPrevT < 0.05 ? w.segPrevB.clone() : undefined,
+      contactFrac, contactSpeed, strokeLen, strokeTurn, noCut: (!!cap && !cap.driven) || graze, neck: isNeck, graze, neckRepeat,
     };
     if (w.cls === 'bomb' && w.state === 'free') { this.detonate(w); return; }
     const res = this.enemies.damage(hit.enemy, info);
@@ -988,6 +1030,9 @@ export class WeaponManager {
         w.body.setLinvel({ x: -lv.x * 0.25, y: Math.abs(lv.y) * 0.3 + 1.2, z: -lv.z * 0.25 }, true);
         w.alignFlight = false;
         w.body.setAngvel({ x: rand(-8, 8), y: rand(-8, 8), z: rand(-8, 8) }, true);
+      } else if (w.hand && res.glanced && !res.blocked && hit.part === P.Head && !info.neck) {
+        // off the bronze bell the edge SKIDS (it rings and sparks, but carries on down — under the cheek-guards
+        // to the neck, or onto the shoulder); only a cut into a guard or a shield is thrown back
       } else if (w.hand) {
         // your blow was turned: the sword kicks back (research: 0.15–0.2 m over ~150 ms)
         // parried by his guard: knocked well aside, hand slowed for ~0.45 s — he ripostes

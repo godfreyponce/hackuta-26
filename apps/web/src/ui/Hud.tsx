@@ -40,20 +40,22 @@ function HealthBlock() {
 }
 
 function HandsBlock() {
-  const [held, setHeld] = useState<{ l: string | null; r: string | null; q: number }>({ l: null, r: null, q: 0 });
+  const [held, setHeld] = useState<{ l: string | null; r: string | null; q: number; a: 'left' | 'right' | null }>({ l: null, r: null, q: 0, a: null });
   useEffect(() => {
     const t = setInterval(() => {
       const w = runtime.engine?.weapons;
       if (!w) return;
       const l = w.heldBy('left')?.name ?? null, r = w.heldBy('right')?.name ?? null, q = w.quiver;
-      setHeld((p) => (p.l === l && p.r === r && p.q === q ? p : { l, r, q }));
+      // the mouse drives this hand (Shift swaps while held) — only worth showing when both hands hold something
+      const a = l && r ? runtime.engine?.drivenHand ?? null : null;
+      setHeld((p) => (p.l === l && p.r === r && p.q === q && p.a === a ? p : { l, r, q, a }));
     }, 250);
     return () => clearInterval(t);
   }, []);
   return (
     <div className="hands-slots" aria-label="What you hold">
-      <span className={held.l ? 'on' : ''}>L · {held.l ?? 'empty'}</span>
-      <span className={held.r ? 'on' : ''}>R · {held.r ?? 'empty'}</span>
+      <span className={(held.l ? 'on' : '') + (held.a === 'left' ? ' driven' : '')}>L · {held.l ?? 'empty'}{held.a === 'left' ? ' ◂ mouse' : ''}</span>
+      <span className={(held.r ? 'on' : '') + (held.a === 'right' ? ' driven' : '')}>R · {held.r ?? 'empty'}{held.a === 'right' ? ' ◂ mouse' : ''}{held.a === 'right' ? <em className="muted"> · Shift: left</em> : ''}</span>
       <span>Arrows · {held.q}</span>
     </div>
   );
@@ -213,7 +215,10 @@ function Prompts() {
   const draw = useApp((s) => s.hud.bowDraw);
   const kb = useApp((s) => s.inputKind === 'keyboard_mouse');
   const friend = useApp((s) => s.friend?.name ?? 'Telemachus');
+  const solo = useApp((s) => !s.friend);
   if (pinned && !isCallLive(call)) {
+    // fighting alone there's no one to call: point at what you CAN do
+    if (solo) return <div className="prompt big">{kb ? <>Surrounded — <span className="kbd">RMB</span> guard, strike the one who swings</> : 'Surrounded — guard, and strike the one who swings'}</div>;
     return kb
       ? <div className="prompt big">Press <span className="kbd">C</span> to call {friend}</div>
       : <div className="prompt big">Make the phone sign to call {friend}</div>;

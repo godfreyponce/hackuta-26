@@ -30,10 +30,14 @@ export interface KeyboardMouseController extends InputController {
   setArmed(hand: Hand, armed: boolean, bladeM?: number, holding?: boolean, massKg?: number): void;
   /** per hand: what the blade is doing — only a 'driven' blade cuts (keyboard/mouse) */
   intentOf(hand: Hand): 'driven' | 'guard' | 'parked' | 'kicked' | 'none';
+  /** 0 = ward (blade up, at rest) … 1 = cutting lever (point on the reticle) */
+  engageOf(hand: Hand): number;
   /** max commanded point speed (m/s) from the cursor over the last 80 ms — caps how hard a blade can cut */
   readonly vCmd: number;
   /** blade bounces off something: angular kick away from `dir` (body frame), 0..1 strength */
   kickBlade(hand: Hand, dir: { x: number; y: number; z: number }, k: number): void;
+  /** take up / put away the bow (as if B were pressed) — clicking the bow on the table */
+  setBowMode(on: boolean): void;
 }
 
 // resting hands sit low, out of the way of the view (and of the weapon table when you glance down)
@@ -110,6 +114,7 @@ function springBlade(tr: { bdir: THREE.Vector3; omega: THREE.Vector3 }, want: TH
     const ang = Math.atan2(s, tr.bdir.dot(want));
     if (s > 1e-6) axis.multiplyScalar(ang / s); else axis.set(0, 0, 0);
     tr.omega.addScaledVector(axis, wn * wn * h).addScaledVector(tr.omega, -2 * zeta * wn * h);
+    tr.omega.addScaledVector(tr.bdir, -tr.omega.dot(tr.bdir)); // spin about the blade's own axis moves nothing
     const om = tr.omega.length();
     if (om > wmax) tr.omega.multiplyScalar(wmax / om);
     const a = Math.min(wmax, tr.omega.length()) * h;
@@ -252,9 +257,6 @@ export function createKeyboardMouseController(): KeyboardMouseController {
         if (hands[h].holding) emit({ type: 'release', hand: h, vel: { x: 0, y: 0, z: 0 } });
         break;
       }
-      case 'ShiftLeft': case 'ShiftRight':
-        if (!mode.bow) { mode.activeHand = 'left'; notifyMode(); }
-        break;
     }
   }
   function onKeyUp(e: KeyboardEvent) {
@@ -262,10 +264,6 @@ export function createKeyboardMouseController(): KeyboardMouseController {
     keys.delete(k);
     if (!running) return;
     if (k === 'Space' && mode.bow) loose();
-    if ((k === 'ShiftLeft' || k === 'ShiftRight') && mode.activeHand === 'left') {
-      if (hands.left.gripping && !lmb) { /* keep left grip latched */ }
-      mode.activeHand = 'right'; notifyMode();
-    }
   }
   function onPointerMove(e: PointerEvent) {
     if (!target) return;
@@ -415,6 +413,14 @@ export function createKeyboardMouseController(): KeyboardMouseController {
     while (vHist.length > 1 && now - vHist[0].t > 80) vHist.shift();
     vCmdMax = vHist.reduce((m, x) => Math.max(m, x.v), 0);
     const L = hands.left, R = hands.right;
+    // the driven hand: the right, unless only the left holds a blade (after a throw/drop you fight on with it);
+    // Shift drives the other one while held
+    if (!mode.bow) {
+      const base: Hand = !R.armed && L.armed ? 'left' : 'right';
+      const shift = keys.has('ShiftLeft') || keys.has('ShiftRight');
+      const want: Hand = shift ? (base === 'right' ? 'left' : 'right') : base;
+      if (want !== mode.activeHand) { mode.activeHand = want; notifyMode(); }
+    }
     if (mode.bow) {
       // bow arm extended, held left of the sightline and canted; draw hand travels to a chin anchor
       // bow held out to the left of the sightline so the stave never covers the reticle; the draw hand anchors
@@ -448,19 +454,21 @@ export function createKeyboardMouseController(): KeyboardMouseController {
         thrust = damp(thrust, keys.has('KeyW') ? 0.34 : 0, keys.has('KeyW') ? 22 : 9, dt);
         // WARD ↔ LEVER: at rest the blade stands up and across the view (point just above the reticle, hand offset
         // low-right) so the whole sword is on screen wherever the cursor is; moving the mouse with intent engages the
-        // cutting lever (point on the reticle, arm extended). engage rises fast (30/s) and settles slowly (4/s).
+        // cutting lever (point on the reticle, arm extended). engage rises fast (55/s) and settles slowly (4/s).
         const sT = Math.max(smooth(1.5, 6.0, vCmdNow), thrust / 0.34);
-        active.engage += (sT - active.engage) * (1 - Math.exp(-(sT > active.engage ? 30 : 4) * dt));
+        active.engage += (sT - active.engage) * (1 - Math.exp(-(sT > active.engage ? 55 : 4) * dt));
         const s = active.engage;
         const side = mode.activeHand === 'right' ? 1 : -1;
         const ox = 0.44 * (1 - 0.55 * s), oy = -0.36 * (1 - 0.3 * s);
-        ndcPoint(clamp(cursor.x + side * ox, -0.86, 0.86), clamp(cursor.y + oy, -0.8, 0.25), 0.48 + 0.16 * s, active.target);
-        const sh = tmp2.copy(SHOULDER[mode.activeHand]).add(tmp4.set(0, 0, -0.12 * s));
+        // a committed cut lunges: the shoulder rolls ~18 cm forward and the arm reaches to full extension
+        ndcPoint(clamp(cursor.x + side * ox, -0.86, 0.86), clamp(cursor.y + oy, -0.8, 0.25), 0.48 + 0.24 * s, active.target);
+        const sh = tmp2.copy(SHOULDER[mode.activeHand]).add(tmp4.set(0, 0, -0.18 * s));
         const off = tmp4.copy(active.target).sub(sh);
         const ol = off.length();
-        if (ol > 0.68 || ol < 0.3) active.target.copy(sh).addScaledVector(off, clamp(ol, 0.3, 0.68) / Math.max(1e-3, ol));
-        const pWard = ndcPoint(cursor.x + side * 0.08, cursor.y + 0.36, 0.64, tmp2);
-        const pCut = tmp3.copy(aimDir).multiplyScalar(reach + 0.45 + 0.22 * s + thrust);
+        const armMax = 0.68 + 0.06 * s;
+        if (ol > armMax || ol < 0.3) active.target.copy(sh).addScaledVector(off, clamp(ol, 0.3, armMax) / Math.max(1e-3, ol));
+        const pWard = ndcPoint(cursor.x + side * 0.08, cursor.y + 0.28, 0.64, tmp2);
+        const pCut = tmp3.copy(aimDir).multiplyScalar(reach + 0.45 + 0.32 * s + thrust);
         const goal = tmp.copy(pWard).lerp(pCut, s);
         // the blade swings toward that point on a damped angular spring: a flick drags it behind the hand,
         // then it whips through and settles — heavier/longer weapons are slower (Mordhau-style turn cap)
@@ -468,7 +476,9 @@ export function createKeyboardMouseController(): KeyboardMouseController {
         if (!active.bladeInit) { active.bdir.copy(want); active.omega.set(0, 0, 0); active.bladeInit = true; }
         // heavier / longer weapons turn slower (spear ≈ 8.8 rad/s vs xiphos ≈ 16)
         const wn = clamp(16 * Math.sqrt(0.65 / Math.max(0.3, active.blade)) * Math.sqrt(1.1 / Math.max(0.3, active.mass)), 6, 19);
-        springBlade(active, want, dt, wn, 0.55, wn > 12 ? 12 : 8);
+        // a committed cut whips through faster than a lazy wave (the point catches up with where you aimed)
+        // and a committed cut tightens the wrist: the blade drops out of the ward onto the line you aimed
+        springBlade(active, want, dt, wn * (1 + 0.7 * s), 0.55 + 0.1 * s, (wn > 12 ? 12 : 8) * (1 + 0.6 * s));
         const prev = tmp4.copy(active.tip);
         active.tip.copy(active.pos).addScaledVector(active.bdir, active.blade);
         if (dt > 1e-4 && active.wasArmed) active.tipVel.copy(active.tip).sub(prev).multiplyScalar(1 / dt);
@@ -521,6 +531,7 @@ export function createKeyboardMouseController(): KeyboardMouseController {
     cursor,
     get glancing() { return keys.has('Tab'); },
     get vCmd() { return vCmdMax; },
+    engageOf(h) { return hands[h].engage; },
     intentOf(h) {
       const tr = hands[h];
       if (!tr.armed) return 'none';
@@ -555,6 +566,7 @@ export function createKeyboardMouseController(): KeyboardMouseController {
     on(cb) { listeners.add(cb); return () => listeners.delete(cb); },
     onMode(cb) { modeListeners.add(cb); return () => modeListeners.delete(cb); },
     setCamera(m) { cam = m; },
+    setBowMode(on) { setBow(on); },
     kickBlade(h, dir, k) {
       const tr = hands[h];
       if (!tr.armed) return;

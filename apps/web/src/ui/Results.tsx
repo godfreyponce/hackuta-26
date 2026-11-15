@@ -14,6 +14,7 @@ export function Results() {
   const submitted = useApp((s) => s.submitted);
   const session = useApp((s) => s.session);
   const player = useApp((s) => s.player);
+  const kb = useApp((s) => s.inputKind === 'keyboard_mouse');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [leaveArmed, setLeaveArmed] = useState(false);
@@ -102,7 +103,7 @@ export function Results() {
                 </div>
               ))}
             </div>
-          ) : <p className="muted small" style={{ margin: 0 }}>No weapons from the storeroom this match. Next time: call Telemachus and raise both arms.</p>}
+          ) : <p className="muted small" style={{ margin: 0 }}>No weapons from the storeroom this match. Next time: call Telemachus{kb ? <> (<span className="kbd">C</span>), then ask for a weapon (<span className="kbd">Q</span>)</> : ' and raise both arms'}.</p>}
         </section>
       </div>
     </div>

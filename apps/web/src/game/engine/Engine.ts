@@ -70,6 +70,7 @@ export class Engine {
   private timeScale = 1;
   private slow = { active: false, t: 0, hold: 1.6 };
   private hitstopT = 0;
+  private handStickUntil = 0;
   private softSlow = 1;
   private trauma = 0;
   private health = 100;
@@ -85,6 +86,8 @@ export class Engine {
   private forgedKills = new Map<string, number>();
   private eye = new THREE.Vector3().copy(HALL.eye);
   private handViews: Record<Hand, HandView>;
+  private stepViews: Record<Hand, HandView>;
+  private stepPrev: Record<Hand, { pos: THREE.Vector3; fwd: THREE.Vector3; up: THREE.Vector3 }>;
   private handTarget: Record<Hand, THREE.Vector3>;
   private lastState: PlayerInputState | null = null;
   private trackingLost = false;
@@ -139,6 +142,13 @@ export class Engine {
       forward: new THREE.Vector3(0, 0.6, -0.8), up: new THREE.Vector3(side === 'left' ? -1 : 1, 0, 0), vel: new THREE.Vector3(), grip: 0, visible: true,
     });
     this.handViews = { left: mkView('left'), right: mkView('right') };
+    // per-substep hand poses: the frame's hand motion is spread evenly across the physics steps it covers,
+    // so blade speed (tip travel ÷ step) is the same at 30, 60 or 144 fps
+    this.stepViews = { left: mkView('left'), right: mkView('right') };
+    this.stepPrev = {
+      left: { pos: this.handViews.left.pos.clone(), fwd: this.handViews.left.forward.clone(), up: this.handViews.left.up.clone() },
+      right: { pos: this.handViews.right.pos.clone(), fwd: this.handViews.right.forward.clone(), up: this.handViews.right.up.clone() },
+    };
     this.handTarget = { left: this.handViews.left.pos.clone(), right: this.handViews.right.pos.clone() };
   }
 
@@ -188,13 +198,18 @@ export class Engine {
       wave: () => Math.max(1, this.director.wave),
       playerYaw: () => this.yaw,
       playerBlades: () => {
-        const out: { tip: THREE.Vector3; vel: THREE.Vector3 }[] = [];
+        const out: { tip: THREE.Vector3; vel: THREE.Vector3; base: THREE.Vector3 }[] = [];
         for (const side of ['right', 'left'] as const) {
           const w = this.weapons.heldBy(side);
           if (!w || !w.spec.sharp || w.cls === 'bow' || w.cls === 'shield') continue;
-          out.push({ tip: w.tip, vel: w.tip.clone().sub(w.prevTip).multiplyScalar(1 / Math.max(1e-3, this.lastRealDt)) });
+          // tip travel per physics step (each step covers FIXED of real time — hand poses are spread across steps)
+          out.push({ tip: w.tip, base: w.center, vel: w.tip.clone().sub(w.prevTip).multiplyScalar(1 / FIXED) });
         }
         return out;
+      },
+      playerShield: () => {
+        const w = this.weapons.heldBy('left')?.cls === 'shield' ? this.weapons.heldBy('left') : this.weapons.heldBy('right')?.cls === 'shield' ? this.weapons.heldBy('right') : null;
+        return w ? w.center : null;
       },
       onBossPhase: (e, ph) => {
         if (ph === 2) {
@@ -324,6 +339,13 @@ export class Engine {
     switch (e.type) {
       case 'grab': {
         const ray = this.aimRay(e.hand);
+        // what you click decides the hand: the bow is taken up as with B (left hand, bow mode); the aspis goes on the left arm
+        const pick = this.weapons.pickRay(ray);
+        if (pick?.cls === 'bow' && isKeyboardMouse(this.input)) { this.input.setBowMode(true); break; }
+        if (pick?.cls === 'shield' && !this.weapons.drawing && !(this.weapons.heldBy('left') && this.weapons.heldBy('right'))) {
+          if (this.weapons.heldBy('left')) this.weapons.swapHands(); // a sword in the left goes to the right first
+          if (!this.weapons.heldBy('left')) { this.weapons.grab(this.handViews.left, ray, true); break; }
+        }
         if (!this.weapons.heldBy(e.hand)) this.weapons.grab(this.handViews[e.hand], ray);
         else {
           // already armed: the free hand takes what you point at (second blade → dual wield, aspis → sword & shield)
@@ -613,7 +635,12 @@ export class Engine {
   }
 
   // ── time ──
-  hitstop(ms: number) { if (!this.slow.active) this.hitstopT = Math.max(this.hitstopT, ms / 1000); }
+  hitstop(ms: number) {
+    if (this.slow.active) return;
+    this.hitstopT = Math.max(this.hitstopT, ms / 1000);
+    // only a real bite (≥ 70 ms) sticks the hand in the wound; a graze lets the edge carry on through (shoulder → neck)
+    if (ms >= 70) this.handStickUntil = Math.max(this.handStickUntil, this.realT + ms / 1000);
+  }
   addTrauma(v: number) { this.trauma = Math.min(1, this.trauma + v); }
 
   startSlowmo(trick?: TrickshotKind, hold = 1.6, weaponName?: string) {
@@ -658,13 +685,19 @@ export class Engine {
 
     // physics: fixed real-time steps, each advancing sim by FIXED × scale
     this.acc += realDt;
+    const nSteps = Math.min(3, Math.floor(this.acc / FIXED));
     let steps = 0;
-    while (this.acc >= FIXED && steps < 3) {
+    while (steps < nSteps) {
       this.acc -= FIXED;
       steps++;
+      this.lerpStepViews(steps / nSteps);
       const dt = FIXED * scale;
       if (dt <= 0) continue;
       this.simStep(dt, FIXED);
+    }
+    if (steps > 0) for (const side of ['left', 'right'] as const) {
+      const hv = this.handViews[side], pv = this.stepPrev[side];
+      pv.pos.copy(hv.pos); pv.fwd.copy(hv.forward); pv.up.copy(hv.up);
     }
     if (steps === 3) this.acc = 0;
 
@@ -680,14 +713,29 @@ export class Engine {
     if (this.hudTimer > 0.1 && this.mode === 'match') { this.hudTimer = 0; this.pushHud(); }
   }
 
+  /** Hand pose at fraction k of the way from the last stepped pose to this frame's pose. */
+  private lerpStepViews(k: number) {
+    for (const side of ['left', 'right'] as const) {
+      const hv = this.handViews[side], sv = this.stepViews[side], pv = this.stepPrev[side];
+      sv.visible = hv.visible; sv.grip = hv.grip; sv.vel.copy(hv.vel);
+      if (k >= 1) { sv.pos.copy(hv.pos); sv.forward.copy(hv.forward); sv.up.copy(hv.up); sv.quat.copy(hv.quat); continue; }
+      sv.pos.copy(pv.pos).lerp(hv.pos, k);
+      sv.forward.copy(pv.fwd).lerp(hv.forward, k).normalize();
+      sv.up.copy(pv.up).lerp(hv.up, k);
+      sv.up.addScaledVector(sv.forward, -sv.up.dot(sv.forward)).normalize();
+      if (sv.up.lengthSq() < 0.5 || !Number.isFinite(sv.forward.x)) { sv.pos.copy(hv.pos); sv.forward.copy(hv.forward); sv.up.copy(hv.up); sv.quat.copy(hv.quat); continue; }
+      basisQuat(sv.forward, sv.up, sv.quat);
+    }
+  }
+
   private simStep(dt: number, realDt: number) {
     this.simT += dt;
     this.world.timestep = dt;
     if (this.mode === 'match') this.director.update(dt);
     this.enemies.update(dt);
-    this.weapons.prestep(this.handViews, realDt);
+    this.weapons.prestep(this.stepViews, realDt);
     this.world.step(this.weapons.queue);
-    this.weapons.poststep(dt, realDt, this.handViews);
+    this.weapons.poststep(dt, realDt, this.stepViews);
     if (this.mode === 'match') {
       this.weapons.upkeep(dt);
       // easy-mode regen
@@ -722,7 +770,7 @@ export class Engine {
         this.recoilOff[side].multiplyScalar(Math.exp(-realDt / 0.15));
         const prev = hv.pos.clone();
         // parried → input damped; during hitstop the hand that landed the blow sticks in the target and catches up after
-        const rate = this.realT < this.dampUntil[side] ? 10 : this.hitstopT > 0 ? 6 : 42;
+        const rate = this.realT < this.dampUntil[side] ? 10 : this.realT < this.handStickUntil ? 6 : 42;
         hv.pos.lerp(tgt, 1 - Math.exp(-rate * realDt)); // ≈0.5/frame at 60 fps, hides jitter
         hv.vel.copy(hv.pos).sub(prev).multiplyScalar(1 / Math.max(1e-3, realDt));
         hv.forward.set(hs.forward.x, hs.forward.y, hs.forward.z).applyAxisAngle(new THREE.Vector3(0, 1, 0), this.yaw).normalize();
@@ -801,9 +849,11 @@ export class Engine {
       // three tiers: empty-handed glance at the table · cursor low = leg tilt · Tab or the very bottom edge = full
       // glance at the weapon table (the telegraph arcs keep drawing, but the centre wooer's neck leaves the frame)
       const tab = isKeyboardMouse(this.input) && this.input.glancing;
-      const full = tab || cy < -0.92;
+      // armed with a wooer in reach, a low cut must not drag the view off the fight: only Tab looks down then
+      const fighting = !unarmed && near;
+      const full = tab || (cy < -0.92 && !fighting);
       const glance = this.mode === 'match' && unarmed && !near ? 0.45 : 0;
-      const target = full ? 0.62 : Math.max(glance, cy < -0.55 ? Math.min(1, (-0.55 - cy) / 0.37) * 0.42 : 0);
+      const target = full ? (fighting ? 0.5 : 0.62) : Math.max(glance, cy < -0.55 && !fighting ? Math.min(1, (-0.55 - cy) / 0.37) * 0.42 : 0);
       this.lookDown = damp(this.lookDown, target, full ? 12 : 6, realDt);
       const pitch = -0.1 - this.lookDown + Math.sin(t * 0.7 * Math.PI * 2) * sway * 0.6 + (Math.sin(t * 37) * 0.5 + Math.sin(t * 23) * 0.5) * maxRot * sh;
       const yaw = this.yaw + Math.sin(t * 0.43 * Math.PI * 2) * sway + Math.sin(t * 31 + 1) * maxRot * sh;
@@ -871,6 +921,9 @@ export class Engine {
     const R = motion ? 0.3 : 0.27;
     const win = motion ? 0.3 : 0.22;
     const perfectWin = motion ? 0.26 : 0.15;
+    // a raised guard (RMB / aspis) is perfect only when it comes up in the last 0.12 s (keyboard) — the glint is
+    // your cue at 0.6 s; raising early is a plain block
+    const raiseWin = motion ? perfectWin + 0.05 : 0.12;
     const now = this.realT;
     const guardUp = this.blocking && now >= this.guardBrokenUntil;
     // 1) blade in the path of the blow
@@ -896,14 +949,14 @@ export class Engine {
         }
         prevIn = inPath;
       }
-      if (enteredAt >= 0 && (recentMove >= 1.0 || this.blocking)) {
-        if (this.blocking && now - this.guardAt <= perfectWin + 0.05 && freshGuard) return 'perfect'; // guard raised just in time
+      // (with RMB held the directional guard rule below decides alone — a blade idling in the lane doesn't widen it)
+      if (enteredAt >= 0 && recentMove >= 1.0 && !this.blocking) {
         if (now - enteredAt <= perfectWin && entries <= 2 && opposing >= 2.0) return 'perfect';
         return opposing >= 3.0 || (legacySpeed > 3 && opposing >= 3.0) ? 'beat' : 'block';
       }
       // the aspis: raised (RMB) it takes anything; carried low it still covers your left flank
       if (this.weapons.shieldHeld()) {
-        if (guardUp) return now - this.guardAt <= perfectWin + 0.05 && this.guardAt - this.prevGuardAt >= 0.6 && this.guardAt - this.guardUpEndT >= 0.3 ? 'perfect' : 'shield';
+        if (guardUp) return now - this.guardAt <= raiseWin && freshGuard ? 'perfect' : 'shield';
         if (a.dir === 'left') return 'shield';
       }
       // RMB guard is directional: it covers overheads and the side your blade is on (cursor x); a blow from the
@@ -914,7 +967,7 @@ export class Engine {
         const side = cx >= 0.15 ? 'right' : cx <= -0.15 ? 'left' : (isKeyboardMouse(this.input) ? this.input.mode.activeHand : 'right');
         const covered = a.dir === 'top' || a.dir === side;
         if (!covered) return 'guard';
-        return now - this.guardAt <= perfectWin + 0.05 && this.guardAt - this.prevGuardAt >= 0.6 && this.guardAt - this.guardUpEndT >= 0.3 ? 'perfect' : 'block';
+        return now - this.guardAt <= raiseWin && freshGuard ? 'perfect' : 'block';
       }
     }
     // 2) dodge: lean past ~0.3 m (or crouch under a horizontal cut)
@@ -1065,6 +1118,8 @@ export class Engine {
   forgedOnRack(): string[] { return this.weapons.list.filter((w) => w.forged).map((w) => w.forged!.weaponId); }
   get inputState() { return this.lastState; }
   get handPositions() { return this.handViews; }
+  /** the hand the mouse drives (keyboard/mouse only; null in bow mode) */
+  get drivenHand(): Hand | null { return isKeyboardMouse(this.input) && !this.input.mode.bow ? this.input.mode.activeHand : null; }
   get isBlocking() { return this.blocking; }
   get timeScaleValue() { return this.timeScale; }
 

@@ -191,13 +191,18 @@ class Audio {
     const last = this.lastVoice.get(kind) ?? -1;
     if (t0 - last < 0.035) return null;
     this.lastVoice.set(kind, t0);
-    if (this.voices >= 10) return null;
+    // the voice budget: the sounds that tell you what happened (steel on steel, a limb or head coming off) may
+    // borrow past the cap; ambience-class hits wait their turn. Each voice frees its slot when it has rung out.
+    const priority = kind === 'clash' || kind === 'parry' || kind === 'severThump' || kind === 'decap' || kind === 'block' || kind === 'shield';
+    if (this.voices >= (priority ? 16 : 12)) return null;
     this.voices++;
-    setTimeout(() => { this.voices = Math.max(0, this.voices - 1); }, 1500);
+    setTimeout(() => { this.voices = Math.max(0, this.voices - 1); }, kind === 'parry' ? 1400 : 900);
     const g = ctx.createGain();
     g.gain.value = db(-22 + 22 * Math.pow(clamp01(I), 0.7) + trimDb + (Math.random() - 0.5) * 3);
     const lp = ctx.createBiquadFilter();
-    lp.type = 'lowpass'; lp.Q.value = 0.5; lp.frequency.value = Math.min(18000, 2500 * Math.pow(2, 2.8 * clamp01(I)));
+    // metal keeps its bite at any intensity (a dull clash reads as a miss); soft classes still darken when light
+    const lpMin = kind === 'clash' || kind === 'parry' ? 8000 : 0;
+    lp.type = 'lowpass'; lp.Q.value = 0.5; lp.frequency.value = Math.min(18000, Math.max(lpMin, 2500 * Math.pow(2, 2.8 * clamp01(I))));
     const pn = ctx.createStereoPanner();
     pn.pan.value = Math.max(-0.9, Math.min(0.9, pan));
     g.connect(lp).connect(pn).connect(this.sfx);
@@ -271,6 +276,7 @@ class Audio {
 
   /** blade meets blade: edge-on-edge ring (enemy blade ×0.93) */
   clashEdge(I = 0.7, pan = 0, tanphi = 0.0009, trimDb = 0) {
+    I = Math.max(0.45, I); // bronze meeting bronze always rings out of the mix, even at mouse speeds
     const v = this.voice('clash', I, pan, 0.35, trimDb); if (!v) return;
     const { dest, t0 } = v;
     this.tick(dest, t0, 3500, 2.5, 0.7);
