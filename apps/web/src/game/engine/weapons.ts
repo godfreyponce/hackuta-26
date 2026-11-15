@@ -1,6 +1,5 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { WEAPON_CLASSES, type Hand, type WeaponClass, type WeaponSpawn, type WeaponClassSpec } from '@ithaca/shared';
 import { RAPIER, GROUPS } from './physics';
 import { HALL } from './hall';
@@ -9,6 +8,7 @@ import type { Enemy, EnemyManager, HitInfo, HitResult } from './enemies';
 import type { Fx } from './fx';
 import { audio } from './audio';
 import { PREFAB_BUILDERS, buildArrow, buildAspis, buildBlade, buildBowStave, buildSpear } from './weaponGeo';
+import { bakeWeapon, dressWeapon, prewarmWeaponSkins } from './weaponSkins';
 import { ballisticDir, basisQuat, clamp, rand, rotateToward } from './math';
 
 export type WClass = WeaponClass | 'bow' | 'arrow';
@@ -105,28 +105,14 @@ const _sb = new THREE.Vector3();
 const _m = new THREE.Matrix4();
 const Y = new THREE.Vector3(0, 1, 0);
 
-// ── arrow instancing (player + enemy arrows, 1 draw call) ─────────────────
+// ── arrow instancing (player + enemy arrows, one draw call per skin) ──────
 class ArrowInstancer {
   readonly mesh: THREE.InstancedMesh;
   private n = 0;
   constructor(cap = 64) {
-    const g = buildArrow(0.78);
-    g.updateMatrixWorld(true);
-    const parts: THREE.BufferGeometry[] = [];
-    g.traverse((o) => {
-      const m = o as THREE.Mesh;
-      if (!m.isMesh) return;
-      let geo = m.geometry.clone().applyMatrix4(m.matrixWorld);
-      geo = geo.index ? geo.toNonIndexed() : geo;
-      for (const k of Object.keys(geo.attributes)) if (k !== 'position' && k !== 'normal') geo.deleteAttribute(k);
-      const col = new THREE.Color(m.name === 'head' ? '#a07a45' : m.name === 'fletch' ? '#8a2a1a' : '#cdbf9e');
-      const arr = new Float32Array(geo.attributes.position.count * 3);
-      for (let i = 0; i < geo.attributes.position.count; i++) { arr[i * 3] = col.r; arr[i * 3 + 1] = col.g; arr[i * 3 + 2] = col.b; }
-      geo.setAttribute('color', new THREE.BufferAttribute(arr, 3));
-      parts.push(geo);
-    });
-    const merged = mergeGeometries(parts);
-    this.mesh = new THREE.InstancedMesh(merged, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.55, metalness: 0.35, side: THREE.DoubleSide }), cap);
+    // reed shaft, leaf-bladed bronze head, barred feathers: one group (draw call) per textured skin
+    const { geometry, materials } = bakeWeapon(buildArrow(0.78));
+    this.mesh = new THREE.InstancedMesh(geometry, materials, cap);
     this.mesh.frustumCulled = false;
     this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   }
@@ -155,12 +141,22 @@ function lyingQuat(axis: THREE.Vector3, face: THREE.Vector3) {
 }
 
 const HOVER = new THREE.Color('#c8902a');
+/** Hover glow. Weapon skins are shared materials, so a lit mesh gets its own clone (same textures) while it glows. */
+const glowMats = new WeakMap<THREE.Mesh, { base: THREE.Material; own: THREE.MeshStandardMaterial; emissive: THREE.Color }>();
 function glow(o: THREE.Object3D, k: number) {
   o.traverse((m) => {
-    const mat = (m as THREE.Mesh).material as THREE.MeshStandardMaterial | undefined;
-    if (!mat || !('emissive' in mat)) return;
-    if (!mat.userData.baseEmissive) mat.userData.baseEmissive = mat.emissive.clone();
-    mat.emissive.copy(mat.userData.baseEmissive as THREE.Color).lerp(HOVER, k);
+    const mesh = m as THREE.Mesh;
+    if (!mesh.isMesh || Array.isArray(mesh.material)) return;
+    let e = glowMats.get(mesh);
+    if (!e) {
+      const mat = mesh.material as THREE.MeshStandardMaterial;
+      if (!('emissive' in mat) || k <= 0) return;
+      const own = mat.userData.shared ? mat.clone() : mat;
+      e = { base: mat, own, emissive: mat.emissive.clone() };
+      glowMats.set(mesh, e);
+    }
+    e.own.emissive.copy(e.emissive).lerp(HOVER, k);
+    mesh.material = k > 0 ? e.own : e.base;
   });
 }
 
@@ -274,6 +270,7 @@ export class WeaponManager {
   constructor(private world: World, private enemies: EnemyManager, private fx: Fx, private hooks: WeaponHooks, private staticHandles: Set<number>) {
     this.eventQueue = new RAPIER.EventQueue(true);
     this.group.add(this.arrows.mesh);
+    prewarmWeaponSkins();
     const strMat = new THREE.MeshStandardMaterial({ color: '#8f8068', roughness: 0.6 });
     for (let i = 0; i < 2; i++) {
       const s = new THREE.Mesh(new THREE.CylinderGeometry(0.0014, 0.0014, 1, 4), strMat);
@@ -323,6 +320,7 @@ export class WeaponManager {
       alignFlight: false, pin: null, durability: 9999, kills: 0, restT: 0, incoming: null, returnToSender: false, hitCd: new Map(), spinDir: 1, byPlayer: true,
     };
     if (obj) {
+      dressWeapon(obj, { merge: true }); // shared textured bronze / ash / leather skins (weaponSkins.ts), one mesh per skin
       obj.traverse((o) => { if ((o as THREE.Mesh).isMesh) { (o as THREE.Mesh).castShadow = false; } });
       this.group.add(obj);
     }

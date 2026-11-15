@@ -4,9 +4,11 @@ import * as THREE from 'three';
 import { P, PART_DIM, type PartPose } from './humanoid';
 import { faceTexture, shieldTexture } from './textures';
 import {
-  aspisFace, bracer, cloak, corinthianHelmet, corinthianSlit, crest, greave, linothorax, muscleCuirass, peltMantle, pilosCap, pteruges, stumpCap, xiphosProp, trouserThigh, trouserCalf, lacing, circlet, brassTrim, quiver,
+  aspisFace, bracer, cloak, corinthianHelmet, corinthianSlit, crest, greave, linothorax, muscleCuirass, peltMantle, pilosCap, pteruges, stumpCap, trouserThigh, trouserCalf, lacing, circlet, brassTrim, quiver,
 } from './armorGeo';
 import type { Stump } from './enemies';
+import { buildBlade, buildSpear } from './weaponGeo';
+import { bakeWeapon, skinSet, weaponSkin } from './weaponSkins';
 
 export type PropKind = 'none' | 'xiphos' | 'spear' | 'bow';
 export type ShieldKind = 'none' | 'round';
@@ -80,24 +82,36 @@ export class ArmoredRenderer {
     beltGeo.scale(1.12, 1, 0.86);
     beltGeo.rotateX(Math.PI / 2);
     beltGeo.translate(0, 0.07, 0);
-    const spearGeo = new THREE.CylinderGeometry(0.015, 0.015, 2.1, 5);
-    spearGeo.translate(0, -0.55, 0);
-    const tipGeo = new THREE.ConeGeometry(0.03, 0.2, 5);
-    tipGeo.rotateX(Math.PI);
-    tipGeo.translate(0, -1.7, 0);
+    // the wooers' arms are the same textured bronze / ash / leather as Odysseus' own (shared skins, a group per skin)
+    // xiphos: point toward −Y in the hand frame (the forearm points down); tip ≈ 0.63 m like the deflection segment
+    const xiphos = bakeWeapon(buildBlade(0.69), new THREE.Matrix4().makeRotationX(Math.PI));
+    // dory: butt-spike 0.5 m behind the fist, leaf head ending ≈ 1.8 m ahead along −Y; leather wrap at the fist
+    const dory = buildSpear(2.2);
+    const doryGrip = dory.getObjectByName('grip');
+    if (doryGrip) doryGrip.position.y = 0.255;
+    const spear = bakeWeapon(dory, new THREE.Matrix4().makeTranslation(0, 0.255, 0).multiply(new THREE.Matrix4().makeRotationX(Math.PI)));
     const arc: THREE.Vector3[] = [];
     for (let i = 0; i <= 10; i++) { const t = (i / 10) * 2 - 1; arc.push(new THREE.Vector3(0, t * 0.55, -0.12 * (1 - t * t))); }
-    const bowGeo = new THREE.TubeGeometry(new THREE.CatmullRomCurve3(arc), 16, 0.016, 5, false);
+    const bowCurve = new THREE.CatmullRomCurve3(arc);
+    const bowGeo = new THREE.TubeGeometry(bowCurve, 24, 0.016, 6, false);
+    { // grain along the limbs (tube u runs along the curve → swap into v, metres per 0.5 m tile)
+      const uv = bowGeo.getAttribute('uv') as THREE.BufferAttribute;
+      const L = bowCurve.getLength();
+      for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getY(i), (uv.getX(i) * L) / 0.5);
+    }
 
     const shieldMat = (d: Parameters<typeof shieldTexture>[0], f: Parameters<typeof shieldTexture>[1], metal = 0.75) => {
       const map = shieldTexture(d, f).clone();
       map.center.set(0.5, 0.5);
       map.rotation = Math.PI / 2; // cylinder-cap UVs are quarter-turned
       map.needsUpdate = true;
-      return new THREE.MeshStandardMaterial({ map, metalness: metal, roughness: 0.45 });
+      // hammered-bronze relief and roughness from the weapon skins (shared image, tiled ×5 across the face)
+      const cs = skinSet('cast');
+      const tiled = (t: THREE.Texture) => { const c = t.clone(); c.repeat.set(5, 5); c.needsUpdate = true; return c; };
+      return new THREE.MeshStandardMaterial({ map, metalness: metal, roughness: 0.62, roughnessMap: tiled(cs.orm), normalMap: tiled(cs.normal), normalScale: new THREE.Vector2(0.6, 0.6) });
     };
 
-    const add = (key: string, geo: THREE.BufferGeometry, mat: THREE.Material, perSlot = 1, shadow = false, color = true) => {
+    const add = (key: string, geo: THREE.BufferGeometry, mat: THREE.Material | THREE.Material[], perSlot = 1, shadow = false, color = true) => {
       const mesh = new THREE.InstancedMesh(geo, mat, capacity * perSlot);
       mesh.frustumCulled = false;
       mesh.castShadow = shadow;
@@ -129,10 +143,9 @@ export class ArmoredRenderer {
     add('greave', greave(), metal(), 2, false);
     add('bracer', bracer(), metal(), 2, false);
     add('cloak', cloak(), cloth(THREE.DoubleSide), 1, false);
-    add('xiphos', xiphosProp(), new THREE.MeshStandardMaterial({ color: '#b08850', metalness: 0.95, roughness: 0.3 }), 1, false, false);
-    add('spear', spearGeo, new THREE.MeshStandardMaterial({ color: '#5a4026', roughness: 0.8 }), 1, false, false);
-    add('spearTip', tipGeo, new THREE.MeshStandardMaterial({ color: '#a07a45', metalness: 0.9, roughness: 0.35 }), 1, false, false);
-    add('bow', bowGeo, new THREE.MeshStandardMaterial({ color: '#3b2a1c', roughness: 0.7 }), 1, false, false);
+    add('xiphos', xiphos.geometry, xiphos.materials, 1, false, false);
+    add('spear', spear.geometry, spear.materials, 1, false, false);
+    add('bow', bowGeo, weaponSkin('bow-wood') ?? new THREE.MeshStandardMaterial({ color: '#3b2a1c', roughness: 0.7 }), 1, false, false);
     add('aspis-scorpion', aspisFace(0.86), shieldMat('scorpion', 'bronze'), 1, true, false);
     add('aspis-boar-blue', aspisFace(0.9), shieldMat('boar', 'blue', 0.12), 1, true, false);
     add('aspis-lion-gilt', aspisFace(1.0), shieldMat('lion', 'gilt', 0.9), 1, false, false);
@@ -239,8 +252,7 @@ export class ArmoredRenderer {
       this.sc.setScalar(s);
       this.m.compose(handR.b, this.q, this.sc);
       this.set('spear', slot, 0, this.m);
-      this.set('spearTip', slot, 0, this.m);
-    } else { this.set('spear', slot, 0, null); this.set('spearTip', slot, 0, null); }
+    } else this.set('spear', slot, 0, null);
     const armL = pose[P.LArmL];
     const fwd = opts.forward ?? this.v.set(0, 0, 1).applyQuaternion(pel.q);
     if (look.prop === 'bow' && showProp) {
