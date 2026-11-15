@@ -4,30 +4,33 @@
 //       https://docs.stability.ai/api-reference/3d/stable-point-aware-3d.md (4 credits per success)
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { basename, extname } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const [imagePath, texture = "1024", model = "fast"] = process.argv.slice(2);
 const ENDPOINTS = { fast: "stable-fast-3d", spar: "stable-point-aware-3d" };
-if (!imagePath) throw new Error("usage: sf3d.mjs <image> [512|1024|2048]");
 
-const bytes = await readFile(imagePath);
-const form = new FormData();
-form.append("image", new Blob([bytes], { type: imagePath.endsWith(".png") ? "image/png" : "image/jpeg" }), basename(imagePath));
-form.append("texture_resolution", texture);
+/** Returns the GLB bytes. Throws on any non-200 answer. */
+export async function imageTo3d(bytes, { texture = "1024", model = "fast", mime = "image/png", filename = "object.png" } = {}) {
+  const form = new FormData();
+  form.append("image", new Blob([bytes], { type: mime }), filename);
+  form.append("texture_resolution", String(texture));
 
-const started = performance.now();
-const res = await fetch(`https://api.stability.ai/v2beta/3d/${ENDPOINTS[model]}`, {
-  method: "POST",
-  headers: { authorization: `Bearer ${process.env.STABILITY_API_KEY}` },
-  body: form,
-});
-const body = Buffer.from(await res.arrayBuffer());
-const ms = Math.round(performance.now() - started);
-
-if (res.status !== 200) {
-  console.error(`HTTP ${res.status} after ${ms} ms: ${body.toString().slice(0, 500)}`);
-  process.exit(1);
+  const res = await fetch(`https://api.stability.ai/v2beta/3d/${ENDPOINTS[model]}`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${process.env.STABILITY_API_KEY}` },
+    body: form,
+  });
+  const body = Buffer.from(await res.arrayBuffer());
+  if (res.status !== 200) throw new Error(`${model}: HTTP ${res.status}: ${body.toString().slice(0, 500)}`);
+  return body;
 }
-await mkdir("out", { recursive: true });
-const out = `out/${basename(imagePath, extname(imagePath))}-${model}-${texture}.glb`;
-await writeFile(out, body);
-console.log(JSON.stringify({ ms, model, texture, kb: Math.round(body.length / 1024), out }));
+
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  const [imagePath, texture = "1024", model = "fast"] = process.argv.slice(2);
+  if (!imagePath) throw new Error("usage: sf3d.mjs <image> [512|1024|2048] [fast|spar]");
+  const started = performance.now();
+  const glb = await imageTo3d(await readFile(imagePath), { texture, model, mime: imagePath.endsWith(".png") ? "image/png" : "image/jpeg", filename: basename(imagePath) });
+  await mkdir("out", { recursive: true });
+  const out = `out/${basename(imagePath, extname(imagePath))}-${model}-${texture}.glb`;
+  await writeFile(out, glb);
+  console.log(JSON.stringify({ ms: Math.round(performance.now() - started), model, texture, kb: Math.round(glb.length / 1024), out }));
+}

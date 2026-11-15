@@ -1,12 +1,23 @@
 event/
 # ithaca
 node_modules/
+# Private team notes. Never commit: this repo goes public.
+event/
+.claude/skills/refresh-discord
+
+# Keys stay out of git. The negation must stay below every .env line.
 .env
 .env.*
-!.env.example
+.env*
 *.local
+!.env.example
+
+# Installs and build output.
+node_modules/
 dist/
 out/
+
+# Recordings, frames and logs from local test calls.
 recordings/
 apps/agent/dev/captures/
 *.log
@@ -20,3 +31,4 @@ coverage/
 
 # iCloud sync-conflict copies ("file 2.ts") — never commit them
 * 2.*
+chert/agent/runs/

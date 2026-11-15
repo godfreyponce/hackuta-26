@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Armory test</title>
+<style>
+  :root { color-scheme: dark; --bg: #102834; --card: #173a4a; --ink: #e6f2ee; --dim: #8fb3ad; --accent: #8de0c4; --warn: #ffc876; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.4 system-ui, sans-serif; }
+  header { padding: 12px 16px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  h1 { font-size: 18px; margin: 0; }
+  #status { color: var(--dim); }
+  button { background: var(--card); color: var(--ink); border: 1px solid var(--dim); border-radius: 6px; padding: 6px 12px; cursor: pointer; }
+  #weapons { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; padding: 0 16px 16px; }
+  .card { background: var(--card); border-radius: 10px; padding: 12px; display: grid; gap: 8px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .name { font-weight: 700; font-size: 17px; }
+  .tag { background: var(--bg); border-radius: 4px; padding: 2px 6px; font-size: 13px; }
+  .swatch { width: 22px; height: 22px; border-radius: 4px; border: 1px solid var(--dim); }
+  .crop { max-width: 100%; max-height: 220px; object-fit: contain; border-radius: 6px; background: #000; }
+  .view { width: 100%; aspect-ratio: 1; border-radius: 6px; background: var(--bg); display: grid; place-items: center; color: var(--dim); }
+  .view canvas { width: 100% !important; height: 100% !important; display: block; }
+  .state { color: var(--warn); font-size: 13px; }
+  #log { color: var(--dim); font: 12px/1.4 Menlo, monospace; padding: 0 16px 16px; white-space: pre-wrap; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<header>
+  <h1>Armory test</h1>
+  <span id="status">connecting</span>
+  <button id="callme">Send call_me</button>
+</header>
+<div id="weapons"></div>
+<div id="log"></div>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+const $ = id => document.getElementById(id);
+const cards = new Map();
+let socket;
+
+function logLine(text) { $('log').textContent = `${new Date().toLocaleTimeString()} ${text}\n` + $('log').textContent; }
+
+function connect() {
+  socket = new WebSocket('ws://localhost:8787');
+  socket.onopen = () => { $('status').textContent = 'connected'; };
+  socket.onclose = () => { $('status').textContent = 'disconnected, retrying'; setTimeout(connect, 1000); };
+  socket.onmessage = event => {
+    const m = JSON.parse(event.data);
+    logLine(m.type === 'weapon' ? `weapon ${m.id} ${m.name} ${m.class} ${m.color}` : JSON.stringify(m));
+    if (m.type === 'weapon') addWeapon(m);
+    else if (m.type === 'weapon_model') showModel(m);
+    else if (m.type === 'weapon_failed') setState(m.id, 'no 3D model, template stays');
+  };
+}
+$('callme').onclick = () => socket?.readyState === 1 && socket.send(JSON.stringify({ type: 'call_me' }));
+
+function addWeapon(m) {
+  const card = document.createElement('div');
+  card.className = 'card';
+  card.innerHTML = `<div class="row"><span class="name"></span><span class="tag"></span><span class="swatch"></span><span class="tag hex"></span></div>
+    <img class="crop" alt="">
+    <div class="view">forging 3D model</div>
+    <div class="state">waiting for weapon_model</div>`;
+  card.querySelector('.name').textContent = m.name;
+  card.querySelector('.tag').textContent = m.class;
+  card.querySelector('.swatch').style.background = m.color;
+  card.querySelector('.hex').textContent = m.color;
+  card.querySelector('.crop').src = m.crop;
+  $('weapons').prepend(card);
+  cards.set(m.id, { card, arrived: performance.now() });
+}
+
+function setState(id, text) { const c = cards.get(id); if (c) c.card.querySelector('.state').textContent = text; }
+
+function showModel(m) {
+  const c = cards.get(m.id);
+  if (!c) return;
+  const view = c.card.querySelector('.view');
+  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  const size = view.clientWidth;
+  renderer.setSize(size, size);
+  renderer.setPixelRatio(devicePixelRatio);
+  const scene = new THREE.Scene();
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x334455, 2.5));
+  const sun = new THREE.DirectionalLight(0xffffff, 2);
+  sun.position.set(2, 3, 2);
+  scene.add(sun);
+  const camera = new THREE.PerspectiveCamera(35, 1, 0.01, 100);
+  new GLTFLoader().load(m.glb, gltf => {
+    const model = gltf.scene;
+    const box = new THREE.Box3().setFromObject(model);
+    const center = box.getCenter(new THREE.Vector3());
+    const radius = box.getSize(new THREE.Vector3()).length() / 2;
+    model.position.sub(center);
+    const spin = new THREE.Group();
+    spin.add(model);
+    scene.add(spin);
+    camera.position.set(0, radius * 0.6, radius * 3);
+    camera.lookAt(0, 0, 0);
+    view.textContent = '';
+    view.appendChild(renderer.domElement);
+    setState(m.id, `3D model in ${((performance.now() - c.arrived) / 1000).toFixed(1)} s after weapon`);
+    renderer.setAnimationLoop(t => { spin.rotation.y = t / 1000; renderer.render(scene, camera); });
+  }, undefined, error => setState(m.id, `GLB load failed: ${error.message || error}`));
+}
+
+connect();
+</script>
+</body>
+</html>
