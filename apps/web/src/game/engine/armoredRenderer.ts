@@ -41,6 +41,8 @@ export interface SlotLook {
 }
 
 const ZERO = new THREE.Matrix4().makeScale(0, 0, 0);
+/** layers worn on the body (wound decals sit on the outermost of these or the skin) */
+const WORN = ['limbs', 'head', 'chiton', 'skirt', 'muscle', 'lino', 'pteruges', 'belt', 'corinthian', 'pilos', 'greave', 'bracer', 'cloak', 'pelt', 'trouserThigh', 'trouserCalf', 'trim'];
 const FLASH = new THREE.Color(1, 0.8, 0.55);
 const LEG_SKIN_DARK = new THREE.Color('#3b2a1c');
 const FACE_SHADOW = new THREE.Color('#5a4434');
@@ -168,6 +170,39 @@ export class ArmoredRenderer {
     if (l.on[i] !== on) { l.shown += on ? 1 : -1; l.on[i] = on; }
     if (color && l.mesh.instanceColor) l.mesh.setColorAt(i, color);
   }
+
+  /**
+   * First surface of this warrior's worn layers (chiton, cuirass, belt, skirt, cloak, greaves… and the capsule body
+   * when there's no realistic one) along a ray — where a wound decal has to sit to be seen over the clothing.
+   */
+  surfaceRay(slot: number, origin: THREE.Vector3, dir: THREE.Vector3, far: number): { point: THREE.Vector3; normal: THREE.Vector3; dist: number } | null {
+    const rc = this.rayCaster ??= new THREE.Raycaster();
+    rc.set(origin, dir.clone().normalize()); rc.near = 0; rc.far = far;
+    const probe = this.rayProbe ??= new THREE.Mesh();
+    let best: { point: THREE.Vector3; normal: THREE.Vector3; dist: number } | null = null;
+    for (const key of WORN) {
+      const l = this.L[key];
+      if (!l) continue;
+      for (let k = 0; k < l.perSlot; k++) {
+        const i = slot * l.perSlot + k;
+        if (!l.on[i]) continue;
+        probe.geometry = l.mesh.geometry;
+        probe.material = l.mesh.material;
+        l.mesh.getMatrixAt(i, probe.matrixWorld);
+        const hits: THREE.Intersection[] = [];
+        probe.raycast(rc, hits);
+        for (const h of hits) {
+          if (best && h.distance >= best.dist) continue;
+          const n = h.face ? h.face.normal.clone().transformDirection(probe.matrixWorld) : dir.clone().negate();
+          if (n.dot(rc.ray.direction) > 0) n.negate(); // (double-sided cloth: face the ray)
+          best = { point: h.point.clone(), normal: n, dist: h.distance };
+        }
+      }
+    }
+    return best;
+  }
+  private rayCaster: THREE.Raycaster | null = null;
+  private rayProbe: THREE.Mesh | null = null;
 
   hide(slot: number) {
     for (const key of Object.keys(this.L)) for (let k = 0; k < this.L[key].perSlot; k++) this.set(key, slot, k, null);

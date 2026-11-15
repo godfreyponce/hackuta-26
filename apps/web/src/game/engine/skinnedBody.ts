@@ -283,6 +283,99 @@ export class SkinnedBody {
     b.matrixWorld.multiplyMatrices(b.parent!.matrixWorld, b.matrix);
   }
 
+  // ── surface rays (stab entry / exit points on the actual skin or armour) ──
+  private partBones = new Map<number, Set<THREE.Object3D>>();
+  private domBone = new Map<THREE.SkinnedMesh, Uint16Array>();
+
+  /** bones whose skin belongs to a part (dominant influence) */
+  private bonesFor(part: number): Set<THREE.Object3D> {
+    const hit = this.partBones.get(part);
+    if (hit) return hit;
+    const s = new Set<THREE.Object3D>();
+    const M = this.map;
+    const add = (b: THREE.Object3D | undefined, deep = true) => { if (!b) return; if (deep) b.traverse((o) => { if ((o as THREE.Bone).isBone) s.add(o); }); else s.add(b); };
+    const cut = (b: THREE.Object3D | undefined) => { b?.traverse((o) => s.delete(o)); };
+    const limb = (upper: THREE.Bone | undefined, lower: THREE.Bone | undefined) => { add(upper); cut(lower); add(lower, false); };
+    switch (part) {
+      case P.Torso: add(M.spine0 ?? M.hips); cut(M.head); cut(M.uarmL); cut(M.uarmR); cut(M.thighL); cut(M.thighR); add(M.neck, false); add(M.head, false); add(M.uarmL, false); add(M.uarmR, false); break;
+      case P.Pelvis: add(M.hips, false); add(M.spine0, false); add(M.spine1, false); add(M.thighL, false); add(M.thighR, false); break;
+      case P.Head: add(M.head); add(M.neck, false); break;
+      case P.UArmL: limb(M.uarmL, M.larmL); break;
+      case P.UArmR: limb(M.uarmR, M.larmR); break;
+      case P.LArmL: add(M.larmL); break;
+      case P.LArmR: add(M.larmR); break;
+      case P.ULegL: limb(M.thighL, M.calfL); break;
+      case P.ULegR: limb(M.thighR, M.calfR); break;
+      case P.LLegL: add(M.calfL); break;
+      case P.LLegR: add(M.calfR); break;
+    }
+    this.partBones.set(part, s);
+    return s;
+  }
+  private domFor(mesh: THREE.SkinnedMesh): Uint16Array {
+    let d = this.domBone.get(mesh);
+    if (d) return d;
+    const si = mesh.geometry.attributes.skinIndex, sw = mesh.geometry.attributes.skinWeight;
+    d = new Uint16Array(si.count);
+    for (let i = 0; i < si.count; i++) {
+      let best = 0, bw = -1;
+      for (let k = 0; k < 4; k++) { const w = sw.getComponent(i, k); if (w > bw) { bw = w; best = si.getComponent(i, k); } }
+      d[i] = best;
+    }
+    this.domBone.set(mesh, d);
+    return d;
+  }
+
+  /**
+   * First front-facing surface of the given part's skin (or the armour grown on it) along a ray, in the current
+   * pose. Only triangles whose skin belongs to that part are tested, and vertices are skinned once each.
+   */
+  surfaceRay(part: number, origin: THREE.Vector3, dir: THREE.Vector3, far: number): { point: THREE.Vector3; normal: THREE.Vector3; bone: THREE.Object3D; mesh?: string } | null {
+    this.root.updateMatrixWorld(true);
+    const allowed = this.bonesFor(part);
+    const ray = new THREE.Ray(origin.clone(), dir.clone().normalize());
+    const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), pt = new THREE.Vector3();
+    let best = far;
+    let out: { point: THREE.Vector3; normal: THREE.Vector3; bone: THREE.Object3D; mesh?: string } | null = null;
+    for (const mesh of this.meshes) {
+      const g = mesh.geometry;
+      const index = g.index;
+      if (!mesh.visible || (index && index.count === 0)) continue;
+      const bones = mesh.skeleton.bones;
+      const ok = new Uint8Array(bones.length);
+      bones.forEach((bn, i) => { if (allowed.has(bn)) ok[i] = 1; });
+      const dom = this.domFor(mesh);
+      // double-sided layers (the armour shell) are hit from either side: the first surface along the ray is what shows
+      const both = (Array.isArray(mesh.material) ? mesh.material[0] : mesh.material).side === THREE.DoubleSide;
+      const n = g.attributes.position.count;
+      const cache = new Float32Array(n * 3);
+      const have = new Uint8Array(n);
+      const get = (vi: number, o: THREE.Vector3) => {
+        if (have[vi]) return o.fromArray(cache, vi * 3);
+        mesh.getVertexPosition(vi, o).applyMatrix4(mesh.matrixWorld);
+        o.toArray(cache, vi * 3); have[vi] = 1;
+        return o;
+      };
+      const tris = index ? index.count / 3 : n / 3;
+      for (let t = 0; t < tris; t++) {
+        const ia = index ? index.getX(t * 3) : t * 3, ib = index ? index.getX(t * 3 + 1) : t * 3 + 1, ic = index ? index.getX(t * 3 + 2) : t * 3 + 2;
+        if (!ok[dom[ia]] && !ok[dom[ib]] && !ok[dom[ic]]) continue;
+        if (ray.distanceSqToPoint(get(ia, a)) > 0.05) continue; // > 22 cm from the ray
+        get(ib, b); get(ic, c);
+        const p = ray.intersectTriangle(a, b, c, !both, pt);
+        if (!p) continue;
+        const d = p.distanceTo(ray.origin);
+        if (d < best) {
+          best = d;
+          const nrm = new THREE.Vector3().subVectors(b, a).cross(c.clone().sub(a)).normalize();
+          if (nrm.dot(ray.direction) > 0) nrm.negate();
+          out = { point: p.clone(), normal: nrm, bone: bones[dom[ia]], mesh: mesh.name };
+        }
+      }
+    }
+    return out;
+  }
+
   /**
    * Cut a limb: snapshot the deformed skin belonging to that bone subtree into a static mesh expressed in
    * the frame of `framePose` (the severed part's pose), then collapse those bones on the body.

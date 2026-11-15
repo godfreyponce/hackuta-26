@@ -436,6 +436,16 @@ export class Fx {
     this.gore.emit(n, { pos, vel: this.tmpV.copy(dir).multiplyScalar(2.2).add(this.tmpV2.set(0, 1.2, 0)), spread: 1.1, life: [0.4, 0.9], size: [0.02, 0.055], color: '#8a1712', color2: '#2a0806', alpha: 0.95, gravity: 9.8, drag: 0.8 });
   }
 
+  /** a directed jet of blood (stab entry / exit, pull-out, an artery) */
+  spurt(pos: THREE.Vector3, dir: THREE.Vector3, n = 12, speed = 2.6, spread = 0.45) {
+    this.gore.emit(n, { pos, vel: this.tmpV.copy(dir).normalize().multiplyScalar(speed), spread, posJitter: 0.01, life: [0.4, 0.9], size: [0.016, 0.045], color: '#8f1611', color2: '#2a0806', alpha: 0.95, gravity: 9.8, drag: 0.5 });
+  }
+
+  /** heavy drops falling off a blade or a wound */
+  drip(pos: THREE.Vector3, n = 1) {
+    this.gore.emit(n, { pos, vel: this.tmpV.set(0, -0.25, 0), spread: 0.06, posJitter: 0.008, life: [0.45, 0.8], size: [0.012, 0.024], color: '#6e0f0b', color2: '#300806', alpha: 1, gravity: 9.8, drag: 0.15 });
+  }
+
   explosion(pos: THREE.Vector3) {
     this.flame.emit(40, { pos, spread: 4.5, life: [0.35, 0.8], size: [0.8, 1.6], grow: 1.6, color: '#fff0c0', color2: '#c03a10', alpha: 0.9, drag: 4, gravity: -1.5 });
     this.add.emit(70, { pos, spread: 9, life: [0.4, 1.3], size: [0.03, 0.07], color: '#ffd08a', color2: '#ff4a10', gravity: 7, drag: 1.2 });

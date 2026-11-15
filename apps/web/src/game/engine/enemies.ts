@@ -4,7 +4,7 @@
 import * as THREE from 'three';
 import { RAPIER } from './physics';
 import {
-  P, PART_COUNT, PART_DIM, PART_ZONE, PARENT, addBodies, destroyRagdoll, emptyBodies, jointPoint, newAnim, newPose,
+  P, PART_COUNT, PART_DIM, PART_ZONE, PARENT, RIG, addBodies, destroyRagdoll, emptyBodies, jointPoint, newAnim, newPose,
   readRagdoll, severJoint, solvePose, subtree, type Anim, type PartPose, type Ragdoll, type Zone,
 } from './humanoid';
 import { ArmoredRenderer, type SlotLook, type ShieldKind } from './armoredRenderer';
@@ -13,7 +13,8 @@ import { SkinnedBody, type BodyTemplate } from './skinnedBody';
 import { HALL } from './hall';
 import { ballisticDir, clamp, damp, pick, rand, segSegDist2 } from './math';
 import type { Fx } from './fx';
-import { audio } from './audio';
+import { audio, voiceFor, type VoiceProfile } from './audio';
+import { WoundDecals, type Wound } from './wounds';
 
 export type EnemyKind = 'suitor' | 'archer' | 'boss' | 'hero';
 
@@ -26,7 +27,29 @@ export function combatLog(entry: Record<string, unknown>) {
 }
 export type AttackDir = 'left' | 'right' | 'top' | 'thrust';
 type EState = 'idle' | 'approach' | 'wait' | 'windup' | 'strike' | 'recover' | 'recoil' | 'stagger' | 'broken' | 'block'
-  | 'aim' | 'shoot' | 'down' | 'getup' | 'maimed' | 'dead';
+  | 'aim' | 'shoot' | 'down' | 'getup' | 'maimed' | 'impaled' | 'dead';
+
+/** where a point went in: decides how long a man lives with it */
+export type Vital = 'throat' | 'face' | 'heart' | 'chest' | 'gut' | 'limb';
+/** a living man with a blade in him (set by the stab system, read by his AI) */
+export interface Impale {
+  weaponId: number;
+  part: number;
+  vital: Vital;
+  t0: number;
+  /** sim time he dies on the blade (Infinity = not a mortal wound yet) */
+  dieAt: number;
+  /** sim time his sword falls from his hand */
+  dropAt: number;
+  /** sim time he wrenches himself off a shallow wound (Antinous: almost at once) */
+  freeAt: number;
+  wantFree: boolean;
+  through: boolean;
+  depth: number;
+  nextGroanT: number;
+  /** can this wound kill him (Antinous: only once he's broken or spent) */
+  mortal: boolean;
+}
 
 /** What happened when a wooer's blow arrived (decided by the engine from the player's blade, lean and guard). */
 export type Outcome = 'perfect' | 'beat' | 'block' | 'shield' | 'guard' | 'perfectDodge' | 'dodge' | 'hit';
@@ -47,7 +70,7 @@ export interface Attack {
   feinted?: boolean;
 }
 
-export interface Stump { part: number; local: THREE.Vector3; until: number }
+export interface Stump { part: number; local: THREE.Vector3; until: number; /** arterial jet strength (severed neck) */ jet?: number }
 
 export interface Enemy {
   id: number;
@@ -118,6 +141,20 @@ export interface Enemy {
   neckWoundUntil: number;
   /** severed limbs of the realistic body, following their gib bodies */
   gibs: { part: number; mesh: THREE.Object3D }[];
+  /** his voice (pitch, tract length, rasp) — every wooer sounds like himself */
+  voice: VoiceProfile;
+  lastVocalT: number;
+  /** stab holes and gashes on his body (decals riding the bones) */
+  wounds: Wound[];
+  /** run through and still standing */
+  impale: Impale | null;
+  /** blades lodged in him (alive or dead): his body isn't tidied away while a blade is in it */
+  lodged: number;
+  /** vertical offset the blade holds him at (m, + = lifted) */
+  impaleLift: number;
+  /** a pulled-out stab bleeds (hp/s) until */
+  woundBleedUntil: number;
+  woundBleedRate: number;
 }
 
 export interface HitInfo {
@@ -156,9 +193,13 @@ export interface HitInfo {
   graze?: boolean;
   /** a neck crossing inside that window: it can still take the head, but a miss is only a graze (no new gash) */
   neckRepeat?: boolean;
+  /** a held point driven along its blade into him (the stab system lodges it if it gets through): no knock-back,
+   *  the stab sound and his scream instead of a cut and a grunt */
+  stab?: boolean;
 }
 
 export type HitKind = 'flesh' | 'glance' | 'blocked' | 'shield' | 'kill';
+export type ArmorClass = 'bronze' | 'linen' | 'thigh' | 'gap';
 export interface HitResult {
   blocked: boolean;          // shield/parry stopped it (player blade should recoil)
   parried: boolean;          // wooer actively blocked with sword/shield
@@ -170,9 +211,16 @@ export interface HitResult {
   finisher: boolean;
   damage: number;
   enemy: Enemy;
+  /** a thrust along the blade that got through his armour (the stab system may lodge it) */
+  penetrated?: boolean;
+  /** what the point went through */
+  armor?: ArmorClass;
+  neck?: boolean;
 }
 
 export interface EnemyArrow { pos: THREE.Vector3; vel: THREE.Vector3; prev: THREE.Vector3; alive: boolean; stuck: number; fromId: number }
+
+export interface KillHow { decapitated: boolean; finisher: boolean; severed: number | null; impaled?: Vital | 'through' }
 
 export interface EnemyHooks {
   /** current wave (1..3) — sets attack turns and archetype skill */
@@ -185,7 +233,7 @@ export interface EnemyHooks {
   playerShield?(): THREE.Vector3 | null;
   /** Antinous changes phase (2: shield dropped + calls suitors, 3: desperate) */
   onBossPhase(e: Enemy, phase: number): void;
-  onKill(e: Enemy, info: HitInfo, rag: Ragdoll, how: { decapitated: boolean; finisher: boolean; severed: number | null }): void;
+  onKill(e: Enemy, info: HitInfo, rag: Ragdoll, how: KillHow): void;
   onPlayerHit(dmg: number, source: 'melee' | 'arrow', from: THREE.Vector3, heavy: boolean): void;
   /** decide the outcome of a blow at its impact moment */
   resolveIncoming(e: Enemy, a: Attack): Outcome;
@@ -217,7 +265,6 @@ const MAX_RAGDOLLS = 12;
 const RAGDOLL_TTL = 14;
 
 // Armor penetration (m/s): cut / thrust — research brief §5
-type ArmorClass = 'bronze' | 'linen' | 'thigh' | 'gap';
 // B&S Update 11: armour cancels slashing — bronze turns all but the hardest cuts (and those do half); thrust gaps
 const VPEN: Record<ArmorClass, [number, number]> = { bronze: [14, 7], linen: [7, 4], thigh: [4, 2.5], gap: [1.5, 1.5] };
 const BLUNT_ABSORB: Record<ArmorClass, number> = { bronze: 0.45, linen: 0.3, thigh: 0.15, gap: 0 };
@@ -237,6 +284,10 @@ const _n3 = new THREE.Vector3();
 const _n4 = new THREE.Vector3();
 const _sw1 = new THREE.Vector3();
 const _sw2 = new THREE.Vector3();
+const _a1 = new THREE.Vector3();
+const _a2 = new THREE.Vector3();
+const _a3 = new THREE.Vector3();
+const _aq = new THREE.Quaternion();
 
 const _v = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
@@ -271,8 +322,12 @@ export class EnemyManager {
     return b;
   }
 
+  /** stab holes and gashes riding on the bodies */
+  readonly woundDecals = new WoundDecals();
+
   constructor(private world: World, private fx: Fx, private hooks: EnemyHooks, capacity = 24) {
     this.renderer = new ArmoredRenderer(capacity);
+    this.renderer.group.add(this.woundDecals.group);
     this.freeSlots = Array.from({ length: capacity }, (_, i) => capacity - 1 - i);
   }
 
@@ -300,6 +355,7 @@ export class EnemyManager {
       name: boss ? 'Antinous' : undefined, pinned: false, feastSeed: Math.random() * 10, forward: new THREE.Vector3(0, 0, 1),
       charging: false, volleys: 0, blockTimes: [], flinch: { t: -9, dir: new THREE.Vector3(), amount: 0 }, bleedUntil: 0, gibs: [], staggerT: -9, throatBleedUntil: 0, neckWoundUntil: 0,
       guard: { zone: 'none', setAt: -9, nextReactAt: 0 }, ringT: 0, guardBeatenUntil: 0, staggerCause: '', neckWoundFrom: 0, guardPose: [0.32, 0.24, 0.7], riposteDir: null, lastCounterT: -9, postureWinT: -9, postureWinSum: 0, chainLeft: 0, chainAt: 0, chainDir: null, lastFeintT: -9, bossPhase: 1, bossBrokeInPhase: 0,
+      voice: voiceFor(this.nextId * 7 + slot, boss), lastVocalT: -9, wounds: [], impale: null, lodged: 0, impaleLift: 0, woundBleedUntil: 0, woundBleedRate: 0,
     };
     if (kind === 'archer') {
       const side = Math.random() < 0.5 ? -1 : 1;
@@ -381,8 +437,10 @@ export class EnemyManager {
       this.renderer.flash[e.slot] = Math.max(0, this.renderer.flash[e.slot] - dt * 5);
       if (e.dead) {
         const pel = e.ragdoll?.bodies[P.Pelvis]?.translation();
-        const tooClose = !!pel && !e.pinned && Math.hypot(pel.x, pel.z) < 1.8 && this.t - e.diedAt > 3;
-        if (this.t - e.diedAt > RAGDOLL_TTL || tooClose) {
+        // a corpse with your blade in it stays until the blade comes out (or 40 s)
+        const held = e.lodged > 0 && this.t - e.diedAt < 40;
+        const tooClose = !!pel && !e.pinned && !held && Math.hypot(pel.x, pel.z) < 1.8 && this.t - e.diedAt > 3;
+        if ((this.t - e.diedAt > RAGDOLL_TTL && !held) || tooClose) {
           if (tooClose && pel) this.fx.dust(new THREE.Vector3(pel.x, pel.y, pel.z), 10);
           this.release(e);
           this.list.splice(i, 1);
@@ -397,6 +455,14 @@ export class EnemyManager {
         if (Math.random() < dt * 6) this.fx.blood(jointPoint(e.pose, P.Head, _n1), e.forward, 3);
         if (e.hp <= 0) {
           this.kill(e, { amount: 999, zone: 'head', part: P.Head, point: jointPoint(e.pose, P.Head, new THREE.Vector3()), dir: e.forward.clone().negate(), speed: 1, sharp: true, source: 'melee', impulse: 40, weaponEntId: null }, { decapitated: false, finisher: false, severed: null });
+          continue;
+        }
+      }
+      // a stab pulled out of him bleeds
+      if (this.t < e.woundBleedUntil && e.state !== 'impaled') {
+        e.hp -= e.woundBleedRate * dt;
+        if (e.hp <= 0) {
+          this.kill(e, { amount: 999, zone: 'torso', part: P.Torso, point: e.pose[P.Torso].c.clone(), dir: e.forward.clone().negate(), speed: 1, sharp: true, source: 'melee', impulse: 30, weaponEntId: null }, { decapitated: false, finisher: false, severed: null });
           continue;
         }
       }
@@ -416,11 +482,32 @@ export class EnemyManager {
   private bleed(e: Enemy, dt: number) {
     for (const s of e.stumps) {
       if (this.t > s.until) continue;
+      const p = e.pose[s.part];
+      if (s.jet) {
+        // a severed neck: the artery pumps in beats (~2.2 Hz), strong at first, weakening
+        const age = this.t - (s.until - 2.6);
+        const beat = Math.pow(Math.max(0, Math.sin(age * Math.PI * 2 * 2.2)), 2);
+        const k = Math.max(0, 1 - age / 2.6) * s.jet;
+        if (Math.random() < dt * 90 * (0.25 + 0.75 * beat) * k + dt * 8) {
+          const w = _v.copy(s.local).applyQuaternion(p.q).add(p.c);
+          const d = _v2.copy(s.local).normalize().applyQuaternion(p.q);
+          this.fx.spurt(w, d, 2, (1.2 + 2.8 * beat) * (0.4 + 0.6 * k), 0.35);
+        }
+        continue;
+      }
       if (Math.random() < dt * 40) {
-        const p = e.pose[s.part];
         const w = _v.copy(s.local).applyQuaternion(p.q).add(p.c);
         const d = _v2.copy(s.local).normalize().applyQuaternion(p.q);
         this.fx.blood(w, d, 2);
+      }
+    }
+    for (const wd of e.wounds) {
+      if (this.t > wd.bleedUntil || e.severed.has(wd.part)) continue;
+      const fresh = Math.max(0, (wd.bleedUntil - this.t) / 4);
+      if (Math.random() < dt * (6 + 22 * fresh)) {
+        this.woundDecals.worldOf(e, wd, _v, _v2);
+        if (fresh > 0.5 && Math.random() < 0.4) this.fx.spurt(_v, _v2, 1, 0.6 + fresh, 0.2);
+        else this.fx.drip(_v.addScaledVector(_v2, 0.01), 1);
       }
     }
   }
@@ -538,7 +625,11 @@ export class EnemyManager {
     }
   }
 
-  private setState(e: Enemy, s: EState, dur = 0) { e.state = s; e.stateT = 0; e.stateDur = dur; e.staggerCause = ''; }
+  private setState(e: Enemy, s: EState, dur = 0) {
+    // a man held on a blade stays on it (a second blow can maim him, knock him flat or kill him — not free him)
+    if (e.state === 'impaled' && e.impale && s !== 'impaled' && s !== 'maimed' && s !== 'down') return;
+    e.state = s; e.stateT = 0; e.stateDur = dur; e.staggerCause = '';
+  }
 
   private updateAI(e: Enemy, dt: number, head: THREE.Vector3) {
     const a = e.anim;
@@ -565,7 +656,7 @@ export class EnemyManager {
       }
     }
 
-    const rooted = ['windup', 'strike', 'recover', 'recoil', 'stagger', 'broken', 'block', 'aim', 'shoot', 'getup', 'maimed'].includes(e.state);
+    const rooted = ['windup', 'strike', 'recover', 'recoil', 'stagger', 'broken', 'block', 'aim', 'shoot', 'getup', 'maimed', 'impaled'].includes(e.state);
     if (!rooted && target) {
       const goal = _v2.copy(target);
       if (e.pos.z < HALL.hearth.z + 2.3 && e.pos.z > HALL.hearth.z - 2.6 && Math.abs(e.pos.x) < 2.15) goal.set(e.pos.x >= 0 ? 2.25 : -2.25, 0, HALL.hearth.z + 2.4);
@@ -595,12 +686,13 @@ export class EnemyManager {
         moving = true;
       } else { e.vel.x = damp(e.vel.x, 0, 8, dt); e.vel.z = damp(e.vel.z, 0, 8, dt); }
     } else { e.vel.x = damp(e.vel.x, 0, 10, dt); e.vel.z = damp(e.vel.z, 0, 10, dt); }
+    if (e.state === 'impaled') e.vel.set(0, 0, 0); // the blade holds him where he is
     e.pos.addScaledVector(e.vel, dt);
     e.pos.x = clamp(e.pos.x, -2.75, 2.75);
     // in front of the weapon table they stop at its far edge; beside it (flank slots) they may come level with you
     e.pos.z = clamp(e.pos.z, HALL.zFar + 0.8, Math.abs(e.pos.x) > 1.0 ? -0.45 : -1.25);
     const r0 = Math.hypot(e.pos.x, e.pos.z);
-    if (r0 < 1.3) { e.pos.x *= 1.3 / r0; e.pos.z *= 1.3 / r0; }
+    if (r0 < 1.3 && e.state !== 'impaled') { e.pos.x *= 1.3 / r0; e.pos.z *= 1.3 / r0; }
 
     const speed = Math.hypot(e.vel.x, e.vel.z);
     const faceYaw = (moving && speed > 0.5 && distPlayer > 3.2 && !(e.kind === 'archer' && !e.charging))
@@ -609,7 +701,7 @@ export class EnemyManager {
     while (dy > Math.PI) dy -= Math.PI * 2;
     while (dy < -Math.PI) dy += Math.PI * 2;
     // attacks track until 250 ms before impact, then lock
-    const locked = e.attack?.locked;
+    const locked = e.attack?.locked || e.state === 'impaled'; // a man on a blade turns only as the blade turns him
     if (!locked) e.yaw += dy * (1 - Math.exp(-8 * dt));
     e.forward.set(Math.sin(e.yaw), 0, Math.cos(e.yaw));
 
@@ -692,6 +784,44 @@ export class EnemyManager {
         }
         break;
       }
+      case 'impaled': {
+        const im = e.impale;
+        if (!im) { this.setState(e, 'stagger', 0.5); break; }
+        const T = this.t - im.t0;
+        const k = Math.min(1, T / 0.3);            // the clutch comes in
+        const sink = Math.min(1, T / 1.8);         // and the knees go
+        const throat = im.vital === 'throat' || im.vital === 'face';
+        // the shock: arms thrown out for an instant, then the free hand clutches at the wound
+        const shock = Math.max(0, 1 - T / 0.18);
+        // (FK arm: [forward swing, abduction (− = toward the midline), elbow bend])
+        const sag: [number, number, number] = [0.3 - 0.15 * sink, 0.22 + 0.4 * shock, 0.45 - 0.2 * sink]; // sword arm hangs
+        if (throat) {
+          // hands fly to the throat (and the blade in it)
+          a.armL = [0.95 * k, -0.35 * k + 0.5 * shock, 2.25 * k];
+          a.armR = e.armed ? sag : [0.95 * k, -0.35 * k + 0.5 * shock, 2.25 * k];
+        } else {
+          // the free hand grabs at the blade in front of his belly; disarmed, both hands do
+          const grab: [number, number, number] = [0.32 * k - 0.3 * shock, -0.3 * k + 0.55 * shock, 1.25 * k];
+          a.armL = grab;
+          a.armR = e.armed ? sag : [grab[0], grab[1], grab[2]];
+        }
+        // he folds over the blade (throat: head back) — gently: the wound itself is held on the blade
+        a.lean = (throat ? -0.06 : 0.12) + (throat ? 0.04 : 0.16) * sink - 0.06 * shock;
+        a.headPitch = throat ? -0.18 : 0.25 + 0.3 * sink;
+        a.legL = [0.35 * sink, 0.95 * sink]; a.legR = [-0.12 * sink, 0.55 * sink];
+        a.bob = -0.08 * sink;
+        a.twist = Math.sin(this.t * 37 + e.feastSeed) * 0.025 * (1 - 0.5 * sink); // trembling
+        if (this.t >= im.dropAt && e.armed && !e.severed.has(P.LArmR)) this.dropSword(e, e.forward.clone().multiplyScalar(-0.4));
+        if (this.t >= im.nextGroanT) { im.nextGroanT = this.t + rand(0.9, 1.5); if (!throat) this.vocal(e, 'pain', 0.35); }
+        if (this.t >= im.freeAt) im.wantFree = true;
+        if (this.t >= im.dieAt) {
+          const pt = jointPoint(e.pose, im.part, new THREE.Vector3());
+          this.kill(e, { amount: 999, zone: PART_ZONE[im.part], part: im.part, point: pt, dir: e.forward.clone().negate(), speed: 1, sharp: true, source: 'melee', impulse: 18, weaponEntId: im.weaponId },
+            { decapitated: false, finisher: false, severed: null, impaled: im.through ? 'through' : im.vital });
+          return;
+        }
+        break;
+      }
       case 'maimed':
         // lost the sword arm: sinks, bleeds out
         a.lean = 0.35 + Math.min(0.4, e.stateT * 0.2); a.headPitch = 0.45; a.legL = [0.9, 1.6]; a.legR = [-0.1, 0.4]; a.bob = -0.25 - Math.min(0.2, e.stateT * 0.1);
@@ -739,6 +869,9 @@ export class EnemyManager {
       a.lean -= 0.3 * k;
       a.headPitch -= 0.35 * k;
     }
+    // held up (or pressed down) by the blade in him
+    if (e.state !== 'impaled') e.impaleLift *= Math.exp(-6 * dt); // off the blade he finds his feet again
+    a.bob += e.impaleLift / e.look.scale;
     solvePose(e.pose, e.pos, e.yaw, e.look.scale, a);
     if (e.ragdoll) readRagdoll(e.ragdoll, e.pose); // severed limbs follow their own bodies
   }
@@ -1081,6 +1214,16 @@ export class EnemyManager {
       }
       case P.Torso: {
         if (point.y > e.pose[P.Torso].b.y + 0.06 * L.scale) return { cls: 'gap', neck: true };
+        if (L.armor !== 'none') {
+          const tp = e.pose[P.Torso];
+          const loc = _a1.copy(point).sub(tp.c).applyQuaternion(_aq.copy(tp.q).invert());
+          // the armpit: under a raised arm the cuirass is open
+          const ua = e.pose[loc.x > 0 ? P.UArmL : P.UArmR];
+          const hang = _a2.subVectors(ua.b, ua.a).normalize().dot(_a3.set(0, -1, 0).applyQuaternion(tp.q));
+          if (Math.abs(loc.x) > 0.1 * L.scale && loc.y > 0.04 * L.scale && hang < 0.5) return { cls: 'gap', neck: false };
+          // below the plate's lower edge: the belly behind belt and flaps
+          if (loc.y < (RIG.torsoA - RIG.torsoC + 0.04) * L.scale) return { cls: 'thigh', neck: false };
+        }
         return { cls: L.armor === 'muscle' ? 'bronze' : L.armor === 'linothorax' ? 'linen' : 'gap', neck: false };
       }
       case P.Pelvis: return { cls: L.armor !== 'none' ? 'thigh' : 'gap', neck: false };
@@ -1111,7 +1254,7 @@ export class EnemyManager {
     // edge travels — a lateral cut is still in front of him); thrown things by the way they're coming in
     const toP = _v.copy(this.hooks.playerHead()).sub(e.pos).setY(0).normalize();
     const frontal = info.source === 'melee' ? toP.dot(e.forward) >= Math.cos(THREE.MathUtils.degToRad(50)) : info.dir.dot(e.forward) < -0.15;
-    const vulnerable = ['windup', 'strike', 'recover', 'stagger', 'broken', 'recoil', 'maimed', 'down', 'getup'].includes(e.state);
+    const vulnerable = ['windup', 'strike', 'recover', 'stagger', 'broken', 'recoil', 'maimed', 'down', 'getup', 'impaled'].includes(e.state);
     const broken = e.state === 'broken';
 
     // 1) his guard reads your blade — deterministic, no dice: a cut into a guard he raised ≥ 0.10 s ago is blocked;
@@ -1174,12 +1317,14 @@ export class EnemyManager {
     // 3) armor: glance or penetrate
     const arm = this.armorAt(e, info.part, info.point, !!info.neck);
     const thrust = !!info.bladeAxis && Math.abs(info.bladeAxis.dot(info.dir)) > 0.8 || info.source === 'arrow';
-    combatLog({ kind: 'hit', part: info.part, speed: +info.speed.toFixed(2), cls: arm.cls, neck: arm.neck, thrust, source: info.source, state: e.state });
+    res.armor = arm.cls; res.neck = arm.neck;
+    combatLog({ kind: 'hit', part: info.part, speed: +info.speed.toFixed(2), cls: arm.cls, neck: arm.neck, thrust, stab: !!info.stab, source: info.source, state: e.state });
     let dmg: number;
     if (info.source === 'bomb') dmg = info.amount;
     else if (info.sharp) {
       const need = VPEN[arm.cls][thrust ? 1 : 0] * (arm.cls === 'gap' ? 1 : this.hooks.speedScale());
-      if (info.speed < need && !broken) {
+      // (a slow touch on bare flesh is just a touch — it doesn't ring off like bronze)
+      if (info.speed < need && !broken && !(arm.cls === 'gap' && tier === 0)) {
         // glance: 20% as blunt, posture, sparks, bounce
         res.glanced = true;
         dmg = this.rawDamage(info) * 0.2;
@@ -1248,11 +1393,14 @@ export class EnemyManager {
     this.renderer.flash[e.slot] = Math.min(1, 0.5 + dmg / 60);
     if (!res.glanced) {
       this.fx.hitPuff(info.point, info.dir, dmg);
+      // a committed cut leaves a gash on him (stabs leave their own holes)
+      if (info.sharp && !thrust && !info.graze && !info.noCut && info.source === 'melee' && tier >= 2) this.addGash(e, info);
       // the missing sound: a blade going in (through bronze it also rings the plate)
       if (info.sharp && info.source !== 'bomb') {
         const I = Math.min(1, Math.max(0, ((info.contactSpeed ?? info.speed) - 1.5) / 10.5));
         const pan = audio.pan(info.point);
-        if (arm.cls === 'bronze') { audio.armourBonk(I, pan); setTimeout(() => audio.fleshCut(I * 0.6, false, pan), 6); }
+        if (info.stab && thrust) { audio.stabIn(Math.max(0.45, I), arm.cls, pan, info.part === P.Torso || info.part === P.Head); res.penetrated = true; }
+        else if (arm.cls === 'bronze') { audio.armourBonk(I, pan); setTimeout(() => audio.fleshCut(I * 0.6, false, pan), 6); }
         else audio.fleshCut(I, arm.cls === 'linen', pan);
       }
     }
@@ -1282,12 +1430,18 @@ export class EnemyManager {
         this.addPosture(e, 30);
         if (e.state !== 'broken') this.setState(e, 'stagger', 0.8);
       }
-      audio.grunt();
+      this.vocal(e, 'scream', 0.9);
       this.hooks.hitstop(90);
       return res;
     }
+    if (!res.glanced && res.penetrated) {
+      // the point went in: no knock-back (the stab system holds him on the blade), a bite of hitstop
+      e.flinch = { t: this.t, dir: info.dir.clone(), amount: 1 };
+      this.hooks.hitstop(70);
+      return res;
+    }
     if (!res.glanced) {
-      audio.grunt();
+      this.vocal(e, 'pain', tier >= 3 ? 0.9 : tier === 2 ? 0.6 : 0.35);
       // hit reaction: flinch (light) or directional stagger (solid/heavy)
       e.flinch = { t: this.t, dir: info.dir.clone(), amount: tier >= 2 ? 1 : 0.6 };
       // only a heavy blow (or one on a man whose balance is going) staggers him; ordinary cuts make him flinch
@@ -1363,7 +1517,7 @@ export class EnemyManager {
         const flank = toPlayer.dot(e.forward) < Math.cos(THREE.MathUtils.degToRad(50));
         const atk = e.attack;
         const progress = e.state === 'windup' && atk ? 1 - (atk.impactAt - this.t) / Math.max(0.1, atk.windup) : 0;
-        const offBalance = ['strike', 'stagger', 'recoil', 'broken', 'maimed', 'recover', 'down', 'getup'].includes(e.state) && !(e.state === 'stagger' && e.staggerCause === 'throat');
+        const offBalance = ['strike', 'stagger', 'recoil', 'broken', 'maimed', 'recover', 'down', 'getup', 'impaled'].includes(e.state) && !(e.state === 'stagger' && e.staggerCause === 'throat');
         const opening = corpse || flank || progress >= 0.6 || offBalance || (e.kind !== 'boss' && this.t < e.guardBeatenUntil);
         const need = NECK_V * ss * k * (this.t < e.neckWoundUntil && this.t >= e.neckWoundFrom ? 0.7 : 1);
         if (across && committed) {
@@ -1445,10 +1599,18 @@ export class EnemyManager {
     const parent = PARENT[part];
     const jp = jointPoint(e.pose, part, new THREE.Vector3());
     const toLocal = (idx: number) => jp.clone().sub(e.pose[idx].c).applyQuaternion(_q.copy(e.pose[idx].q).invert());
-    e.stumps.push({ part, local: toLocal(part), until: this.t + 1.6 });
-    if (parent >= 0) e.stumps.push({ part: parent, local: toLocal(parent), until: this.t + 2.2 });
+    e.stumps.push({ part, local: toLocal(part), until: this.t + (part === P.Head ? 2.0 : 1.6) });
+    // off with his head: the neck pumps an arterial jet for a couple of seconds as the head flies
+    if (parent >= 0) e.stumps.push({ part: parent, local: toLocal(parent), until: this.t + (part === P.Head ? 2.6 : 2.2), jet: part === P.Head ? 1 : undefined });
     this.fx.blood(jp, info.dir, 26);
-    if (part === P.Head) audio.decap(audio.pan(jp)); else audio.severSound(audio.pan(jp));
+    if (part === P.Head) {
+      const up = _v.subVectors(jp, e.pose[P.Torso].c).normalize();
+      this.fx.spurt(jp, up.addScaledVector(info.dir, 0.3), 34, 3.6, 0.55);
+      audio.decap(audio.pan(jp));
+    } else {
+      audio.severSound(audio.pan(jp));
+      if (!e.dead) this.vocal(e, 'scream', 1);
+    }
     // weapons in a severed hand fall free (can be picked up)
     if (pieces.includes(P.LArmR) && e.armed) {
       e.armed = false;
@@ -1491,7 +1653,7 @@ export class EnemyManager {
     this.setState(e, 'down');
   }
 
-  private kill(e: Enemy, info: HitInfo, how: { decapitated: boolean; finisher: boolean; severed: number | null }) {
+  private kill(e: Enemy, info: HitInfo, how: KillHow) {
     const pelvisY = e.ragdoll?.bodies[P.Pelvis]?.translation().y ?? 0.95;
     const wasDown = e.state === 'down';
     // a blow already falling (strike) still lands as he dies — trading wounds with a committed man costs you;
@@ -1502,22 +1664,159 @@ export class EnemyManager {
       this.resolveAttack(e, e.attack, this.hooks.playerHead());
     }
     e.attack = null;
-    const rag = this.toRagdoll(e, info, how.decapitated);
+    const throatDeath = how.impaled === 'throat' || (this.t < e.throatBleedUntil + 0.5 && !how.decapitated);
+    const rag = this.toRagdoll(e, info, how.decapitated || !!how.impaled);
     e.dead = true;
     e.diedAt = this.t;
     e.state = 'dead';
+    e.impale = null;
     (info as HitInfo & { airborne?: boolean }).airborne = wasDown && pelvisY >= 0.8;
-    this.hooks.hitstop(info.source === 'bomb' ? 120 : 120);
-    this.hooks.shake(how.decapitated ? 0.4 : 0.25);
-    audio.thunk(1.3);
-    if (e.armed && !e.severed.has(P.LArmR)) {
-      // the dead man's sword falls from his hand
-      e.armed = false;
-      this.renderer.swordSegment(e.pose, e.look, _c1, _c2);
-      const q = new THREE.Quaternion().setFromUnitVectors(UP, _v.subVectors(_c2, _c1).normalize());
-      this.hooks.onDropWeapon(e.look.prop === 'spear' ? 'spear' : 'sword', _c1.clone(), q, info.dir.clone(), e.look);
-    }
+    // a clean beheading is swift - no freeze, the blade carries on through; other deaths bite briefly
+    this.hooks.hitstop(how.decapitated ? 0 : how.impaled ? 60 : info.source === 'bomb' ? 120 : 110);
+    this.hooks.shake(how.decapitated ? 0.3 : 0.25);
+    audio.thunk(how.decapitated ? 0.8 : 1.3);
+    if (!how.decapitated && how.impaled !== 'face') this.vocal(e, throatDeath ? 'gurgle' : 'death');
+    // the dead man's sword falls from his hand
+    if (e.armed && !e.severed.has(P.LArmR)) this.dropSword(e, info.dir.clone());
     this.hooks.onKill(e, info, rag, how);
+  }
+
+  private dropSword(e: Enemy, vel: THREE.Vector3) {
+    if (!e.armed) return;
+    e.armed = false;
+    this.renderer.swordSegment(e.pose, e.look, _c1, _c2);
+    const q = new THREE.Quaternion().setFromUnitVectors(UP, _v.subVectors(_c2, _c1).normalize());
+    this.hooks.onDropWeapon(e.look.prop === 'spear' ? 'spear' : 'sword', _c1.clone(), q, vel, e.look);
+  }
+
+  /** a gash on his skin where the edge went in, running the way the edge travelled */
+  private addGash(e: Enemy, info: HitInfo) {
+    const p = e.pose[info.part];
+    segSegDist2(info.point, info.point, p.a, p.b, _a1, _a2);
+    const n = _a3.subVectors(info.point, _a2);
+    if (n.lengthSq() < 1e-6) return;
+    n.normalize();
+    const hit = this.surfaceRay(e, info.part, info.point.clone().addScaledVector(n, 0.15), n.clone().negate(), 0.32);
+    if (!hit) return;
+    this.woundDecals.add(e, info.part, hit.bone, hit.point, hit.normal, info.dir, 0.1 + Math.min(0.07, info.speed * 0.005), 'gash', this.t, 2.5);
+  }
+
+  /** his voice, at most one cry per ~half second per man (the audio engine also limits the crowd) */
+  vocal(e: Enemy, kind: 'pain' | 'scream' | 'death' | 'gurgle', I = 0.6) {
+    if (e.kind === 'hero') return;
+    const gap = kind === 'pain' ? 0.6 : kind === 'scream' ? 0.3 : 0;
+    if (this.t - e.lastVocalT < gap) return;
+    e.lastVocalT = this.t;
+    const pan = audio.pan(e.pose[P.Head].c);
+    if (kind === 'pain') audio.pain(e.id, e.voice, I, pan);
+    else if (kind === 'scream') audio.scream(e.id, e.voice, I, pan);
+    else if (kind === 'death') audio.deathCry(e.id, e.voice, pan, false);
+    else audio.gurgle(e.id, e.voice, pan, 1.1);
+  }
+
+  // -- stabs (driven by the stab system in weapons) --
+  /** The wooer's realistic body, posed as he stands this instant (for surface rays). */
+  skinOf(e: Enemy): SkinnedBody | null {
+    const b = this.bodies[e.slot];
+    if (!b) return null;
+    // a ragdoll's pose is read at render time — bring it up to this physics step first
+    if (e.ragdoll && (e.dead || e.state === 'down')) readRagdoll(e.ragdoll, e.pose);
+    b.apply(e.pose);
+    return b;
+  }
+
+  /** The outermost surface of a wooer along a ray — his worn layers (chiton, cuirass, cloak…) or the realistic skin of
+   *  that part — so a wound decal sits where it can be seen. */
+  surfaceRay(e: Enemy, part: number, origin: THREE.Vector3, dir: THREE.Vector3, far: number): { point: THREE.Vector3; normal: THREE.Vector3; bone: THREE.Object3D | null } | null {
+    const s = this.skinOf(e)?.surfaceRay(part, origin, dir, far) ?? null;
+    const l = this.renderer.surfaceRay(e.slot, origin, dir, far);
+    if (s && (!l || s.point.distanceTo(origin) <= l.dist)) return s;
+    return l ? { point: l.point, normal: l.normal, bone: null } : null;
+  }
+
+  /** Where the point went in decides how long he lives with it. */
+  vitalOf(e: Enemy, part: number, entry: THREE.Vector3, neck: boolean): Vital {
+    if (part === P.Head) return neck ? 'throat' : 'face';
+    if (part === P.Torso) {
+      if (neck) return 'throat';
+      const tp = e.pose[P.Torso];
+      const loc = _a1.copy(entry).sub(tp.c).applyQuaternion(_aq.copy(tp.q).invert()).multiplyScalar(1 / e.look.scale);
+      if (loc.x > -0.04 && loc.x < 0.15 && loc.y > -0.05 && loc.y < 0.17) return 'heart'; // his left breast (+X)
+      return loc.y < -0.08 ? 'gut' : 'chest';
+    }
+    if (part === P.Pelvis) return 'gut';
+    return 'limb';
+  }
+
+  /** A blade lodged in a living wooer: he's held on it, clutches it, cries out. */
+  impaleStart(e: Enemy, weaponId: number, part: number, vital: Vital) {
+    if (e.dead) return;
+    const wasBroken = e.state === 'broken';
+    e.attack = null;
+    e.chainDir = null; e.riposteDir = null;
+    this.setState(e, 'impaled');
+    const mortal = e.kind !== 'boss' || wasBroken || e.hp < e.maxHp * 0.3;
+    e.impale = {
+      weaponId, part, vital, t0: this.t, dieAt: Infinity, dropAt: Infinity,
+      // a limb wound he tears himself off; Antinous wrenches free almost at once (unless he's broken or spent)
+      freeAt: !mortal ? this.t + 0.45 : vital === 'limb' ? this.t + 1.0 : vital === 'gut' ? this.t + 3.2 : this.t + 6,
+      wantFree: false, through: false, depth: 0, nextGroanT: this.t + 1.1, mortal,
+    };
+    if (vital === 'throat') this.vocal(e, 'gurgle');
+    else if (vital !== 'face') this.vocal(e, 'scream', 0.85);
+    e.flinch = { t: this.t, dir: e.forward.clone().negate(), amount: 1 };
+  }
+
+  /** The blade's current depth in him (m) and whether the point is out of his back: mortal wounds start the clock. */
+  impaleDepth(e: Enemy, depth: number, through: boolean) {
+    const im = e.impale;
+    if (!im || e.dead) return;
+    im.depth = Math.max(im.depth, depth);
+    const firstThrough = through && !im.through;
+    if (through) im.through = true;
+    let die = Infinity;
+    switch (im.vital) {
+      case 'face': if (depth >= 0.05) die = 0.1; break;
+      case 'throat': if (depth >= 0.04) die = 0.55; break;
+      case 'heart': if (depth >= 0.07) die = 0.35; break;
+      case 'chest': if (im.through || depth >= 0.22) die = 0.6; break;
+      case 'gut': if (im.through) die = 0.9; else if (depth >= 0.18) die = 2.4; break;
+      default: break;
+    }
+    if (die < Infinity && im.mortal) im.dieAt = Math.min(im.dieAt, this.t + die);
+    if (depth >= 0.1 && im.vital !== 'limb') im.dropAt = Math.min(im.dropAt, this.t + 0.35);
+    if (firstThrough) { this.vocal(e, im.vital === 'throat' ? 'gurgle' : 'scream', 1); e.flinch = { t: this.t, dir: e.forward.clone().negate(), amount: 1 }; }
+  }
+
+  /** The blade moves a living man on it: shift him (m), lift him (m), turn him (rad), re-posed at once. */
+  moveImpaled(e: Enemy, dx: number, dz: number, dLift: number, dYaw: number) {
+    e.pos.x += dx; e.pos.z += dz;
+    e.impaleLift += dLift;
+    e.anim.bob += dLift / e.look.scale;
+    e.yaw += dYaw;
+    e.forward.set(Math.sin(e.yaw), 0, Math.cos(e.yaw));
+    solvePose(e.pose, e.pos, e.yaw, e.look.scale, e.anim);
+  }
+
+  /** The blade came out of a living man: a mortal wound drops him there; otherwise he staggers back, bleeding. */
+  impaleEnd(e: Enemy, how: 'pull' | 'tear', weaponId: number) {
+    const im = e.impale;
+    if (!im || e.dead || im.weaponId !== weaponId) return;
+    e.impale = null;
+    const pt = jointPoint(e.pose, im.part, new THREE.Vector3());
+    const info: HitInfo = { amount: 0, zone: PART_ZONE[im.part], part: im.part, point: pt, dir: e.forward.clone().negate(), speed: 1, sharp: true, source: 'melee', impulse: 25, weaponEntId: weaponId };
+    if (im.dieAt < Infinity) {
+      this.kill(e, info, { decapitated: false, finisher: false, severed: null, impaled: im.through ? 'through' : im.vital });
+      return;
+    }
+    if (how === 'tear') { e.hp -= e.kind === 'boss' ? 8 : 12; this.vocal(e, 'scream', 1); } else this.vocal(e, 'pain', 0.9);
+    const deep = im.vital === 'gut' || im.vital === 'chest' || im.vital === 'heart';
+    e.woundBleedUntil = this.t + (deep ? 5 : 3);
+    e.woundBleedRate = deep ? (im.depth > 0.12 ? 6 : 3.5) : 1.5;
+    if (e.hp <= 0) { this.kill(e, info, { decapitated: false, finisher: false, severed: null, impaled: im.vital }); return; }
+    e.staggerT = this.t;
+    this.setState(e, 'stagger', e.kind === 'boss' ? 0.5 : 0.8);
+    e.pos.addScaledVector(_v.copy(e.forward).setY(0).normalize(), -0.12);
   }
 
   /** Radial Greek-fire blast. Returns wooers killed. */
@@ -1572,5 +1871,6 @@ export class EnemyManager {
       });
     }
     this.renderer.commit();
+    this.woundDecals.render(this.list, this.t);
   }
 }

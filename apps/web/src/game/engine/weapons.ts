@@ -9,10 +9,12 @@ import type { Fx } from './fx';
 import { audio } from './audio';
 import { PREFAB_BUILDERS, buildArrow, buildAspis, buildBlade, buildBowStave, buildSpear } from './weaponGeo';
 import { bakeWeapon, dressWeapon, prewarmWeaponSkins } from './weaponSkins';
+import { StabSystem, stabProfile } from './stab';
 import { ballisticDir, basisQuat, clamp, rand, rotateToward } from './math';
 
 export type WClass = WeaponClass | 'bow' | 'arrow';
-type WState = 'racked' | 'held' | 'free' | 'pinned' | 'stuck' | 'incoming' | 'gone';
+/** 'lodged': left in a man's body (it rides on him until you take it back) */
+type WState = 'racked' | 'held' | 'free' | 'pinned' | 'stuck' | 'incoming' | 'lodged' | 'gone';
 
 const DAMAGE_K = 4.5;
 const BOW_SPEC: WeaponClassSpec = { lengthM: 1.25, massKg: 1.0, damage: 0.8, sharp: false, throwMult: 1.3, grip: 'center', examples: [] };
@@ -103,6 +105,8 @@ const _q = new THREE.Quaternion();
 const _sa = new THREE.Vector3();
 const _sb = new THREE.Vector3();
 const _m = new THREE.Matrix4();
+const _st1 = new THREE.Vector3();
+const _st2 = new THREE.Vector3();
 const Y = new THREE.Vector3(0, 1, 0);
 
 // ── arrow instancing (player + enemy arrows, one draw call per skin) ──────
@@ -266,9 +270,17 @@ export class WeaponManager {
   private speedHist = new Map<number, { t: number; sp: number; x: number; y: number; z: number }[]>();
   private nockedArrow = { show: false, tail: new THREE.Vector3(), dir: new THREE.Vector3() };
   private eventQueue: InstanceType<typeof RAPIER.EventQueue>;
+  /** Blade & Sorcery-style stabs: held points that go in, stay in, and come out */
+  readonly stabs: StabSystem;
 
   constructor(private world: World, private enemies: EnemyManager, private fx: Fx, private hooks: WeaponHooks, private staticHandles: Set<number>) {
     this.eventQueue = new RAPIER.EventQueue(true);
+    this.stabs = new StabSystem(world, enemies, fx, {
+      hitstop: (ms) => this.hooks.hitstop(ms),
+      shake: (v) => this.hooks.shake(v),
+      freeWeapon: (w, v) => this.freeLodged(w, v),
+      speedScale: () => this.hooks.speedScale(),
+    });
     this.group.add(this.arrows.mesh);
     prewarmWeaponSkins();
     const strMat = new THREE.MeshStandardMaterial({ color: '#8f8068', roughness: 0.6 });
@@ -478,7 +490,7 @@ export class WeaponManager {
     let best: WeaponEnt | null = null;
     let bestD = Infinity;
     for (const w of rayOnly ? [] : this.list) {
-      if (w.state !== 'racked' && w.state !== 'free') continue;
+      if (w.state !== 'racked' && w.state !== 'free' && w.state !== 'lodged') continue;
       if (w.cls === 'arrow') continue;
       const gp = this.gripWorld(w, _v);
       const d = gp.distanceTo(h.pos);
@@ -502,7 +514,7 @@ export class WeaponManager {
     if (!best && aimRay && this.hooks.kbPull()) {
       let bestRay = 0.2;
       for (const w of this.list) {
-        if ((w.state !== 'racked' && w.state !== 'free') || w.cls === 'arrow') continue;
+        if ((w.state !== 'racked' && w.state !== 'free' && w.state !== 'lodged') || w.cls === 'arrow') continue;
         // point anywhere along the weapon (grip → point), not just at its grip
         const gp = this.gripWorld(w, _v);
         const rayEnd = _v3.copy(aimRay.origin).addScaledVector(aimRay.dir, 4);
@@ -566,6 +578,7 @@ export class WeaponManager {
   private attach(w: WeaponEnt, h: HandView) {
     w.byPlayer = true;
     if (w.pin) { try { this.world.removeImpulseJoint(w.pin.joint, true); } catch { /* gone */ } w.pin = null; }
+    const wasLodged = w.state === 'lodged';
     w.state = 'held';
     w.hand = h.side;
     w.incoming = null;
@@ -573,6 +586,7 @@ export class WeaponManager {
     w.attachT = this.realT;
     this.setKinematic(w, GROUPS.held);
     w.hitCd.clear();
+    if (wasLodged) this.stabs.regrab(w); // your hand closes on the hilt still in him
     audio.metal(0.3, 1900);
     if (w.cls === 'bow') audio.lyre([0], 0, 196);
   }
@@ -592,6 +606,8 @@ export class WeaponManager {
     this.held[side] = null;
     w.hand = null;
     if (w.cls === 'bow') { this.drawing = false; }
+    // let go of a blade that's in a man: it stays in him (a throw rips it out)
+    if (this.stabs.onRelease(w, velBody)) { w.state = 'lodged'; w.restT = 0; return; }
     const speed = velBody.length();
     this.setDynamic(w);
     w.state = 'free';
@@ -719,8 +735,23 @@ export class WeaponManager {
 
   shieldHeld() { return this.holds('shield'); }
 
+  /** a blade left in a man falls free (he pulled it out, or his body is gone) */
+  private freeLodged(w: WeaponEnt, vel: THREE.Vector3) {
+    this.setDynamic(w);
+    w.state = 'free';
+    w.alignFlight = false;
+    w.thrownAt = this.t;
+    w.restT = 0;
+    w.staticHits = 0;
+    w.hitCd.clear();
+    w.byPlayer = false; // falling out of him, it doesn't cut anyone
+    w.body.setLinvel({ x: vel.x, y: vel.y, z: vel.z }, true);
+    w.body.setAngvel({ x: rand(-2, 2), y: rand(-2, 2), z: rand(-2, 2) }, true);
+  }
+
   remove(w: WeaponEnt) {
     if (w.state === 'gone') return;
+    this.stabs.forget(w);
     if (w.hand) this.held[w.hand] = null;
     w.state = 'gone';
     if (w.pin) { try { this.world.removeImpulseJoint(w.pin.joint, true); } catch { /* */ } w.pin = null; }
@@ -736,6 +767,7 @@ export class WeaponManager {
 
   /** New match: fresh starter kit, but gifts from Telemachus that arrived in the lobby stay on the rack. */
   resetForMatch() {
+    this.stabs.clear();
     for (const w of [...this.list]) {
       if (w.forged && w.state !== 'gone') { if (w.hand) this.held[w.hand] = null; w.incoming = null; this.rack(w); }
       else this.remove(w);
@@ -745,6 +777,7 @@ export class WeaponManager {
   }
 
   clearAll() {
+    this.stabs.clear();
     for (const w of [...this.list]) this.remove(w);
     this.held.left = this.held.right = null;
     this.drawing = false;
@@ -770,6 +803,7 @@ export class WeaponManager {
           else off.set(w.hand === 'left' ? -0.04 : 0.04, -0.02, 0.02);
         }
         const p = _v2.copy(h.pos).add(off);
+        this.stabs.blendHeld(w, p, q, realDt);
         w.body.setNextKinematicTranslation({ x: p.x, y: p.y, z: p.z });
         w.body.setNextKinematicRotation({ x: q.x, y: q.y, z: q.z, w: q.w });
       } else if (w.state === 'incoming' && w.incoming) {
@@ -806,6 +840,7 @@ export class WeaponManager {
         w.prevVel.set(lv.x, lv.y, lv.z);
       }
     }
+    this.stabs.prestep();
   }
 
   private heldQuat(w: WeaponEnt, h: HandView, out: THREE.Quaternion) {
@@ -875,7 +910,7 @@ export class WeaponManager {
         // slow cuts are never silent: anything above a drift registers (≤1.5 m/s is a touch: tink, no damage)
         _sa.copy(a); _sb.subVectors(b, a);
         _sb.addScaledVector(_sb, w.spec.sharp ? 0.12 / Math.max(1e-3, _sb.length()) : 0).add(a);
-        if (sp > 0.8 && w.cls !== 'bow') this.tryHit(w, a, b, peak, 'melee', w.tip.clone().sub(w.prevTip).normalize(), realDt);
+        if (sp > 0.8 && w.cls !== 'bow' && !this.stabs.isLodged(w)) this.tryHit(w, a, b, peak, 'melee', w.tip.clone().sub(w.prevTip).normalize(), realDt);
         else if (sp > 2.2 && w.cls === 'bow') this.tryHit(w, a, b, peak, 'melee', w.tip.clone().sub(w.prevTip).normalize(), realDt);
         w.segPrevA.copy(_sa); w.segPrevB.copy(_sb); w.segPrevT = this.realT;
       } else if (w.state === 'free') {
@@ -905,6 +940,9 @@ export class WeaponManager {
       }
       // hit cooldown aging is implicit (timestamps)
     }
+
+    // stabs: follow the hand / the body, run him through, pull out
+    this.stabs.update(dt, realDt);
 
     // pinned weapon whose ragdoll despawned → drop it
     for (const w of this.list) {
@@ -988,7 +1026,19 @@ export class WeaponManager {
     const neckFree = neckHit && this.realT - (w.hitCd.get(neckHit.enemy.id * 16 + 14) ?? -1) >= 0.25;
     const hit = neckFree ? neckHit : this.enemies.testSegment(a, longB, w.radius, hasSweep ? sweepA : undefined, hasSweep ? sweepB : undefined, magnet);
     if (!hit) return;
-    const key = hit.enemy.id * 16 + (neckFree && hit === neckHit ? 14 : hit.part); // the neck keeps its own cooldown
+    // B&S stab: a held point driven along its own blade, the point leading. A thrust isn't forgiven its reach — the
+    // point itself must be at his skin (wait a step for it; a thrust that stops short is a miss)
+    let stabLike = false;
+    if (w.state === 'held' && source === 'melee' && stabProfile(w) && axis.dot(dir) > 0.8 && !(cap && !cap.driven)) {
+      const ab = _st1.subVectors(b, a);
+      const frac = _st2.subVectors(hit.point, a).dot(ab) / Math.max(1e-6, ab.lengthSq());
+      if (frac >= 0.7) {
+        if (!this.stabs.tipReached(hit.enemy, hit.part, b)) return;
+        stabLike = true;
+      }
+    }
+    // the neck keeps its own cooldown, and so does a stab (a touch while the point lined up doesn't swallow it)
+    const key = hit.enemy.id * 16 + (stabLike ? 12 : neckFree && hit === neckHit ? 14 : hit.part);
     const last = w.hitCd.get(key) ?? -1;
     if (this.realT - last < 0.25) return;
     w.hitCd.set(key, this.realT);
@@ -997,7 +1047,7 @@ export class WeaponManager {
     const isNeck = !!neckFree && hit === neckHit;
     const woundKey = hit.enemy.id * 16 + 13;
     const inWindow = w.state === 'held' && this.realT - (w.hitCd.get(woundKey) ?? -1) < 0.45;
-    const graze = inWindow && !isNeck;
+    const graze = inWindow && !isNeck && !stabLike;
     const neckRepeat = inWindow && isNeck;
     if (w.state === 'held' && !inWindow) w.hitCd.set(woundKey, this.realT);
     const zone = this.enemies.zoneOf(hit.part);
@@ -1039,6 +1089,7 @@ export class WeaponManager {
       bladePrevA: w.state === 'held' && this.realT - w.segPrevT < 0.05 ? w.segPrevA.clone() : undefined,
       bladePrevB: w.state === 'held' && this.realT - w.segPrevT < 0.05 ? w.segPrevB.clone() : undefined,
       contactFrac, contactSpeed, strokeLen, strokeTurn, noCut: (!!cap && !cap.driven) || graze, neck: isNeck, graze, neckRepeat,
+      stab: stabLike && !graze,
     };
     if (w.cls === 'bomb' && w.state === 'free') { this.detonate(w); return; }
     const res = this.enemies.damage(hit.enemy, info);
@@ -1064,6 +1115,8 @@ export class WeaponManager {
       w.durability--;
       if (w.durability <= 0 && w.state !== 'gone') { this.breakWeapon(w); return; }
     }
+    // the point got in: it stays in him (corpses can be run through too)
+    if (info.stab && w.state === 'held' && (res.penetrated || hit.enemy.dead)) this.stabs.tryLodge(w, hit.enemy, hit.part, info, res);
     if (res.killed && w.state === 'free') {
       w.throwKills.push(this.t);
       // PIN: sharp weapon killing at > 8 m/s joints itself to the hit part and keeps flying.

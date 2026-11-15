@@ -18,6 +18,43 @@ const RIM = [900, 1450, 2100];
 const db = (d: number) => Math.pow(10, d / 20);
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
 
+/** A wooer's voice: glottal pitch (Hz), vocal-tract length factor (1 = average man; >1 longer → lower formants),
+ *  roughness (subharmonics / creak) and breathiness. Derived from his id so the same man always sounds the same. */
+export interface VoiceProfile { f0: number; tract: number; rough: number; breath: number }
+export function voiceFor(id: number, big = false): VoiceProfile {
+  // golden-ratio hash → well spread 0..1 values per wooer
+  const h = (k: number) => ((id * 0.6180339887 + k * 0.7548776662) % 1 + 1) % 1;
+  return {
+    f0: (big ? 92 : 104) + h(1) * 44,
+    tract: (big ? 1.08 : 0.94) + h(2) * 0.14,
+    rough: 0.25 + h(3) * 0.5,
+    breath: 0.2 + h(4) * 0.35,
+  };
+}
+
+// male vowel formants (Hz) — Peterson & Barney averages; F4 ≈ 3.3–3.6 kHz
+type Formants = [number, number, number, number];
+const VOWEL: Record<'a' | 'ah' | 'uh' | 'eh' | 'oh' | 'ng' | 'scream', Formants> = {
+  a: [730, 1090, 2440, 3400], ah: [820, 1250, 2550, 3500], uh: [640, 1190, 2390, 3300], eh: [530, 1840, 2480, 3450],
+  oh: [570, 840, 2410, 3300], ng: [310, 1050, 2300, 3200], scream: [920, 1420, 2700, 3700],
+};
+interface VocalSpec {
+  dur: number;
+  /** pitch contour: [time 0..1, × f0] */
+  pitch: [number, number][];
+  /** vowel path: [time 0..1, formants] */
+  vowels: [number, Formants][];
+  gain: number;
+  attack: number;
+  rough?: number;     // overrides the profile's
+  breath?: number;
+  vibrato?: number;   // Hz (pitch wobble of a strained voice)
+  creak?: number;     // Hz — amplitude pulsing (vocal fry / choking)
+  creakDepth?: number;
+  bw?: number;        // formant bandwidth scale (tense scream = wider)
+  tail?: number;      // extra exhale after the voiced part (s)
+}
+
 class Audio {
   ctx: Ctx | null = null;
   master!: GainNode;
@@ -193,7 +230,7 @@ class Audio {
     this.lastVoice.set(kind, t0);
     // the voice budget: the sounds that tell you what happened (steel on steel, a limb or head coming off) may
     // borrow past the cap; ambience-class hits wait their turn. Each voice frees its slot when it has rung out.
-    const priority = kind === 'clash' || kind === 'parry' || kind === 'severThump' || kind === 'decap' || kind === 'block' || kind === 'shield';
+    const priority = kind === 'clash' || kind === 'parry' || kind === 'severThump' || kind === 'decap' || kind === 'block' || kind === 'shield' || kind === 'stab' || kind === 'stabOut';
     if (this.voices >= (priority ? 16 : 12)) return null;
     this.voices++;
     setTimeout(() => { this.voices = Math.max(0, this.voices - 1); }, kind === 'parry' ? 1400 : 900);
@@ -407,6 +444,242 @@ class Audio {
     this.noise(hp, start, 1.8); hp.connect(bp).connect(g).connect(dest);
     this.duck(-6, 250);
   }
+  // ── stabs: the point goes in, and comes out ───────────────────────
+  /** a thrust through cloth and flesh: puncture tick, wet squelch sweeping down, a meat thump. `cls` is what it
+   *  went through: linen tears (crackle), bronze grates (gritty scrape on the plate and the ribs). */
+  stabIn(I = 0.7, cls: 'gap' | 'linen' | 'thigh' | 'bronze' = 'gap', pan = 0, bone = false) {
+    const v = this.voice('stab', I, pan, 0.12, 0); if (!v) return;
+    const { dest, t0 } = v;
+    const ctx = this.ctx!;
+    const k = 1.2 - 0.4 * clamp01(I);
+    // puncture: skin/cloth gives way
+    this.tick(dest, t0, 2600, 2, 0.45);
+    if (cls === 'linen' || cls === 'thigh') for (const d of [0, 0.006, 0.013, 0.021]) this.burst(dest, t0 + d, 'highpass', 2800, 0.8, 0.22, 0.0025, 0.02);
+    // wet squelch: a resonant band sweeping down as the blade sinks in
+    const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 3.2;
+    bp.frequency.setValueAtTime(1500 * this.rate, t0 + 0.004);
+    bp.frequency.exponentialRampToValueAtTime(320 * this.rate, t0 + 0.13 * k);
+    const sg = ctx.createGain(); sg.gain.setValueAtTime(0, t0); sg.gain.linearRampToValueAtTime(0.75, t0 + 0.012); sg.gain.setTargetAtTime(0, t0 + 0.03, 0.05 * k);
+    this.noise(bp, t0, 0.3); bp.connect(sg).connect(dest);
+    // a second, lower slurp (the wound closing on the blade)
+    this.burst(dest, t0 + 0.035, 'bandpass', 420 + Math.random() * 120, 4, 0.35, 0.05, 0.2);
+    this.thump(dest, t0, 135, 52, 95 * k, 0.6);
+    if (cls === 'bronze') {
+      // through the plate: the cuirass rings, and the point grates (granular AM on a narrow band)
+      this.modes(dest, t0, CUIRASS, [1, 0.9, 0.75, 0.6, 0.45, 0.3, 0.2], 0.006, I * 0.8, 1, 5);
+      const gr = ctx.createBiquadFilter(); gr.type = 'bandpass'; gr.frequency.value = 2900 * this.rate; gr.Q.value = 7;
+      const am = ctx.createGain(); am.gain.value = 0;
+      const lfo = ctx.createOscillator(); lfo.type = 'square'; lfo.frequency.value = 70 + Math.random() * 25;
+      const lg = ctx.createGain(); lg.gain.value = 0.22; lfo.connect(lg).connect(am.gain);
+      const eg = ctx.createGain(); eg.gain.setValueAtTime(0, t0); eg.gain.linearRampToValueAtTime(0.9, t0 + 0.01); eg.gain.setTargetAtTime(0, t0 + 0.08, 0.04);
+      this.noise(gr, t0, 0.25); gr.connect(am).connect(eg).connect(dest);
+      lfo.start(t0); lfo.stop(t0 + 0.3);
+    }
+    if (bone) setTimeout(() => this.boneCrunch(4, pan), 30);
+    this.duck(-3, 160);
+  }
+  /** the blade pulled back out: a suction slurp rising in pitch, a wet pop, the bronze sliding free */
+  stabOut(I = 0.6, pan = 0) {
+    const v = this.voice('stabOut', I, pan, 0.1, -1); if (!v) return;
+    const { dest, t0 } = v;
+    const ctx = this.ctx!;
+    const dur = 0.16 + 0.1 * (1 - clamp01(I));
+    const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 4.5;
+    bp.frequency.setValueAtTime(260 * this.rate, t0);
+    bp.frequency.exponentialRampToValueAtTime(1300 * this.rate, t0 + dur);
+    const g = ctx.createGain(); g.gain.setValueAtTime(0, t0); g.gain.linearRampToValueAtTime(0.6, t0 + dur * 0.55); g.gain.setTargetAtTime(0, t0 + dur * 0.8, 0.025);
+    this.noise(bp, t0, dur + 0.15); bp.connect(g).connect(dest);
+    // the pop as the point leaves the wound
+    const o = ctx.createOscillator(); o.type = 'sine';
+    o.frequency.setValueAtTime(95 * this.rate, t0 + dur * 0.8); o.frequency.exponentialRampToValueAtTime(190 * this.rate, t0 + dur * 0.8 + 0.04);
+    const og = ctx.createGain(); og.gain.setValueAtTime(0, t0 + dur * 0.8); og.gain.linearRampToValueAtTime(0.5, t0 + dur * 0.8 + 0.004); og.gain.setTargetAtTime(0, t0 + dur * 0.8 + 0.006, 0.02);
+    o.connect(og).connect(dest); o.start(t0 + dur * 0.8); o.stop(t0 + dur + 0.2);
+    this.burst(dest, t0 + dur * 0.82, 'lowpass', 600, 1.2, 0.25, 0.03, 0.12);
+    // the edge slides along bone/bronze on the way out
+    this.modes(dest, t0 + dur * 0.4, XIPHOS_OOP, [0.3, 0.3, 0.3, 0.25, 0.2, 0.2, 0.15, 0.1], 0.004, I * 0.4, 1, 3);
+  }
+
+  // ── voices: formant synthesis (glottal source → vowel resonances), per-wooer pitch & tract length ──
+  private glottalWave: PeriodicWave | null = null;
+  private vocalLive = 0;
+  private vocalLastT = -9;
+  private vocalUntil = new Map<number, { until: number; pri: number; stop: () => void }>();
+  /** One voiced utterance. Returns false if the voice budget refused it (a crowd doesn't all scream at once). */
+  private vocal(who: number, pri: number, p: VoiceProfile, pan: number, s: VocalSpec): boolean {
+    if (!this.ready()) return false;
+    const ctx = this.ctx!;
+    const t0 = ctx.currentTime + 0.005;
+    const cur = this.vocalUntil.get(who);
+    if (cur && t0 < cur.until) {
+      if (pri <= cur.pri) return false;     // he's already crying out; a death cry may cut a groan short
+      cur.stop();
+    } else {
+      // crowd limit: ≤ 3 voices at once, new ones ≥ 90 ms apart (pain only when the hall is quiet enough)
+      if (this.vocalLive >= 3 || (pri < 2 && this.vocalLive >= 2)) return false;
+      if (t0 - this.vocalLastT < (pri >= 2 ? 0.05 : 0.09)) return false;
+    }
+    this.vocalLastT = t0;
+    this.vocalLive++;
+    if (!this.glottalWave) {
+      // LF-like glottal pulse: harmonics falling ~12 dB/oct with a little phase lean (not a buzzy sawtooth)
+      const n = 40, re = new Float32Array(n), im = new Float32Array(n);
+      for (let i = 1; i < n; i++) { const a = 1 / Math.pow(i, 1.85); re[i] = a * Math.sin(i * 0.35); im[i] = -a * Math.cos(i * 0.35); }
+      this.glottalWave = ctx.createPeriodicWave(re, im);
+    }
+    const dur = s.dur;
+    const rough = s.rough ?? p.rough, breath = s.breath ?? p.breath;
+    const end = t0 + dur + (s.tail ?? 0) + 0.25;
+    const out = ctx.createGain(); out.gain.value = s.gain;
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 5200; lp.Q.value = 0.4;
+    const pn = ctx.createStereoPanner(); pn.pan.value = Math.max(-0.85, Math.min(0.85, pan));
+    out.connect(lp).connect(pn).connect(this.sfx);
+    const rs = ctx.createGain(); rs.gain.value = 0.28; pn.connect(rs).connect(this.reverbSend);
+    // ── source: glottal oscillator + a subharmonic (period doubling = the rasp of a strained throat) ──
+    const src = ctx.createGain(); src.gain.value = 1;
+    const o = ctx.createOscillator(); o.setPeriodicWave(this.glottalWave);
+    const sub = ctx.createOscillator(); sub.setPeriodicWave(this.glottalWave);
+    const subG = ctx.createGain(); subG.gain.value = 0.25 + 0.45 * rough;
+    const f0 = p.f0 * this.rate;
+    const setPitch = (param: AudioParam, mul: number) => {
+      param.setValueAtTime(f0 * s.pitch[0][1] * mul, t0);
+      for (let i = 1; i < s.pitch.length; i++) param.exponentialRampToValueAtTime(Math.max(20, f0 * s.pitch[i][1] * mul), t0 + dur * s.pitch[i][0]);
+    };
+    setPitch(o.frequency, 1); setPitch(sub.frequency, 0.5);
+    // jitter (slow random pitch drift) + vibrato
+    const jit = ctx.createBufferSource(); jit.buffer = this.noiseBuf; jit.loop = true; jit.playbackRate.value = 0.004;
+    const jg = ctx.createGain(); jg.gain.value = f0 * (0.02 + 0.05 * rough);
+    jit.connect(jg); jg.connect(o.frequency); jg.connect(sub.frequency);
+    let vib: OscillatorNode | null = null;
+    if (s.vibrato) {
+      vib = ctx.createOscillator(); vib.frequency.value = s.vibrato * (0.9 + Math.random() * 0.2);
+      const vg = ctx.createGain(); vg.gain.value = f0 * 0.035; vib.connect(vg).connect(o.frequency);
+    }
+    o.connect(src); sub.connect(subG).connect(src);
+    // creak: amplitude pulsing (vocal fry, a choking throat)
+    const voiced = ctx.createGain(); voiced.gain.value = 1;
+    let creak: OscillatorNode | null = null;
+    if (s.creak) {
+      creak = ctx.createOscillator(); creak.type = 'sine'; creak.frequency.value = s.creak;
+      // gain swings between 1 − depth and 1
+      const d = s.creakDepth ?? 0.6;
+      const cd = ctx.createGain(); cd.gain.value = d / 2;
+      voiced.gain.value = 1 - d / 2;
+      creak.connect(cd).connect(voiced.gain);
+    }
+    src.connect(voiced);
+    // voiced envelope
+    const venv = ctx.createGain();
+    venv.gain.setValueAtTime(0, t0);
+    venv.gain.linearRampToValueAtTime(1, t0 + s.attack);
+    venv.gain.setValueAtTime(1, t0 + Math.max(s.attack, dur * 0.7));
+    venv.gain.linearRampToValueAtTime(0, t0 + dur);
+    voiced.connect(venv);
+    // aspiration noise (breath) — strongest at onset and in the exhale tail
+    const br = ctx.createBufferSource(); br.buffer = this.noiseBuf; br.loop = true;
+    const brf = ctx.createBiquadFilter(); brf.type = 'highpass'; brf.frequency.value = 500;
+    const benv = ctx.createGain();
+    const bpk = 0.05 + 0.35 * breath;
+    benv.gain.setValueAtTime(0, t0);
+    benv.gain.linearRampToValueAtTime(bpk, t0 + s.attack * 0.6);
+    benv.gain.linearRampToValueAtTime(bpk * 0.45, t0 + dur * 0.5);
+    benv.gain.linearRampToValueAtTime(bpk * 0.8, t0 + dur);
+    benv.gain.linearRampToValueAtTime(0, t0 + dur + (s.tail ?? 0.05));
+    br.connect(brf).connect(benv);
+    // ── vocal tract: four formant resonators in parallel, moving through the vowel path ──
+    const amps = [1, 0.55, 0.28, 0.14];
+    const bws = [80, 110, 170, 250].map((b) => b * (s.bw ?? 1));
+    const bank = ctx.createGain(); bank.gain.value = 1;
+    for (let k = 0; k < 4; k++) {
+      const f = ctx.createBiquadFilter(); f.type = 'bandpass';
+      const at = (i: number) => (s.vowels[i][1][k] / p.tract) * this.rate;
+      f.frequency.setValueAtTime(at(0), t0);
+      for (let i = 1; i < s.vowels.length; i++) f.frequency.linearRampToValueAtTime(at(i), t0 + dur * s.vowels[i][0]);
+      f.Q.value = at(0) / bws[k];
+      const g = ctx.createGain(); g.gain.value = amps[k] * 2.2;
+      venv.connect(f); benv.connect(f);
+      f.connect(g).connect(bank);
+    }
+    // a little un-filtered breath on top (the hiss of the exhale)
+    const hiss = ctx.createGain(); hiss.gain.value = 0.12; benv.connect(hiss).connect(out);
+    bank.connect(out);
+    const nodes: AudioScheduledSourceNode[] = [o, sub, jit, br];
+    if (vib) nodes.push(vib);
+    if (creak) nodes.push(creak);
+    for (const n of nodes) { n.start(t0); n.stop(end); }
+    let done = false;
+    const finish = () => { if (done) return; done = true; this.vocalLive = Math.max(0, this.vocalLive - 1); };
+    const stop = () => {
+      const t = ctx.currentTime;
+      out.gain.cancelScheduledValues(t); out.gain.setTargetAtTime(0, t, 0.02);
+      for (const n of nodes) { try { n.stop(t + 0.12); } catch { /* */ } }
+      finish();
+    };
+    setTimeout(finish, (end - t0) * 1000 + 30);
+    this.vocalUntil.set(who, { until: t0 + dur * 0.85, pri, stop });
+    return true;
+  }
+  /** short pain grunt — "uh!" / "ngh" — when a blade bites */
+  pain(who: number, p: VoiceProfile, I = 0.6, pan = 0) {
+    const r = Math.random();
+    const dur = 0.2 + 0.16 * r + 0.08 * I;
+    this.vocal(who, 1, p, pan, {
+      dur, gain: 0.35 + 0.3 * I, attack: 0.018,
+      pitch: [[0, 1.1 + 0.25 * I], [0.18, 1.3 + 0.35 * I], [0.7, 1.0], [1, 0.78]],
+      vowels: r < 0.5 ? [[0, VOWEL.uh], [0.6, VOWEL.uh], [1, VOWEL.ng]] : [[0, VOWEL.a], [0.5, VOWEL.uh], [1, VOWEL.ng]],
+      creak: 0, tail: 0.08,
+    });
+  }
+  /** stabbed: a strained scream that breaks (rising, rough, wide-open vowel) */
+  scream(who: number, p: VoiceProfile, I = 0.8, pan = 0) {
+    const dur = 0.55 + 0.35 * Math.random() + 0.15 * I;
+    const peak = 2.2 + 0.7 * I + Math.random() * 0.3;
+    this.vocal(who, 2, p, pan, {
+      dur, gain: 0.5 + 0.25 * I, attack: 0.035,
+      pitch: [[0, 1.4], [0.12, peak], [0.45, peak * 0.92], [0.8, peak * 0.7], [1, peak * 0.45]],
+      vowels: [[0, VOWEL.ah], [0.15, VOWEL.scream], [0.7, VOWEL.scream], [1, VOWEL.uh]],
+      rough: Math.min(1, p.rough + 0.35), breath: p.breath + 0.15, vibrato: 7, bw: 1.6, tail: 0.18,
+    });
+  }
+  /** dying: a falling cry that runs out of breath (or, with a cut/stabbed throat, a choking gurgle) */
+  deathCry(who: number, p: VoiceProfile, pan = 0, throat = false) {
+    if (throat) { this.gurgle(who, p, pan, 1.1); return; }
+    const dur = 0.75 + 0.45 * Math.random();
+    this.vocal(who, 3, p, pan, {
+      dur, gain: 0.55, attack: 0.05,
+      pitch: [[0, 1.9], [0.15, 2.1], [0.55, 1.4], [0.85, 0.85], [1, 0.62]],
+      vowels: [[0, VOWEL.ah], [0.4, VOWEL.a], [0.8, VOWEL.uh], [1, VOWEL.oh]],
+      rough: Math.min(1, p.rough + 0.2), breath: p.breath + 0.2, vibrato: 5, bw: 1.3, tail: 0.35,
+      creak: 9, creakDepth: 0.25,
+    });
+  }
+  /** blood in the throat: low creaky voice pulsing like a choke, with wet bubbles */
+  gurgle(who: number, p: VoiceProfile, pan = 0, dur = 1.0) {
+    const ok = this.vocal(who, 3, p, pan, {
+      dur, gain: 0.42, attack: 0.04,
+      pitch: [[0, 0.95], [0.3, 0.85], [1, 0.6]],
+      vowels: [[0, VOWEL.oh], [0.5, VOWEL.uh], [1, VOWEL.ng]],
+      rough: 1, breath: 0.7, creak: 11 + Math.random() * 4, creakDepth: 0.95, bw: 1.8, tail: 0.3,
+    });
+    if (!ok || !this.ready()) return;
+    // bubbles: short resonant chirps through a lowpass
+    const ctx = this.ctx!;
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 1400;
+    const g = ctx.createGain(); g.gain.value = 0.3;
+    const pn = ctx.createStereoPanner(); pn.pan.value = Math.max(-0.85, Math.min(0.85, pan));
+    lp.connect(g).connect(pn).connect(this.sfx);
+    const t0 = ctx.currentTime + 0.05;
+    const n = Math.round(6 + dur * 10);
+    for (let i = 0; i < n; i++) {
+      const t = t0 + Math.random() * dur;
+      const f = 260 + Math.random() * 520;
+      const o = ctx.createOscillator(); o.type = 'sine';
+      o.frequency.setValueAtTime(f * this.rate, t); o.frequency.exponentialRampToValueAtTime(f * 1.7 * this.rate, t + 0.025);
+      const og = ctx.createGain(); og.gain.setValueAtTime(0, t); og.gain.linearRampToValueAtTime(0.25 + Math.random() * 0.3, t + 0.002); og.gain.setTargetAtTime(0, t + 0.004, 0.009);
+      o.connect(og).connect(lp); o.start(t); o.stop(t + 0.06);
+    }
+    for (let i = 0; i < 3; i++) this.burst(lp, t0 + Math.random() * dur, 'bandpass', 500 + Math.random() * 400, 2, 0.4, 0.03, 0.1);
+  }
+
   /** enemy wind-up glint: a short three-mode 'shing', panned by lane */
   glint(pan = 0) {
     const v = this.voice('glint', 0.6, pan, 0.3, -14); if (!v) return;
