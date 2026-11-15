@@ -61,3 +61,19 @@ export async function cutoutDrift(original: Buffer, cut: Buffer): Promise<number
   }
   return opaque ? sum / opaque / 3 : Number.POSITIVE_INFINITY;
 }
+
+const isGreen = (r: number, g: number, b: number) => g > r && g > b && g - Math.min(r, b) > 0.25 * g;
+
+/**
+ * The cutout paints the hand green; remove-background can keep that paint, so drop green pixels that were not green in the original.
+ * Dropped pixels become transparent white, as remove-background leaves its own background: Stable Fast 3D built flaps from transparent green.
+ */
+export async function keyOutPaint(original: Buffer, cut: Buffer): Promise<Buffer> {
+  const { data, info } = await sharp(cut).toColourspace('srgb').ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  const o = await sharp(original).flatten({ background: '#ffffff' }).toColourspace('srgb').resize(info.width, info.height, { fit: 'fill' }).raw().toBuffer();
+  for (let i = 0; i < info.width * info.height; i++) {
+    const p = i * 4, q = i * 3;
+    if (isGreen(data[p]!, data[p + 1]!, data[p + 2]!) && !isGreen(o[q]!, o[q + 1]!, o[q + 2]!)) data.fill(255, p, p + 3).fill(0, p + 3, p + 4);
+  }
+  return sharp(data, { raw: { width: info.width, height: info.height, channels: 4 } }).png().toBuffer();
+}

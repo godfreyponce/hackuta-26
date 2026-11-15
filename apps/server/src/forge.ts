@@ -22,7 +22,9 @@ const MIN_CONFIDENCE = 0.6;
 
 /** Two GLBs are interchangeable only when these settings match; the reuse cache keys on it. */
 export function forgePipeline(): string {
-  return `${env.FORGE_3D_MODEL}/clean=${env.FORGE_CLEAN_IMAGE}/tex=${env.SF3D_TEXTURE_RES}`;
+  // "cutout-green": the earlier white-fill cutout left a paper blob where the hand was, so its GLBs must not come back.
+  const clean = env.FORGE_CLEAN_IMAGE === 'cutout' ? 'cutout-green' : env.FORGE_CLEAN_IMAGE;
+  return `${env.FORGE_3D_MODEL}/clean=${clean}/tex=${env.SF3D_TEXTURE_RES}`;
 }
 
 /** Lets tests/CLI await the async part of a forge. */

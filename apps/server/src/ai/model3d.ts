@@ -1,7 +1,7 @@
 import { env } from '../env';
 import { log } from '../log';
 import { errMsg } from '../util';
-import { cutoutDrift } from './image';
+import { cutoutDrift, keyOutPaint } from './image';
 
 const STABILITY = 'https://api.stability.ai/v2beta';
 
@@ -47,16 +47,19 @@ async function redraw(png: Buffer, v: ModelSubject, signal: AbortSignal): Promis
 const MAX_DRIFT = 25;
 
 /**
- * Keep the object's real pixels: erase the hand, then cut out the background. Measured 9.1 to 11.9 s, 10 credits.
+ * Keep the object's real pixels: erase the hand, then cut out the background. Measured 9.1 to 12.9 s, 10 credits.
  * The color redraw runs at the same time (4 credits) and is used when the cutout fails, runs past the budget, or repainted the object.
  */
 async function cutout(png: Buffer, v: ModelSubject, signal: AbortSignal, budgetMs: number): Promise<Buffer> {
   const backup = redraw(png, v, signal);
   const budget = AbortSignal.any([signal, AbortSignal.timeout(budgetMs)]);
+  // A white fill came back as a paper sheet that remove-background kept; green paint can be keyed out. The negative prompt stops it painting plants.
   const noHand = await stabilityImage('/stable-image/edit/search-and-replace', {
-    search_prompt: 'hand and fingers', prompt: 'plain pure white background', output_format: 'png',
+    search_prompt: 'hand and fingers', prompt: 'flat solid bright green background',
+    negative_prompt: 'plant, leaves, foliage, flower, paper, sheet, fabric, cloth, object', output_format: 'png',
   }, png, budget);
-  const cut = noHand && await stabilityImage('/stable-image/edit/remove-background', { output_format: 'png' }, noHand, budget);
+  const removed = noHand && await stabilityImage('/stable-image/edit/remove-background', { output_format: 'png' }, noHand, budget);
+  const cut = removed && await keyOutPaint(png, removed).catch(() => null);
   const drift = cut ? await cutoutDrift(png, cut).catch(() => null) : null;
   log.info({ drift: drift === null ? null : Math.round(drift) }, drift !== null && drift < MAX_DRIFT ? 'cutout kept' : 'cutout dropped, using redraw');
   return cut && drift !== null && drift < MAX_DRIFT ? cut : backup;

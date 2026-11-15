@@ -23,7 +23,8 @@ Notes for other parts:
   Add field `debug=1` to get the raw vision JSON back.
 - `POST /api/matches` also accepts optional `playerName` and `weaponKills: { [weaponId]: n }` (feeds Armory kill counts).
 - Forge: `FORGE_CLEAN_IMAGE=1` redraws the object without the hand (SD3.5 turbo, color from vision) before 3D;
-  `FORGE_CLEAN_IMAGE=cutout` erases the hand and cuts out the background, keeping the real pixels, with the redraw as backup;
+  `FORGE_CLEAN_IMAGE=cutout` erases the hand (paints it green, then keys the green out) and cuts out the background, keeping the real pixels, with the redraw as backup;
+  it takes 10 to 13 s and gets `SF3D_TIMEOUT_MS` - 4.5 s, so set `SF3D_TIMEOUT_MS=17000` with it;
   `FORGE_3D_MODEL=spar` uses Stable Point Aware 3D. Measured: clean + spar ≈ 8.4 s and a much better shape than fast-on-raw.
 - `weapon.spawn` is guaranteed (prefab fallback) within `SF3D_TIMEOUT_MS` + 5 s of detection.
   The server serves the fallback models at `/prefabs/<class>.glb` from `apps/server/prefabs/`

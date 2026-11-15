@@ -64,3 +64,10 @@ test('a reused GLB carries the cached thumb, not the new crop thumb', async () =
   assert.equal(doc.pipeline, forgePipeline());
   assert.equal(doc.color, 'black iron');
 });
+
+test('GLBs from the white-fill cutout (hand blob) are never reused by the green cutout', async () => {
+  const { env } = await import('../src/env');
+  const saved = { ...env };
+  Object.assign(env, { FORGE_3D_MODEL: 'fast', FORGE_CLEAN_IMAGE: 'cutout', SF3D_TEXTURE_RES: '1024' });
+  try { assert.notEqual(forgePipeline(), 'fast/clean=cutout/tex=1024'); } finally { Object.assign(env, saved); }
+});
