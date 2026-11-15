@@ -9,6 +9,7 @@
   button { margin: 2px; padding: 6px 10px; }
   .row { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
   canvas, video { width: 320px; height: 180px; background: #000; border: 1px solid #444; }
+  #fc { position: absolute; width: 1px; height: 1px; opacity: 0; }
   #log { height: 260px; overflow: auto; background: #000; padding: 8px; font: 12px ui-monospace, monospace; white-space: pre-wrap; }
   #status { font-weight: bold; }
   #sub { font-size: 18px; min-height: 1.4em; color: #f3e6c4; }
@@ -38,7 +39,7 @@
 <div id="sub"></div>
 <div class="row">
   <div>friend-view (published)<br><canvas id="cv" width="640" height="360"></canvas></div>
-  <div>friend-cam (from agent)<br><video id="fc" autoplay playsinline muted></video></div>
+  <div><span id="fclabel">friend-cam (from agent)</span><br><canvas id="fcc" width="640" height="360"></canvas><video id="fc" autoplay playsinline muted></video></div>
 </div>
 <div id="log"></div>
 <script src="https://cdn.jsdelivr.net/npm/livekit-client@2.19.2/dist/livekit-client.umd.js"></script>
@@ -60,6 +61,21 @@ setInterval(() => {
   g.fillStyle = '#3c3'; g.fillRect(20, 20, 200, 18); g.fillStyle = '#fff'; g.fillText(t.toFixed(1) + 's', 20, 80);
 }, 1000 / 15);
 
+// LiveKit disables a remote track (black frames) before TrackUnsubscribed fires, so the box draws
+// only frames from a live track and keeps the last one after the call instead of going black.
+const fc = $('#fc'), fcc = $('#fcc'), fg = fcc.getContext('2d');
+let camTrack = null;
+(function drawFriendCam() {
+  const mst = camTrack && camTrack.mediaStreamTrack;
+  if (mst && mst.enabled && mst.readyState === 'live' && fc.readyState >= 2 && fc.videoWidth) {
+    const k = Math.min(fcc.width / fc.videoWidth, fcc.height / fc.videoHeight);
+    const w = fc.videoWidth * k, h = fc.videoHeight * k;
+    fg.fillStyle = '#000'; fg.fillRect(0, 0, fcc.width, fcc.height);
+    fg.drawImage(fc, (fcc.width - w) / 2, (fcc.height - h) / 2, w, h);
+  }
+  requestAnimationFrame(drawFriendCam);
+})();
+
 const send = (type, extra = {}) => {
   if (!ws || ws.readyState !== 1) return log('WS not open');
   ws.send(JSON.stringify({ v: 1, type, sessionId: sid, ts: Date.now(), ...extra }));
@@ -74,8 +90,13 @@ $('#start').onclick = async () => {
   room = new Room();
   room.on(RoomEvent.TrackSubscribed, (track, pub, p) => {
     log('subscribed', pub.trackName, 'from', p.identity);
-    if (pub.trackName === 'friend-cam') track.attach($('#fc'));
+    if (pub.trackName === 'friend-cam') { camTrack = track; track.attach(fc); $('#fclabel').textContent = 'friend-cam (from agent)'; }
     if (pub.trackName === 'friend-audio') document.body.appendChild(track.attach());
+  });
+  room.on(RoomEvent.TrackUnsubscribed, (track, pub) => {
+    if (pub.trackName !== 'friend-cam' || track !== camTrack) return;
+    camTrack = null;
+    $('#fclabel').textContent = 'friend-cam (from agent), last frame';
   });
   await room.connect(tok.url, tok.token);
   await room.startAudio();
