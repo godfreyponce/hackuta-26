@@ -17,6 +17,7 @@ let agent: WebSocket | null = null;
 const agents = new Set<WebSocket>();
 const webs = new Map<string, Set<WebSocket>>();
 const forgeCalls = new Map<string, number>();
+const forgeAt = new Map<string, number[]>(); // epoch ms of each /api/forge call (GET /_forge-calls)
 const forgeMiss = new Set<string>(); // sessions whose forge calls all return no_object (POST /_forge-miss)
 
 // ── fake Chert (for `pnpm dev:fake-chert`): the agent runs AGENT_MODE=live against /fake-chert. No real calls. ──
@@ -141,6 +142,7 @@ const server = createServer(async (req, res) => {
       res.writeHead(200, { 'content-type': 'text/html' });
       return res.end(await readFile(new URL('./game-stub.html', import.meta.url)));
     }
+    if (req.method === 'GET' && url.pathname === '/_forge-calls') return json(200, { at: forgeAt.get(url.searchParams.get('sessionId') ?? '') ?? [] });
     if (req.method === 'POST' && url.pathname === '/_forge-miss') {
       const { sessionId, miss } = JSON.parse((await body(req)).toString()) as { sessionId: string; miss: boolean };
       if (miss) forgeMiss.add(sessionId); else forgeMiss.delete(sessionId);
@@ -171,6 +173,7 @@ const server = createServer(async (req, res) => {
       const sid = /name="sessionId"\r\n\r\n([^\r]+)/.exec(raw.toString('latin1'))?.[1] ?? 'unknown';
       const n = (forgeCalls.get(sid) ?? 0) + 1;
       forgeCalls.set(sid, n);
+      forgeAt.set(sid, [...(forgeAt.get(sid) ?? []), Date.now()]);
       log('forge', { sid, n, bytes: raw.length });
       if (forgeMiss.has(sid) || n % 3 !== 2) return json(200, { detected: false, reason: 'no_object' }); // detect on the 2nd try, to exercise the loop
       const forgeId = randomBytes(4).toString('hex');

@@ -33,6 +33,9 @@ const WEAPON_WAIT_MS = 20_000; // spec D.3: Part D guarantees a prefab fallback 
 const QUEUE_POLL_MS = 1_500; // chert/agent/outbound.mjs polls at this rate
 const QUEUE_WAIT_MAX_MS = 120_000; // Chert's 202: "Chert keeps its place for up to 2 minutes"
 const QUEUE_GONE = new Set(['cancelled', 'canceled', 'expired', 'failed']); // docs.trychert.com/facetime/limits names failed
+const AUTO_SCAN_PAUSE_MS = 2_000; // guess (call 6 report): time to raise the object after "Hold something up" ends
+const SCAN_LINE_WAIT_MAX_MS = 10_000; // guess: the scanLooking lines play in 4.0 s and 4.6 s (mock e2e)
+const LINE_POLL_MS = 100;
 const TRACKS_VISIBLE_WAIT_MS = 3_000; // guess: the server showed the second track about 200 ms late in the fake-Chert e2e
 /** Longest that end() can take; main's hard stop on signals must be longer. */
 export const END_MAX_MS = Math.max(SETUP_WAIT_MS, CREATE_AFTER_CANCEL_MAX_MS, FAREWELL_WAIT_MS) + END_CALL_MAX_MS + CLEANUP_MARGIN_MS;
@@ -86,6 +89,8 @@ export class CallSession {
   private awaitingWeapon = false;
   private scanRequested = false;
   private autoScanUsed = false;
+  /** The auto-scan is waiting for "Hold something up" to end, plus the pause. */
+  private scanWaiting = false;
   private scanFailed = false;
   private scanAfterPin = false;
   private weaponTimer: NodeJS.Timeout | null = null;
@@ -452,7 +457,7 @@ export class CallSession {
     void this.narrator.sayNow(g.text, PRIORITY.greeting, g.pcm).then(() => {
       if (this.ending || this.autoScanUsed) return;
       this.autoScanUsed = true;
-      if (!this.scanRequested && !this.scanner.scanning) void this.runScan();
+      if (!this.scanRequested && !this.scanner.scanning) void this.runScan(true);
     });
     log('greeting_started', { via, msAfterBridgeReady: Date.now() - this.bridgeReadyAt, cached: !!g.pcm });
     this.status('connected');
@@ -493,7 +498,7 @@ export class CallSession {
     const action = pinAction({
       weaponCame: !!this.lastWeapon,
       scanFailed: this.scanFailed,
-      askOpen: this.scanner.scanning || this.awaitingWeapon,
+      askOpen: this.scanWaiting || this.scanner.scanning || this.awaitingWeapon,
       linePending: this.narrator.pending(l.text),
     });
     if (action === 'silent') return;
@@ -515,13 +520,29 @@ export class CallSession {
   }
 
   /** Every request gets a scan.status reply. A request during a scan repeats the current state. */
-  private async runScan(): Promise<void> {
+  private async runScan(afterLine = false): Promise<void> {
     if (this.ending || !this.bridgeReadyAt) return this.scanStatus('failed', { reason: 'not_connected' });
-    if (this.scanner.scanning) return this.scanStatus('looking');
+    if (this.scanWaiting || this.scanner.scanning) return this.scanStatus('looking');
     if (this.awaitingWeapon) return this.scanStatus('forging');
     this.scanAfterPin = false;
     this.scanStatus('looking');
-    this.say('scanLooking', PRIORITY.scan);
+    if (afterLine) {
+      // Call 6: the auto-scan took its frame as this line began, before the mug was up (owner OK'd fix 1(a)).
+      // say, not sayNow: sayNow would drop a queued line such as "Is your camera on?".
+      this.scanWaiting = true;
+      try {
+        const l = pick('scanLooking', this.friend.name);
+        this.narrator.say(l.text, PRIORITY.scan, l.pcm);
+        const end = Date.now() + SCAN_LINE_WAIT_MAX_MS;
+        while (this.narrator.pending(l.text) && Date.now() < end && !this.ending) await sleep(LINE_POLL_MS);
+        await sleep(AUTO_SCAN_PAUSE_MS);
+      } finally {
+        this.scanWaiting = false;
+      }
+      if (this.ending) return;
+    } else {
+      this.say('scanLooking', PRIORITY.scan);
+    }
     let nudged = false;
     const hit = await this.scanner.scan((ms) => {
       if (!nudged && ms >= 6_000) { nudged = true; this.say('scanCloser', PRIORITY.scan); }

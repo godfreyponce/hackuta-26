@@ -30,7 +30,7 @@ function check(name: string, ok: boolean, detail?: unknown): void {
   if (!ok) failures.push(name);
 }
 
-type Msg = { type: string; state?: string; text?: string; reason?: string };
+type Msg = { type: string; state?: string; text?: string; reason?: string; at?: number };
 
 /** The web side: hub socket plus the game room with friend-view and player-mic. */
 async function openGame() {
@@ -39,7 +39,7 @@ async function openGame() {
   const msgs: Msg[] = [];
   const ws = new WebSocket(`ws://localhost:8787/ws?role=web&sessionId=${sid}`);
   await new Promise((r) => ws.on('open', r));
-  ws.on('message', (raw) => { const m = JSON.parse(raw.toString()) as Msg; msgs.push(m); out('hub->web', { type: m.type, state: m.state, text: m.text, reason: m.reason }); });
+  ws.on('message', (raw) => { const m = { ...(JSON.parse(raw.toString()) as Msg), at: Date.now() }; msgs.push(m); out('hub->web', { type: m.type, state: m.state, text: m.text, reason: m.reason }); });
   const send = (type: string, extra: Record<string, unknown> = {}) => ws.send(JSON.stringify({ v: 1, type, sessionId: sid, ts: Date.now(), ...extra }));
   const has = (type: string, state: string) => msgs.some((m) => m.type === type && m.state === state);
 
@@ -188,6 +188,12 @@ async function mockMainLoop(): Promise<void> {
 
   const dones = () => g.msgs.filter((m) => m.type === 'scan.status' && m.state === 'done').length;
   check('the auto-scan brings a weapon', await waitFor(() => dones() >= 1, 20_000));
+  // Call 6: the auto-scan took its frame as "Hold something up" began, before the mug was up. The first forge call must
+  // come after that line ends plus AUTO_SCAN_PAUSE_MS (2 s). Floor 5 s: the two scanLooking lines ran 4.6 s and 4.0 s in this e2e, so a scan
+  // at the line's end with no pause, or one inside the line, stays under it; a full sentence of 3 s or more plus 2 s passes.
+  const lookingAt = g.msgs.find((m) => m.type === 'narration' && /Hold (something|it) up/.test(String(m.text)))?.at ?? 0;
+  const { at: forgeAt } = await (await fetch(`${HUB}/_forge-calls?sessionId=${g.sid}`)).json() as { at: number[] };
+  check('the auto-scan sends its first frame after the "Hold something up" line ends, plus the pause (call 6)', lookingAt > 0 && forgeAt.length > 0 && forgeAt[0]! - lookingAt >= 5_000, { msAfterLineStart: forgeAt[0]! - lookingAt });
   g.send('scan.request');
   const weapon = await waitFor(() => dones() >= 2, 20_000);
   check('scan.request after the auto-scan: scan -> forge -> weapon.spawn -> done', weapon);
