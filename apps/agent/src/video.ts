@@ -134,18 +134,19 @@ export class VideoRelay {
    * cached line, else SPEECH_CHARS_PER_S). The last page stays until endCaption or the next line.
    */
   showCaption(text: string, durationMs?: number): void {
-    const msPerChar = durationMs ? durationMs / text.length : 1000 / SPEECH_CHARS_PER_S;
+    const pages = captionPages(text).map((lines) => ({ lines, chars: lines.join(' ').length }));
+    const msPerChar = durationMs ? durationMs / pages.reduce((n, p) => n + p.chars, 0) : 1000 / SPEECH_CHARS_PER_S;
     this.clearCaption();
     const gen = this.captionGen;
     let at = 0;
-    for (const lines of captionPages(text)) {
+    for (const { lines, chars } of pages) {
       const page = renderCaption(lines);
       const show = () => void page.then(
         (c) => { if (gen === this.captionGen) this.caption = c; },
         (e) => { if (gen === this.captionGen) this.caption = null; warn('caption_render_failed', { error: errText(e) }); },
       );
       if (at === 0) show(); else this.captionTimers.push(setTimeout(show, at));
-      at += lines.join(' ').length * msPerChar;
+      at += chars * msPerChar;
     }
   }
 

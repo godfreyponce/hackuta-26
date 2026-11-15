@@ -117,12 +117,18 @@ async function openPhone(url: string, token: string) {
 }
 
 /**
- * The caption as the friend sees it: warm (cream) pixels in the agent-video frame. The e2e game frame is plain grey,
+ * The caption as the friend sees it: warm (cream) pixels in the agent-video frame. The e2e game frame is a flat grey,
  * so only caption text is warm. Saves the frame as a PNG for a human to look at.
  */
-async function captionCheck(frame: VideoFrame | null): Promise<void> {
-  if (!frame) return check('caption: an agent-video frame reached the phone', false);
-  const f = frame.convert(VideoBufferType.RGBA);
+async function captionCheck(latest: () => VideoFrame | null): Promise<void> {
+  // The e2e game cycles its shade 0..248; wait for a bright one so the dark band stands out from the game above the bar.
+  const gameShade = (g: VideoFrame) => g.data[(40 * g.width + g.width / 2) * 4 + 1]!;
+  let f: VideoFrame | null = null;
+  for (const until = Date.now() + 4_000; Date.now() < until; await sleep(30)) {
+    const frame = latest()?.convert(VideoBufferType.RGBA);
+    if (frame && gameShade(frame) > 120) { f = frame; break; }
+  }
+  if (!f) return check('caption: a bright-game agent-video frame reached the phone', false);
   let n = 0, minX = f.width, maxX = -1, minY = f.height, maxY = -1;
   for (let y = 0; y < f.height; y++) for (let x = 0; x < f.width; x++) {
     const i = (y * f.width + x) * 4, r = f.data[i]!, b = f.data[i + 2]!;
@@ -135,10 +141,10 @@ async function captionCheck(frame: VideoFrame | null): Promise<void> {
   const box = { textPixels: n, x: [minX, maxX], y: [minY, maxY], size: `${f.width}x${f.height}`, png };
   check('caption burned into agent-video during the greeting (captions)', n > 200, box);
   check('caption whole inside the game, in its lower half (captions)', n > 0 && minX >= 16 && maxX < f.width - 16 && minY >= f.height / 2 && maxY < GAME_BOTTOM, box);
-  // The band is dark over the grey game; its last rows above the bottom letterbox bar must still be game grey.
+  // The band darkens the game; the last game rows above the bottom letterbox bar must keep the game shade.
   let sum = 0, px = 0;
   for (let y = GAME_BOTTOM - 4; y < GAME_BOTTOM; y++) for (let x = 100; x < f.width - 100; x++) { sum += f.data[(y * f.width + x) * 4 + 1]!; px++; }
-  check('caption band ends above the bottom letterbox bar (captions)', sum / px > 150, { gapGreen: Math.round(sum / px), rows: [GAME_BOTTOM - 4, GAME_BOTTOM - 1] });
+  check('caption band ends above the bottom letterbox bar (captions)', Math.abs(sum / px - gameShade(f)) < 20, { gapGreen: Math.round(sum / px), gameGreen: gameShade(f), rows: [GAME_BOTTOM - 4, GAME_BOTTOM - 1] });
 }
 
 const mockPhone = async (sid: string) => {
@@ -265,7 +271,7 @@ async function liveQueuedCall(): Promise<void> {
   check('connected on bridge_ready', await waitFor(() => g.has('call.status', 'connected'), 5_000));
   await sleep(3_000);
   check('greeting under 1.5 s after join (poll included)', phone.s.firstVoiceAt > 0 && phone.s.firstVoiceAt - phone.s.joinedAt < 1_500, phone.s.firstVoiceAt ? phone.s.firstVoiceAt - phone.s.joinedAt : null);
-  await captionCheck(phone.s.lastAgentFrame);
+  await captionCheck(() => phone.s.lastAgentFrame);
   await fakeEmit(c.id, { status: 'failed', type: 'failed', data: { reason: 'several_audio' } });
   check('failed with Chert reason (review #5)', await waitFor(() => g.msgs.some((m) => m.type === 'call.status' && m.state === 'failed' && m.reason === 'several_audio'), 5_000));
   check('POST /end sent after Chert failed (review #5)', (await fakeLast()).call!.endPosts === 1, (await fakeLast()).call!.endPosts);

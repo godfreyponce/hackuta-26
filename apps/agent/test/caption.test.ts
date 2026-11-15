@@ -82,7 +82,7 @@ test('agent-video: caption pixels while a line plays, still there just after its
 test('agent-video: a long line pages through its audio by character share, and the last page clears after the linger', async () => {
   const pages = captionPages(quip);
   assert.ok(pages.length >= 3, `${pages.length} pages`);
-  const ms = 1_800, perChar = ms / quip.length;
+  const ms = 2_400, perChar = ms / pages.reduce((n, p) => n + p.join(' ').length, 0);
   const starts = pages.map((_, i) => pages.slice(0, i).reduce((n, p) => n + p.join(' ').length * perChar, 0));
   const relay = new VideoRelay();
   let last: VideoFrame | null = null;
