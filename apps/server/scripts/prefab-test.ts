@@ -12,7 +12,19 @@ function checkGlb(buf: Buffer, label: string): void {
   assert.equal(buf.readUInt32LE(8), buf.length, `${label}: header length`);
   const jsonLen = buf.readUInt32LE(12);
   assert.equal(buf.toString('ascii', 16, 20), 'JSON', `${label}: first chunk`);
-  const json = JSON.parse(buf.toString('utf8', 20, 20 + jsonLen)) as { accessors: { min?: number[]; max?: number[] }[] };
+  const json = JSON.parse(buf.toString('utf8', 20, 20 + jsonLen)) as {
+    buffers: { byteLength: number }[];
+    bufferViews: { byteOffset?: number; byteLength: number }[];
+    accessors: { bufferView: number; count: number; min?: number[]; max?: number[] }[];
+  };
+  const binAt = 20 + jsonLen;
+  assert.equal(buf.toString('ascii', binAt + 4, binAt + 8), 'BIN\0', `${label}: second chunk`);
+  assert.equal(buf.readUInt32LE(binAt), json.buffers[0]!.byteLength, `${label}: BIN length matches buffer`);
+  for (const a of json.accessors) {
+    const view = json.bufferViews[a.bufferView]!;
+    assert.equal(a.count * 12, view.byteLength, `${label}: accessor fills its view`);
+    assert.ok((view.byteOffset ?? 0) + view.byteLength <= json.buffers[0]!.byteLength, `${label}: view inside buffer`);
+  }
   const { min, max } = json.accessors[0]!;
   assert.ok(min && max, `${label}: POSITION bounds`);
   const longest = Math.max(...max.map((m, i) => m - min[i]!));

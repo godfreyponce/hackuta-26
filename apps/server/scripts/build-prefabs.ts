@@ -74,9 +74,9 @@ const PREFABS: Record<WeaponClass, { color: Rgb; parts: Part[] }> = {
   },
   blunt: { color: [0.36, 0.22, 0.12], parts: [cylinder(0.03, -0.15, 0.55), sphere(0.17, 0.65)] },
   throwable: { color: [0.8, 0.16, 0.1], parts: [sphere(0.5, 0, 12, 8)] },
-  shield: {
+  shield: { // boss on +Z, the glTF front; handle on -Z, toward the holder
     color: [0.76, 0.55, 0.2],
-    parts: [map(cylinder(0.5, -0.03, 0.03, 16), faceZ(-0.07)), map(sphere(0.09, 0, 8, 4), faceZ(-0.1)), box([0.04, 0.22, 0.06], [0, 0, -0.01])],
+    parts: [map(cylinder(0.5, -0.03, 0.03, 16), faceZ(0.07)), map(sphere(0.09, 0, 8, 4), faceZ(0.1)), box([0.04, 0.22, 0.06], [0, 0, 0.01])],
   },
   bomb: { color: [0.13, 0.13, 0.15], parts: [sphere(0.35, 0), cylinder(0.1, 0.3, 0.45), cylinder(0.02, 0.45, 0.6, 6)] },
   potion: { color: [0.2, 0.7, 0.36], parts: [sphere(0.3, -0.15), cylinder(0.09, 0.1, 0.4), cylinder(0.11, 0.4, 0.5)] },
