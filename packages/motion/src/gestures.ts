@@ -9,7 +9,7 @@ import type { PendingGesture } from './types';
 type Emit = (e: InputEvent) => void;
 
 export type DetectorFlags = Record<
-  'gripL' | 'gripR' | 'blockPose' | 'blocking' | 'bowArm' | 'nocked' | 'phoneShape' | 'nearEar' | 'armsUp',
+  'gripL' | 'gripR' | 'blockPose' | 'blocking' | 'bowArm' | 'bowReady' | 'nocked' | 'phoneShape' | 'nearEar' | 'armsUp',
   boolean
 >;
 
@@ -75,6 +75,7 @@ export class Gestures {
   private nocked = false;
   private bowLostSince = -1;
   private bowOpenFrames = 0;
+  private bowArmSeenAt = -1e9;
   private bowDraw = 0;
   /** Last frame's diagnostics for the lab. */
   readonly debug = {
@@ -83,6 +84,8 @@ export class Gestures {
     armsUp: false,
     blockPose: false,
     leftArmExtended: false,
+    /** Nock-eligible: arm was fully extended recently and is still roughly held out. */
+    bowReady: false,
     nocked: false,
     /** Why the last nocked arrow was dropped (lab/guide feedback). */
     bowDropReason: '',
@@ -102,6 +105,7 @@ export class Gestures {
     this.bowLostSince = -1;
     this.bowOpenFrames = 0;
     this.bowDraw = 0;
+    this.bowArmSeenAt = -1e9;
   }
 
   update(body: Body, grip: GripTracker, state: PlayerInputState, emit: Emit): void {
@@ -201,10 +205,18 @@ export class Gestures {
     const extended =
       body.ok && L.visible && body.elbowAngle.left > config.bowElbowAngle && L.pos.z < config.bowWristForwardZ;
     this.debug.leftArmExtended = extended;
+    // Bringing the right fist across hides the left wrist and softens the left elbow, so the strict
+    // check flickers off exactly when nocking. Latch it: full extension seen in the last bowArmLatchMs,
+    // and the arm still roughly held out (a hidden left wrist doesn't count against it).
+    if (extended) this.bowArmSeenAt = t;
+    const roughlyOut =
+      body.ok && body.elbowAngle.left > config.bowHoldElbowAngle && (!L.visible || L.pos.z < config.bowHoldWristForwardZ);
+    const ready = extended || (t - this.bowArmSeenAt <= config.bowArmLatchMs && roughlyOut);
+    this.debug.bowReady = ready;
 
     if (!this.nocked) {
       state.bowDraw = 0;
-      if (extended && R.visible && grip.isGripping('right')) {
+      if (ready && R.visible && grip.isGripping('right')) {
         const rp = body.hand.right ? body.palmImg.right : (body.img[POSE_IDX.right.wrist] as Vec2);
         if (body.meters(rp, body.img[POSE_IDX.left.wrist] as Vec2) < config.bowNockDist) {
           this.nocked = true;

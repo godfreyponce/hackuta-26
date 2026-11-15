@@ -86,6 +86,8 @@ export const DEFAULT_CONFIG = {
   bowHoldElbowAngle: 125,
   /** Left wrist must stay at least this far forward while nocked (a hanging arm is straight too). */
   bowHoldWristForwardZ: -0.3,
+  /** After a full extension, the left arm stays nock-ready this long while roughly held out. */
+  bowArmLatchMs: 1500,
   /** Right hand must read below this grip, seen by the hand model for bowReleaseFrames, to loose the arrow. */
   bowReleaseGrip: 0.25,
   bowReleaseFrames: 3,
@@ -181,6 +183,7 @@ export const CONFIG_RANGES: Record<string, Partial<Record<keyof MotionConfig, [n
     bowCancelMs: [0, 2000, 50],
     bowHoldElbowAngle: [90, 170, 1],
     bowHoldWristForwardZ: [-0.8, 0, 0.01],
+    bowArmLatchMs: [0, 4000, 100],
     bowReleaseGrip: [0.05, 0.6, 0.01],
     bowReleaseFrames: [1, 8, 1],
     bowLooseMinDraw: [0, 0.8, 0.01],

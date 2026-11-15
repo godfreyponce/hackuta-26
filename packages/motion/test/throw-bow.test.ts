@@ -133,3 +133,34 @@ describe('bow: the arrow stays nocked while drawing', () => {
     expect(e.gestures.debug.bowDropReason).toMatch(/left arm/);
   });
 });
+
+describe('bow: nocking while the right arm crosses the left', () => {
+  const both = (r: number) => ({ left: { curl: 1 }, right: { curl: r } });
+  // Left elbow softens to ~140° as the right fist comes across to the left wrist.
+  const SOFT_LEFT: Record<number, P3> = { 13: [-0.12, 0.5, -0.28], 15: [0.06, 0.5, -0.43] };
+  const NOCK_SOFT: Record<number, P3> = { ...SOFT_LEFT, 16: [0.08, 0.5, -0.4], 14: [0.2, 0.45, -0.2] };
+
+  it('left wrist hidden behind the right hand while nocking → still nocks, then shoots', () => {
+    const { events, push } = engine();
+    let t = run(push, 400, { joints: LEFT_OUT, hands: both(0) }); // arm out: bowArm ✓
+    t = run(push, 400, { joints: NOCK, hands: both(1), occlude: [15] }, t); // right fist covers left wrist
+    expect(types(events)).toContain('bow_nock');
+    t = run(push, 600, drawPath(t, 600, both(1)), t);
+    t = run(push, 300, { joints: DRAWN, hands: both(1) }, t);
+    run(push, 200, { joints: DRAWN, hands: both(0) }, t);
+    expect(types(events)).toContain('bow_release');
+  });
+
+  it('left elbow softens to 140° as the right fist arrives → still nocks', () => {
+    const { events, push } = engine();
+    let t = run(push, 400, { joints: LEFT_OUT, hands: both(0) });
+    run(push, 400, { joints: NOCK_SOFT, hands: both(1) }, t);
+    expect(types(events)).toContain('bow_nock');
+  });
+
+  it('never nocks if the left arm was never fully extended', () => {
+    const { events, push } = engine();
+    run(push, 1500, { joints: NOCK_SOFT, hands: both(1) });
+    expect(types(events)).not.toContain('bow_nock');
+  });
+});

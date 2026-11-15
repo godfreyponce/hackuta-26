@@ -32,6 +32,8 @@ export interface FrameSpec {
   /** Shift the whole body (player space). */
   offset?: P3;
   noPose?: boolean;
+  /** Pose landmarks hidden behind something (image visibility drops to 0.2). */
+  occlude?: number[];
   /** Hand model skipped this frame. */
   skipHands?: boolean;
 }
@@ -58,7 +60,11 @@ export function frame(t: number, spec: FrameSpec = {}): RawFrame {
       const p = j[i] ?? [0, 0.3, 0];
       return toWorld([p[0] + worldOff[0], p[1] + worldOff[1], p[2] + worldOff[2]]);
     }),
-    poseImage: idx.map((i) => toImage(at(i))),
+    poseImage: idx.map((i) => {
+      const p = toImage(at(i));
+      if (spec.occlude?.includes(i)) p.visibility = 0.2;
+      return p;
+    }),
     hands: spec.skipHands ? null : hands,
   };
 }

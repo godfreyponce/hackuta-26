@@ -165,7 +165,7 @@ export const GUIDE_STEPS: StepDef[] = [
       {
         say: 'Make a RIGHT fist and touch it to your left wrist (nock the arrow)',
         event: (e) => (e.type === 'bow_nock' ? { ok: true } : null),
-        hint: (c) => (!c.flags?.bowArm ? 'Keep your left arm straight out' : !c.flags.gripR ? 'Close your right hand into a fist' : 'Bring your right fist closer to your left wrist'),
+        hint: (c) => (!c.flags?.bowReady ? 'Straighten your left arm out toward the screen again' : !c.flags.gripR ? 'Close your right hand into a fist' : 'Bring your right fist closer to your left wrist'),
       },
       {
         say: 'Pull your right fist back to your chin, then OPEN it to shoot',

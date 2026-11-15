@@ -228,6 +228,7 @@ export class Engine {
       blockPose: d.blockPose,
       blocking: this.gestures.isBlocking,
       bowArm: d.leftArmExtended,
+      bowReady: d.bowReady,
       nocked: d.nocked,
       phoneShape: d.callShape.left || d.callShape.right,
       nearEar: d.callNearEar.left || d.callNearEar.right,
