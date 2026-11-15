@@ -43,7 +43,10 @@ const EM_PER_CHAR = 0.6;
 export const GAME_BOTTOM = (AGENT_H + OUT_H) / 2;
 /** Measured: the 22 cached ElevenLabs lines run 11 to 19 characters per second, 16.1 over all of them. */
 export const SPEECH_CHARS_PER_S = 16;
-/** Guess: how long a caption stays after its audio ends, so the friend can finish reading the last words. */
+/**
+ * Guess: how long a caption stays after mixer.play resolves. The mixer's AudioSource still holds up to 100 ms, the
+ * phone's jitter buffer more, and the friend needs a moment to finish reading.
+ */
 export const CAPTION_LINGER_MS = 700;
 
 function wrap(text: string, maxChars: number): string[] {
