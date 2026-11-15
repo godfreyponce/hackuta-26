@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useApp, isCallLive } from '../state/store';
 import { endCall, ensureSession, reasonText, requestCall, setupInput, startMatch } from '../game/runtime';
 import { motionAvailable } from '../input';
-import { Btn, isBodyInput, useMenuNav } from './components';
+import { Btn, StanceChecklist, isBodyInput, useMenuNav } from './components';
 import { CallChip } from './CallChip';
 import { FriendPip } from './FriendPip';
 import { audio } from '../game/engine/audio';
@@ -56,12 +56,33 @@ export function Lobby() {
             “Father, lo, now I will bring thee a shield and two spears and a helmet all of bronze.”
             <cite>Telemachus · Odyssey XXII</cite>
           </p>
-          <FriendPip big />
-          <div className="row" style={{ flexWrap: 'wrap' }}>
-            <CallChip />
-            {friend ? <span className="muted small">{friend.name} · {friend.phoneMasked}</span> : <span className="muted small">No friend added</span>}
-            {netMode === 'live' && mediaStatus === 'failed' && <span className="chip bad"><span className="dot" />Video relay offline</span>}
-          </div>
+          {friend ? (
+            <>
+              <FriendPip big />
+              <div className="row" style={{ flexWrap: 'wrap' }}>
+                <CallChip />
+                <span className="muted small">{friend.name} · {friend.phoneMasked}</span>
+                {netMode === 'live' && mediaStatus === 'failed' && <span className="chip bad"><span className="dot" />Video relay offline</span>}
+              </div>
+            </>
+          ) : (
+            // fighting alone: say what a Telemachus adds, instead of an empty video frame
+            <div className="solo-card">
+              <svg width="40" height="40" viewBox="0 0 64 64" aria-hidden>
+                <circle cx="32" cy="22" r="11" fill="none" stroke="currentColor" strokeWidth="2.5" strokeDasharray="4 3" />
+                <path d="M10 60 Q12 36 32 36 Q52 36 54 60" fill="none" stroke="currentColor" strokeWidth="2.5" strokeDasharray="4 3" />
+              </svg>
+              <div>
+                <div className="h3">You fight alone</div>
+                <p className="muted small" style={{ margin: '4px 0 10px' }}>Add a friend and the game FaceTimes them mid-fight:</p>
+                <ol className="solo-steps">
+                  <li><span><b>Call</b> — {body ? 'the phone sign by your ear' : <>press <span className="kbd">C</span></>}</span></li>
+                  <li><span><b>They hold up</b> a pan, a broom, a bottle…</span></li>
+                  <li><span><b>It’s forged</b> into a weapon and flies into the hall</span></li>
+                </ol>
+              </div>
+            </div>
+          )}
           {call.state === 'failed' && friend && (
             <div className="small call-reason" role="status">{reasonText(call.reason)} · press <span className="kbd">C</span> to try again</div>
           )}
@@ -75,11 +96,13 @@ export function Lobby() {
               </Btn>
             )
           ) : (
-            <Btn onClick={() => go('setup')}>Add your Telemachus</Btn>
+            <><div className="spacer" /><Btn onClick={() => go('setup')}>Add your Telemachus</Btn></>
           )}
-          <p className="muted small" style={{ margin: 0 }}>
-            Call before the fight — ringing takes a moment. The call ends by 4:45. If it drops, the fight goes on.
-          </p>
+          {friend && (
+            <p className="muted small" style={{ margin: 0 }}>
+              Call before the fight — ringing takes a moment. The call ends by 4:45. If it drops, the fight goes on.
+            </p>
+          )}
         </section>
 
         <section className="panel col">
@@ -99,9 +122,9 @@ export function Lobby() {
             </div>
           </div>
           {inputKind === 'replay' && <span className="muted small" style={{ marginTop: -6 }}>Replaying a recorded webcam session — the recording moves your hands.</span>}
+          {body && <StanceChecklist compact />}
           <ul className="muted small lobby-tips">
             {body ? (<>
-              <li>Stand about 2 m back, hips in view, a light in front of you.</li>
               <li><b>Reach toward a weapon and make a fist</b> — it flies to your hand. Open your hand mid-swing to throw.</li>
               <li><b>Both fists up by your chin</b> to guard; lean to dodge.</li>
             </>) : (<>
@@ -116,7 +139,7 @@ export function Lobby() {
             ))}
           </ul>
           <div className="spacer" />
-          <Btn variant="primary" big autoFocus={live} onClick={start}>Start the fight</Btn>
+          <Btn variant="primary" big autoFocus={live || !friend} onClick={start}>Start the fight</Btn>
         </section>
       </div>
     </div>

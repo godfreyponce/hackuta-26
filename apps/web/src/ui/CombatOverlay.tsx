@@ -149,22 +149,11 @@ export function CombatOverlay() {
       if (o.hover) {
         const s = toScreen(o.hover.pos);
         if (s.on) {
-          const lx = hoverLabel(ctx, o.hover.name, inputKindNow() === 'keyboard_mouse' ? 'CLICK TO TAKE' : 'MAKE A FIST', s.x, s.y - 26 * k, k, W);
-          // webcam: a ring left of the label fills as the hand closes — you see your fist registering
-          if (o.hover.progress !== undefined) {
-            const rx = lx - 16 * k, ry = s.y - 26 * k, rr = 10 * k;
-            ctx.save();
-            ctx.lineCap = 'round';
-            ctx.lineWidth = 6.5 * k; ctx.strokeStyle = 'rgba(0,0,0,0.7)';
-            ctx.beginPath(); ctx.arc(rx, ry, rr, 0, Math.PI * 2); ctx.stroke();
-            ctx.lineWidth = 3.5 * k; ctx.strokeStyle = 'rgba(232,223,204,0.35)';
-            ctx.beginPath(); ctx.arc(rx, ry, rr, 0, Math.PI * 2); ctx.stroke();
-            if (o.hover.progress > 0.01) {
-              ctx.strokeStyle = o.hover.progress >= 1 ? '#fff1c8' : BRASS_HI;
-              ctx.beginPath(); ctx.arc(rx, ry, rr, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * o.hover.progress); ctx.stroke();
-            }
-            ctx.restore();
-          }
+          const p = o.hover.progress;
+          const kb = inputKindNow() === 'keyboard_mouse';
+          // webcam: the action follows the hand — "make a fist", then "closing…" while the grip builds
+          const action = kb ? 'CLICK TO TAKE' : p !== undefined && p >= 1 ? 'TAKEN' : p !== undefined && p > 0.05 ? 'CLOSING…' : 'MAKE A FIST';
+          hoverLabel(ctx, o.hover.name, action, s.x, s.y - 26 * k, k, W, p);
         }
       }
 
@@ -211,28 +200,46 @@ export function CombatOverlay() {
   return <canvas ref={ref} className="combat-overlay" aria-hidden />;
 }
 
-/** Weapon name (Cinzel, ivory) + the action (brass) on a dark rounded plate, kept inside the screen; ≥ 12 px at any size. */
-function hoverLabel(ctx: CanvasRenderingContext2D, name: string, action: string, x: number, y: number, k: number, W: number): number {
+/** Weapon name (Cinzel, ivory) + the action (brass) on a dark rounded plate, kept inside the screen; ≥ 12 px at any size.
+ *  Webcam (`ring` defined): a grip ring sits inside the plate's left end and fills as the hand closes — you see your fist
+ *  registering — and the plate's rim warms to brass as it fills. */
+function hoverLabel(ctx: CanvasRenderingContext2D, name: string, action: string, x: number, y: number, k: number, W: number, ring?: number): number {
   const fs = Math.max(12, 14 * k);
   const nameFont = `700 ${fs}px 'Cinzel', serif`, actFont = `800 ${fs * 0.78}px 'Montserrat Variable', 'Montserrat', sans-serif`;
   const nm = name.toUpperCase(), sep = '   ';
   ctx.font = nameFont; const wn = ctx.measureText(nm).width;
   ctx.font = actFont; const wa = ctx.measureText(sep + action).width;
-  const padX = fs * 0.8, h = fs * 1.9, w = wn + wa + padX * 2;
+  const h = fs * 2.1, padX = fs * 0.85, ringW = ring !== undefined ? h * 0.92 : 0;
+  const w = ringW + wn + wa + padX * 2 - (ringW ? padX * 0.45 : 0);
   const cx = Math.min(W - w / 2 - 8, Math.max(w / 2 + 8, x));
   const left = cx - w / 2, top = y - h / 2;
+  const p = Math.max(0, Math.min(1, ring ?? 0));
   ctx.save();
-  ctx.globalAlpha = 0.92;
-  ctx.fillStyle = 'rgba(12,9,7,0.82)';
-  ctx.strokeStyle = 'rgba(255,213,138,0.6)';
-  ctx.lineWidth = 1;
+  ctx.globalAlpha = 0.94;
+  ctx.fillStyle = 'rgba(12,9,7,0.84)';
+  ctx.strokeStyle = p > 0.01 ? `rgba(255,213,138,${0.6 + 0.4 * p})` : 'rgba(255,213,138,0.6)';
+  ctx.lineWidth = p > 0.01 ? 1 + p : 1;
   ctx.beginPath(); ctx.roundRect(left, top, w, h, h / 2); ctx.fill(); ctx.stroke();
   ctx.globalAlpha = 1;
+  if (ring !== undefined) {
+    const rx = left + h / 2, ry = y, rr = h * 0.3;
+    ctx.lineCap = 'round';
+    ctx.lineWidth = Math.max(2.5, 3 * k); ctx.strokeStyle = 'rgba(232,223,204,0.28)';
+    ctx.beginPath(); ctx.arc(rx, ry, rr, 0, Math.PI * 2); ctx.stroke();
+    if (p > 0.01) {
+      ctx.strokeStyle = p >= 1 ? '#fff1c8' : BRASS_HI;
+      ctx.beginPath(); ctx.arc(rx, ry, rr, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * p); ctx.stroke();
+    }
+    // centre dot grows into a filled "fist" as the grip closes
+    ctx.fillStyle = p > 0.01 ? BRASS_HI : 'rgba(232,223,204,0.5)';
+    ctx.beginPath(); ctx.arc(rx, ry, rr * (0.22 + 0.4 * p), 0, Math.PI * 2); ctx.fill();
+  }
+  const tx = left + (ringW ? ringW + padX * 0.55 : padX);
   ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
   ctx.font = nameFont; ctx.fillStyle = '#F3E9D6';
-  ctx.fillText(nm, left + padX, y + 1);
+  ctx.fillText(nm, tx, y + 1);
   ctx.font = actFont; ctx.fillStyle = BRASS_HI;
-  ctx.fillText(sep + action, left + padX + wn, y + 1);
+  ctx.fillText(sep + action, tx + wn, y + 1);
   ctx.restore();
   return left;
 }

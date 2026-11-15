@@ -44,17 +44,27 @@ export function Results() {
 
   const again = () => { startMatch(); go('game'); };
   const title = () => { runtime.engine?.backToMenu(); go('title'); };
+  // nothing to show on the right (no killcams, no gifts): one centred card instead of a half-empty second panel
+  const single = !killcams.length && !r.forged.length;
+  const nextTime = (
+    <p className="muted small" style={{ margin: 0 }}>
+      {friend
+        ? <>Next time: call {friend.name}{kb ? <> <span className="nowrap">(<span className="kbd">C</span>)</span>, then ask for a weapon <span className="nowrap">(<span className="kbd">Q</span>)</span></> : ' with the phone sign, then raise both hands over your head'}.</>
+        : <>Add a Telemachus from the title screen and he can send you weapons mid-fight.</>}
+      {' '}Pin a wooer to a pillar or drop two with one throw for a slow-motion killcam.
+    </p>
+  );
 
   return (
     <div className="screen dim" ref={ref}>
-      <div className="results">
-        <section className="panel col">
-          <div className="eyebrow">{r.victory ? 'Odyssey XXII · The hall is cleansed' : `Fell in wave ${r.wave}`}</div>
+      <div className={`results ${single ? 'single' : ''}`}>
+        <section className={`panel col ${r.victory ? 'res-won' : 'res-lost'}`}>
+          <div className="eyebrow res-eyebrow">{r.victory ? 'Odyssey XXII · The hall is cleansed' : `Fell in wave ${['I', 'II', 'III'][r.wave - 1] ?? r.wave}`}</div>
           <h1 className="h1" style={{ fontSize: 'clamp(32px, 3.9vw, 56px)', letterSpacing: '0.16em' }}>{r.victory ? 'The hall is yours' : 'The wooers prevail'}</h1>
           <Meander />
           <div className="stat-row">
             <div className="stat"><div className="v">{r.score.toLocaleString()}</div><div className="k">Score</div></div>
-            <div className="stat"><div className="v">{r.kills}</div><div className="k">Wooers slain</div></div>
+            <div className="stat"><div className="v">{r.kills}</div><div className="k">{r.kills === 1 ? 'Wooer slain' : 'Wooers slain'}</div></div>
             <div className="stat"><div className="v">×{r.bestCombo.toFixed(2)}</div><div className="k">Best combo</div></div>
             <div className="stat"><div className="v">{fmtTime(r.durationMs)}</div><div className="k">Time</div></div>
           </div>
@@ -77,8 +87,9 @@ export function Results() {
             <Btn variant="link" onClick={title}>Title</Btn>
           </div>
           {err && <div className="error" role="alert">{err}</div>}
+          {single && nextTime}
         </section>
-        <section className="panel col">
+        {!single && <section className="panel col">
           <div className="h3">Killcams</div>
           {killcams.length ? (
             <div className="clips">
@@ -107,7 +118,7 @@ export function Results() {
           ) : <p className="muted small" style={{ margin: 0 }}>No weapons from the storeroom this match. {friend
             ? <>Next time: call {friend.name}{kb ? <> <span className="nowrap">(<span className="kbd">C</span>)</span>, then ask for a weapon <span className="nowrap">(<span className="kbd">Q</span>)</span></> : ' with the phone sign, then raise both hands over your head'}.</>
             : <>Add a Telemachus from the title screen and he can send you weapons mid-fight.</>}</p>}
-        </section>
+        </section>}
       </div>
     </div>
   );
