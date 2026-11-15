@@ -5,3 +5,7 @@ export type { MotionConfig } from './config';
 export { Engine } from './engine';
 export { neutralState, neutralHand } from './neutral';
 export type * from './types';
+export { Body, Mapper } from './mapping';
+export { OneEuro, OneEuro3 } from './oneEuro';
+export { DEFAULT_PROFILE, loadProfile, saveProfile, clearSavedProfile } from './profile';
+export type { Profile } from './profile';

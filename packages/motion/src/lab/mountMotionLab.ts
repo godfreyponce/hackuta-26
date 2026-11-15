@@ -4,6 +4,7 @@ import { HandLandmarker, PoseLandmarker } from '@mediapipe/tasks-vision';
 import type { InputController, InputEvent } from '@ithaca/shared';
 import { createMotionController, type MotionDebug } from '../controller';
 import type { RawLandmark } from '../types';
+import { buildSliders, drawGameSpace } from './panels';
 import { LAB_CSS } from './styles';
 
 export interface MotionLabOptions {
@@ -46,12 +47,17 @@ export function mountMotionLab(root: HTMLElement, opts: MotionLabOptions = {}): 
         <div class="placeholder">Camera off. Press <b>Start camera</b>.</div>
       </section>
       <aside>
+        <h2>Game space</h2>
+        <canvas class="space"></canvas>
         <h2>PlayerInputState</h2>
         <pre data-k="state"></pre>
         <h2>Events <button data-a="clear" class="small">clear</button></h2>
         <ol class="log" data-k="log"></ol>
       </aside>
-    </main>`;
+    </main>
+    <div class="below">
+      <section><h2>Thresholds <small>(double-click a slider to reset it)</small></h2><div class="sliders"></div></section>
+    </div>`;
 
   const q = <T extends Element>(sel: string): T => {
     const el = root.querySelector<T>(sel);
@@ -69,6 +75,8 @@ export function mountMotionLab(root: HTMLElement, opts: MotionLabOptions = {}): 
   const stateEl = badge('state');
   const logEl = badge('log');
   const errorEl = badge('error');
+  const spaceCv = q<HTMLCanvasElement>('canvas.space');
+  buildSliders(q<HTMLElement>('.sliders'));
 
   let controller: LabController | null = null;
   let unsub: (() => void) | null = null;
@@ -164,6 +172,7 @@ export function mountMotionLab(root: HTMLElement, opts: MotionLabOptions = {}): 
   function loop(now: number): void {
     raf = requestAnimationFrame(loop);
     drawOverlay();
+    drawGameSpace(spaceCv, controller?.getState() ?? null, controller?.getDebugBody?.() ?? null);
     if (now - lastReadout > 100) {
       lastReadout = now;
       updateBadges();

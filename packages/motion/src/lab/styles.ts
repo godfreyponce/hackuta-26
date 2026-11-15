@@ -55,4 +55,7 @@ export const LAB_CSS = `
 .ithaca-lab .sliders output { font-variant-numeric: tabular-nums; text-align: right; }
 .ithaca-lab .sliders label.changed span { color: var(--accent); }
 .ithaca-lab .below { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; margin-top: 4px; }
+.ithaca-lab .sliders h3 { font-size: 11px; margin: 8px 0 2px; color: var(--muted); font-weight: 600; }
+.ithaca-lab .sliders .row { margin-top: 8px; display: flex; gap: 6px; }
+.ithaca-lab small { text-transform: none; letter-spacing: 0; font-weight: 400; }
 `;

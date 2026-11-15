@@ -2,7 +2,10 @@
 // so the live controller, the replay controller and unit tests all share it.
 import type { InputEvent, PlayerInputState } from '@ithaca/shared';
 import { config } from './config';
+import { HANDS, Mapper, type Body } from './mapping';
+import { copy3 } from './math';
 import { neutralState } from './neutral';
+import { cloneProfile, DEFAULT_PROFILE, type Profile } from './profile';
 import type { RawFrame } from './types';
 
 export type Listener = (e: InputEvent) => void;
@@ -15,16 +18,31 @@ export class Engine {
   aspect = 16 / 9;
   /** True when the tracker runs on CPU (C.1: report degraded). */
   cpuFallback = false;
+  profile: Profile;
 
+  /** Internal state at the last frame. */
   readonly state: PlayerInputState = neutralState('off');
+  /** What getState() hands out: `state` extrapolated to "now" (≤ maxExtrapolateMs). Reused object. */
+  private readonly out: PlayerInputState = neutralState('off');
   lastFrame: RawFrame | null = null;
+  /** performance.now() when the last frame was processed. */
+  private lastFrameWall = 0;
 
+  readonly mapper = new Mapper();
   private readonly listeners = new Set<Listener>();
   private poseLostSince = -1;
   private poseBackSince = -1;
   private lost = true;
   private everSeen = false;
   private avgVisibility = 0;
+
+  constructor(profile?: Profile | null) {
+    this.profile = profile ? cloneProfile(profile) : cloneProfile(DEFAULT_PROFILE);
+  }
+
+  get body(): Body {
+    return this.mapper.body;
+  }
 
   on(cb: Listener): () => void {
     this.listeners.add(cb);
@@ -49,6 +67,7 @@ export class Engine {
     this.everSeen = false;
     this.poseLostSince = this.poseBackSince = -1;
     this.state.tracking = 'lost';
+    this.mapper.reset();
   }
 
   end(): void {
@@ -56,9 +75,38 @@ export class Engine {
     this.state.hands.left.visible = this.state.hands.right.visible = false;
   }
 
-  push(frame: RawFrame): void {
+  push(frame: RawFrame, wallNow = nowMs()): void {
     this.lastFrame = frame;
+    this.lastFrameWall = wallNow;
     this.updateTracking(frame);
+    this.mapper.update(frame.poseImage, frame.poseWorld, frame.hands, frame.t, this.aspect, this.profile, this.state);
+    this.state.t = frame.t;
+  }
+
+  /** Latest state, extrapolated ≤ maxExtrapolateMs along hand velocity. The returned object is reused. */
+  getState(wallNow = nowMs()): PlayerInputState {
+    const s = this.state, o = this.out;
+    o.t = wallNow;
+    o.tracking = s.tracking;
+    o.body.lean = s.body.lean;
+    o.body.crouch = s.body.crouch;
+    o.body.yaw = s.body.yaw;
+    o.bowDraw = s.bowDraw;
+    const ahead = this.lastFrameWall ? Math.min(Math.max(wallNow - this.lastFrameWall, 0), config.maxExtrapolateMs) / 1000 : 0;
+    for (const h of HANDS) {
+      const a = s.hands[h], b = o.hands[h];
+      b.visible = a.visible;
+      b.confidence = a.confidence;
+      b.grip = a.grip;
+      copy3(b.vel, a.vel);
+      copy3(b.forward, a.forward);
+      copy3(b.up, a.up);
+      const k = a.visible ? ahead : 0;
+      b.pos.x = a.pos.x + a.vel.x * k;
+      b.pos.y = a.pos.y + a.vel.y * k;
+      b.pos.z = a.pos.z + a.vel.z * k;
+    }
+    return o;
   }
 
   private updateTracking(f: RawFrame): void {
@@ -96,3 +144,5 @@ export class Engine {
     return this.avgVisibility;
   }
 }
+
+const nowMs = (): number => (typeof performance !== 'undefined' ? performance.now() : Date.now());

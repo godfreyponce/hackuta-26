@@ -1,6 +1,8 @@
 import type { InputController, PlayerInputState } from '@ithaca/shared';
 import { config } from './config';
 import { Engine } from './engine';
+import type { Body } from './mapping';
+import { loadProfile } from './profile';
 import { Tracker } from './tracker';
 import type { RawFrame, RawHand, TrackerStats } from './types';
 
@@ -21,6 +23,8 @@ export interface MotionDebug {
   getDebugFrame(): RawFrame | null;
   /** Hand results incl. frames where hands were skipped (perf mode). */
   getDebugHands(): RawHand[];
+  /** Derived skeleton in game space (joints, assigned hands). */
+  getDebugBody(): Body | null;
 }
 
 export interface MotionController extends InputController, MotionDebug {
@@ -28,7 +32,7 @@ export interface MotionController extends InputController, MotionDebug {
 }
 
 export function createMotionController(opts: MotionControllerOptions = {}): MotionController {
-  const engine = new Engine();
+  const engine = new Engine(loadProfile());
   const tracker = new Tracker({
     modelBaseUrl: opts.modelBaseUrl ?? '/models',
     poseModel: opts.poseModel ?? 'full',
@@ -57,14 +61,12 @@ export function createMotionController(opts: MotionControllerOptions = {}): Moti
       tracker.stop();
       engine.end();
     },
-    getState(): PlayerInputState {
-      engine.state.t = performance.now();
-      return engine.state;
-    },
+    getState: (): PlayerInputState => engine.getState(),
     on: (cb) => engine.on(cb),
     getDebugVideo: () => tracker.video,
     getStats: () => tracker.stats,
     getDebugFrame: () => engine.lastFrame,
     getDebugHands: () => tracker.getLastHands(),
+    getDebugBody: () => engine.body,
   };
 }

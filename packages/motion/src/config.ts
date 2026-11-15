@@ -1,4 +1,5 @@
 // Every tunable threshold lives here (spec §8 C.5). The Motion Lab edits `config` live.
+// Distances are meters, times ms, speeds m/s in game space unless noted.
 
 export const DEFAULT_CONFIG = {
   // ── tracking (C.5 / C.9) ──
@@ -6,6 +7,30 @@ export const DEFAULT_CONFIG = {
   trackingOkMs: 300,
   degradedVisibility: 0.5,
   downgradeBelowFps: 40,
+
+  // ── mapping (C.3) ──
+  /** Game arm reach the player's measured arm length maps to. */
+  gameArmReach: 0.75,
+  /** Shoulder midpoint sits this far below the eyes (camera origin). */
+  eyeToShoulderM: 0.25,
+  /** Weight of pose-world z vs. forearm-foreshortening z. */
+  depthBlend: 0.5,
+  zNear: -0.15,
+  zFar: -0.85,
+  posMinCutoff: 1.0,
+  posBeta: 0.02,
+  zMinCutoff: 0.6,
+  velMinCutoff: 5,
+  /** 0..1 per-frame lerp for forward/up vectors. */
+  dirSmoothing: 0.5,
+  bodySmoothing: 0.3,
+  /** Shoulder drop (in shoulder widths) that counts as a full crouch. */
+  crouchFullDropSw: 1.2,
+  wristMinVisibility: 0.5,
+  /** Max image distance (image heights) to pair a hand with a pose wrist. */
+  assocMaxDist: 0.25,
+  lostHandConfidence: 0.4,
+  maxExtrapolateMs: 50,
 };
 
 export type MotionConfig = { -readonly [K in keyof typeof DEFAULT_CONFIG]: number };
@@ -17,10 +42,29 @@ export function resetConfig(): void {
   Object.assign(config, DEFAULT_CONFIG);
 }
 
-/** Slider ranges for the Motion Lab tuning panel: [min, max, step]. */
-export const CONFIG_RANGES: Partial<Record<keyof MotionConfig, [number, number, number]>> = {
-  trackingLostMs: [100, 2000, 50],
-  trackingOkMs: [0, 1000, 50],
-  degradedVisibility: [0, 1, 0.05],
-  downgradeBelowFps: [0, 60, 1],
+/** Slider ranges for the Motion Lab tuning panel: [min, max, step]. Grouped by section title. */
+export const CONFIG_RANGES: Record<string, Partial<Record<keyof MotionConfig, [number, number, number]>>> = {
+  Tracking: {
+    trackingLostMs: [100, 2000, 50],
+    trackingOkMs: [0, 1000, 50],
+    degradedVisibility: [0, 1, 0.05],
+    downgradeBelowFps: [0, 60, 1],
+  },
+  Mapping: {
+    gameArmReach: [0.4, 1.2, 0.05],
+    eyeToShoulderM: [0, 0.5, 0.01],
+    depthBlend: [0, 1, 0.05],
+    zNear: [-0.5, 0, 0.01],
+    zFar: [-1.5, -0.4, 0.01],
+    posMinCutoff: [0.1, 5, 0.1],
+    posBeta: [0, 5, 0.01],
+    zMinCutoff: [0.1, 5, 0.1],
+    velMinCutoff: [0.5, 20, 0.5],
+    dirSmoothing: [0.05, 1, 0.05],
+    bodySmoothing: [0.05, 1, 0.05],
+    crouchFullDropSw: [0.3, 3, 0.1],
+    wristMinVisibility: [0, 1, 0.05],
+    assocMaxDist: [0.05, 0.6, 0.01],
+    maxExtrapolateMs: [0, 100, 5],
+  },
 };
