@@ -74,7 +74,8 @@ export function QmFace() {
   }, [face, analyser]);
 
   return (
-    <div className="pip" style={{ width: '60%', alignSelf: 'flex-end' }}>
+    // order: 1 shows it under the friend cam, though Hud mounts it above (that line stays clear of main's edits there).
+    <div className="pip" style={{ width: '60%', alignSelf: 'flex-end', order: 1 }}>
       <canvas ref={canvas} width={CANVAS_W} height={(CANVAS_W * CROP.h) / CROP.w} style={{ width: '100%', height: '100%', display: 'block' }} />
       <span className="name">Quartermaster</span>
     </div>
