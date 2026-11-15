@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { WeaponClass, WeaponSpawn } from '@ithaca/shared';
 import { analyzeWithRetry, vision, type VisionResult } from './ai/vision';
-import { cropForModel } from './ai/image';
+import { cropForModel, toThumb } from './ai/image';
 import { generateGlb } from './ai/model3d';
 import { getStore, putFile, toOid } from './db/mongo';
 import { findRecentGlb, insertWeapon } from './db/weapons';
@@ -19,6 +19,13 @@ export type ForgeResponse =
 const inFlight = new Set<string>();
 const REUSE_WITHIN_MS = 2 * 60 * 60 * 1000;
 const MIN_CONFIDENCE = 0.6;
+
+/** Two GLBs are interchangeable only when these settings match; the reuse cache keys on it. */
+export function forgePipeline(): string {
+  // "cutout-green": the earlier white-fill cutout left a paper blob where the hand was, so its GLBs must not come back.
+  const clean = env.FORGE_CLEAN_IMAGE === 'cutout' ? 'cutout-green' : env.FORGE_CLEAN_IMAGE;
+  return `${env.FORGE_3D_MODEL}/clean=${clean}/tex=${env.SF3D_TEXTURE_RES}`;
+}
 
 /** Lets tests/CLI await the async part of a forge. */
 export const forgeDone = new Map<string, Promise<WeaponSpawn>>();
@@ -82,7 +89,7 @@ async function runPipeline(forgeId: string, jpeg: Buffer, sessionId: string, v: 
 
   const base = {
     sessionId, playerId: ctx.playerId, friendName: ctx.friendName, objectName: v.object_name, displayName,
-    weaponClass: v.weapon_class, quip: v.quip,
+    weaponClass: v.weapon_class, quip: v.quip, pipeline: forgePipeline(), color: v.color,
     vision: { provider: vision.name, model: vision.model, confidence: v.confidence, bbox: v.bbox },
     kills: 0, createdAt: new Date(),
   };
@@ -131,19 +138,27 @@ async function runPipeline(forgeId: string, jpeg: Buffer, sessionId: string, v: 
 
       let glbFileId: string;
       let reusedFrom: WeaponDocId | undefined;
-      const cached = await findRecentGlb(v.object_name, REUSE_WITHIN_MS).catch(() => null);
+      const key = { objectName: v.object_name, pipeline: base.pipeline, color: v.color };
+      const cached = await findRecentGlb(key, REUSE_WITHIN_MS).catch(() => null);
       if (cached?.glbFileId) {
         glbFileId = cached.glbFileId.toHexString();
         reusedFrom = cached._id;
+        // The thumb must show what this GLB was built from, not today's crop with the hand in it.
+        if (cached.thumbFileId) thumbFileId = cached.thumbFileId.toHexString();
         log.info({ object: v.object_name }, 'forge: reusing cached GLB');
         progress('3d', 90);
       } else {
         progress('3d', 40);
         const tick = setInterval(() => progress('3d', 60), 1500);
-        let glb: Buffer;
-        try { glb = await generateGlb(png1024, v.object_name); } finally { clearInterval(tick); }
+        let made: Awaited<ReturnType<typeof generateGlb>>;
+        try { made = await generateGlb(png1024, v); } finally { clearInterval(tick); }
         progress('3d', 90);
-        glbFileId = await putFile('models', glb, `${forgeId}.glb`, 'model/gltf-binary');
+        glbFileId = await putFile('models', made.glb, `${forgeId}.glb`, 'model/gltf-binary');
+        // The armory shows the object the model was built from (no hand, no room) when there is one.
+        if (made.image !== png1024) {
+          try { thumbFileId = await putFile('thumbs', await toThumb(made.image), `${forgeId}-clean.jpg`, 'image/jpeg'); }
+          catch (e) { log.warn({ err: errMsg(e) }, 'clean thumb failed, keeping the crop thumb'); }
+        }
       }
 
       if (spawned) throw new Error('deadline already hit; discarding late GLB');

@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Game stub (Part B dev)</title>
+<style>
+  body { font: 14px system-ui, sans-serif; margin: 16px; background: #111; color: #eee; }
+  button { margin: 2px; padding: 6px 10px; }
+  .row { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
+  canvas, video { width: 320px; height: 180px; background: #000; border: 1px solid #444; }
+  #fc { position: absolute; width: 1px; height: 1px; opacity: 0; }
+  #log { height: 260px; overflow: auto; background: #000; padding: 8px; font: 12px ui-monospace, monospace; white-space: pre-wrap; }
+  #status { font-weight: bold; }
+  #sub { font-size: 18px; min-height: 1.4em; color: #f3e6c4; }
+</style>
+</head>
+<body>
+<h3>Game stub: plays Part A for the agent (friend-view + player-mic)</h3>
+<div><button id="start">Start (session + room + WS)</button> <span id="status">idle</span></div>
+<div>
+  <button data-send="call.request">Call friend</button>
+  <button data-send="call.end">End call</button>
+  <button data-send="scan.request">Ask for a weapon</button>
+  <label><input type="checkbox" id="mic" checked> mic on (push-to-talk T)</label>
+</div>
+<div>
+  <button data-ev="match_start">match_start</button>
+  <button data-ev="wave_start">wave_start</button>
+  <button data-ev="player_pinned">player_pinned</button>
+  <button data-ev="health_low">health_low</button>
+  <button data-ev="trickshot:pin">trickshot pin</button>
+  <button data-ev="trickshot:multi_kill">multi_kill</button>
+  <button data-ev="item_kill">item_kill</button>
+  <button data-ev="boss_spawn">boss_spawn</button>
+  <button data-ev="wave_cleared">wave_cleared</button>
+  <button data-ev="match_end">match_end</button>
+</div>
+<div id="sub"></div>
+<div class="row">
+  <div>friend-view (published)<br><canvas id="cv" width="640" height="360"></canvas></div>
+  <div><span id="fclabel">friend-cam (from agent)</span><br><canvas id="fcc" width="640" height="360"></canvas><video id="fc" autoplay playsinline muted></video></div>
+</div>
+<div id="log"></div>
+<script src="https://cdn.jsdelivr.net/npm/livekit-client@2.19.2/dist/livekit-client.umd.js"></script>
+<script>
+const { Room, RoomEvent, Track, LocalVideoTrack, createLocalAudioTrack } = LivekitClient;
+const $ = (s) => document.querySelector(s);
+const logEl = $('#log');
+const log = (...a) => { logEl.textContent += new Date().toLocaleTimeString() + ' ' + a.join(' ') + '\n'; logEl.scrollTop = 1e9; };
+let sid = null, ws = null, room = null, micTrack = null, t0 = performance.now();
+
+// Fake game picture: moving enemies so the relay is visibly live.
+const cv = $('#cv'), g = cv.getContext('2d');
+setInterval(() => {
+  const t = (performance.now() - t0) / 1000;
+  g.fillStyle = '#2a1c10'; g.fillRect(0, 0, 640, 360);
+  for (let i = 0; i < 5; i++) { g.fillStyle = '#a33'; g.fillRect(80 + i * 110 + Math.sin(t * 2 + i) * 30, 200, 40, 90); }
+  g.fillStyle = '#fff'; g.font = 'bold 28px system-ui'; g.fillText('LIVE — ODYSSEUS', 380, 40);
+  g.fillStyle = '#e33'; g.beginPath(); g.arc(360, 30, 9, 0, 7); g.fill();
+  g.fillStyle = '#3c3'; g.fillRect(20, 20, 200, 18); g.fillStyle = '#fff'; g.fillText(t.toFixed(1) + 's', 20, 80);
+}, 1000 / 15);
+
+// LiveKit disables a remote track (black frames) before TrackUnsubscribed fires, so the box draws
+// only frames from a live track and keeps the last one after the call instead of going black.
+const fc = $('#fc'), fcc = $('#fcc'), fg = fcc.getContext('2d');
+let camTrack = null;
+(function drawFriendCam() {
+  const mst = camTrack && camTrack.mediaStreamTrack;
+  if (mst && mst.enabled && mst.readyState === 'live' && fc.readyState >= 2 && fc.videoWidth) {
+    const k = Math.min(fcc.width / fc.videoWidth, fcc.height / fc.videoHeight);
+    const w = fc.videoWidth * k, h = fc.videoHeight * k;
+    fg.fillStyle = '#000'; fg.fillRect(0, 0, fcc.width, fcc.height);
+    fg.drawImage(fc, (fcc.width - w) / 2, (fcc.height - h) / 2, w, h);
+  }
+  requestAnimationFrame(drawFriendCam);
+})();
+
+const send = (type, extra = {}) => {
+  if (!ws || ws.readyState !== 1) return log('WS not open');
+  ws.send(JSON.stringify({ v: 1, type, sessionId: sid, ts: Date.now(), ...extra }));
+  log('->', type, extra.event ? extra.event.kind : '');
+};
+
+$('#start').onclick = async () => {
+  $('#start').disabled = true; // a second click while the first is in flight joined the room twice
+  const s = await (await fetch('/api/sessions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ playerId: 'dev' }) })).json();
+  sid = s.sessionId;
+  const tok = await (await fetch('/api/livekit/token', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sessionId: sid }) })).json();
+  room = new Room();
+  room.on(RoomEvent.TrackSubscribed, (track, pub, p) => {
+    log('subscribed', pub.trackName, 'from', p.identity);
+    if (pub.trackName === 'friend-cam') { camTrack = track; track.attach(fc); $('#fclabel').textContent = 'friend-cam (from agent)'; }
+    if (pub.trackName === 'friend-audio') document.body.appendChild(track.attach());
+  });
+  room.on(RoomEvent.TrackUnsubscribed, (track, pub) => {
+    if (pub.trackName !== 'friend-cam' || track !== camTrack) return;
+    camTrack = null;
+    $('#fclabel').textContent = 'friend-cam (from agent), last frame';
+  });
+  await room.connect(tok.url, tok.token);
+  await room.startAudio();
+  const vt = new LocalVideoTrack(cv.captureStream(15).getVideoTracks()[0]);
+  await room.localParticipant.publishTrack(vt, { name: 'friend-view', source: Track.Source.Camera, simulcast: false, videoEncoding: { maxBitrate: 1_200_000, maxFramerate: 15 } });
+  micTrack = await createLocalAudioTrack({ echoCancellation: true, noiseSuppression: true, autoGainControl: true });
+  await room.localParticipant.publishTrack(micTrack, { name: 'player-mic', source: Track.Source.Microphone });
+  ws = new WebSocket(`${location.origin.replace('http', 'ws')}/ws?role=web&sessionId=${sid}`);
+  ws.onmessage = (e) => {
+    const m = JSON.parse(e.data);
+    if (m.type === 'narration') $('#sub').textContent = m.text;
+    if (m.type === 'call.status') $('#status').textContent = 'call ' + m.state + (m.reason ? ' (' + m.reason + ')' : '');
+    log('<-', m.type, m.state || '', m.reason || '', m.text || '', m.displayName || '', m.weapon ? m.weapon.displayName : '');
+  };
+  ws.onopen = () => { $('#status').textContent = 'ready, session ' + sid; log('session', sid, 'room', tok.room); };
+};
+
+document.querySelectorAll('[data-send]').forEach((b) => b.onclick = () => send(b.dataset.send, b.dataset.send === 'call.request' ? { friendId: 'friend-1' } : {}));
+document.querySelectorAll('[data-ev]').forEach((b) => b.onclick = () => {
+  const [kind, trickshot] = b.dataset.ev.split(':');
+  send('game.event', { event: { kind, t: Math.round(performance.now() - t0), data: trickshot ? { trickshot } : { health: 20, wave: 2 } } });
+});
+const setMic = (on) => { $('#mic').checked = on; micTrack && (on ? micTrack.unmute() : micTrack.mute()); };
+$('#mic').onchange = (e) => setMic(e.target.checked);
+addEventListener('keydown', (e) => { if (e.key === 't' && !e.repeat) setMic(!$('#mic').checked); });
+</script>
+</body>
+</html>

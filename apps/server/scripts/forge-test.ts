@@ -28,9 +28,10 @@ await writeFile(`out/${name}-thumb.jpg`, thumbJpeg);
 let model3dMs: number | null = null;
 if (env.MODEL3D_PROVIDER === 'stability') {
   t = performance.now();
-  const glb = await generateGlb(png1024, v.object_name);
+  const { glb, image } = await generateGlb(png1024, v);
   model3dMs = Math.round(performance.now() - t);
   await writeFile(`out/${name}.glb`, glb);
+  await writeFile(`out/${name}-model-input.png`, image);
   console.log(`3d ${model3dMs} ms → out/${name}.glb`);
 } else console.log('MODEL3D_PROVIDER=prefab — skipped 3D');
 await writeFile(`out/${name}.json`, JSON.stringify({ vision: v, visionMs, model3dMs }, null, 2));

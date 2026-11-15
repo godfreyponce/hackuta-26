@@ -1,0 +1,28 @@
+{
+  "name": "@ithaca/agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx --env-file=.env.local src/main.ts",
+    "fake-hub": "tsx --env-file=.env.local dev/fake-hub.ts",
+    "typecheck": "tsc --noEmit",
+    "e2e": "tsx --env-file=.env.local dev/mock-e2e.ts",
+    "test": "tsx --env-file=.env.local --test test/*.test.ts",
+    "dev:fake-chert": "AGENT_MODE=live CHERT_API_BASE=http://localhost:8787/fake-chert CHERT_FACETIME_TOKEN=fake CHERT_PROJECT_ID=fake CHERT_LINE_ID=fake tsx --env-file=.env.local src/main.ts"
+  },
+  "dependencies": {
+    "@ithaca/shared": "workspace:*",
+    "@livekit/rtc-node": "0.13.35",
+    "livekit-server-sdk": "^2.19.3",
+    "sharp": "^0.34.5",
+    "ws": "^8.23.0",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.3"
+  }
+}

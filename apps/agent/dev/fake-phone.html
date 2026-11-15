@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fake phone (mock FaceTime)</title>
+<style>
+  body { font: 14px system-ui, sans-serif; margin: 16px; background: #111; color: #eee; }
+  video { width: 100%; max-width: 640px; aspect-ratio: 16/9; background: #000; display: block; }
+  #self { width: 160px; }
+  #log { font: 12px ui-monospace, monospace; white-space: pre-wrap; }
+  button { padding: 10px 16px; font-size: 16px; }
+</style>
+</head>
+<body>
+<h3>Fake phone: plays the FaceTime bridge (identity facetime-bridge-mock)</h3>
+<p><button id="join">Answer</button> <label><input type="checkbox" id="mic" checked> send my mic</label></p>
+<p>What the friend sees:</p>
+<video id="agent" autoplay playsinline></video>
+<p>My camera (sent as facetime-remote-video):</p>
+<video id="self" autoplay playsinline muted></video>
+<div id="log"></div>
+<script src="https://cdn.jsdelivr.net/npm/livekit-client@2.19.2/dist/livekit-client.umd.js"></script>
+<script>
+const { Room, RoomEvent, Track, createLocalVideoTrack, createLocalAudioTrack } = LivekitClient;
+const $ = (s) => document.querySelector(s);
+const log = (...a) => { $('#log').textContent += new Date().toLocaleTimeString() + ' ' + a.join(' ') + '\n'; };
+const sid = new URLSearchParams(location.search).get('sid') || '';
+
+$('#join').onclick = async () => {
+  const r = await fetch('/dev/fake-phone-token?sid=' + encodeURIComponent(sid));
+  if (!r.ok) return log('no active call; start one from the game stub first');
+  const tok = await r.json();
+  const room = new Room();
+  let joinedAt = 0;
+  room.on(RoomEvent.TrackSubscribed, (track, pub, p) => {
+    log('subscribed', pub.trackName, 'from', p.identity, '+' + Math.round(performance.now() - joinedAt) + 'ms');
+    if (track.kind === 'video') track.attach($('#agent'));
+    else document.body.appendChild(track.attach());
+  });
+  room.on(RoomEvent.ActiveSpeakersChanged, (s) => { if (s.some((p) => p.identity === 'quartermaster')) log('agent speaking +' + Math.round(performance.now() - joinedAt) + 'ms'); });
+  room.on(RoomEvent.Disconnected, () => log('disconnected (call ended)'));
+  // Publish camera first, then connect: like the bridge, our tracks show up right when we join.
+  const cam = await createLocalVideoTrack({ resolution: { width: 1280, height: 720 } });
+  cam.attach($('#self'));
+  await room.connect(tok.url, tok.token);
+  joinedAt = performance.now();
+  await room.startAudio();
+  log('joined', tok.room, 'as', tok.identity);
+  await room.localParticipant.publishTrack(cam, { name: 'facetime-remote-video', source: Track.Source.Camera, simulcast: false });
+  if ($('#mic').checked) {
+    const mic = await createLocalAudioTrack({ echoCancellation: true, noiseSuppression: true });
+    await room.localParticipant.publishTrack(mic, { name: 'facetime-remote-audio', source: Track.Source.Microphone });
+  }
+  $('#join').disabled = true;
+};
+</script>
+</body>
+</html>

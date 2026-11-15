@@ -7,6 +7,7 @@
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
+    "test": "tsx --test test/*.test.ts",
     "forge:test": "tsx scripts/forge-test.ts",
     "prefabs:build": "tsx scripts/build-prefabs.ts",
     "prefabs:test": "tsx scripts/prefab-test.ts",
