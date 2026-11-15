@@ -15,6 +15,7 @@ export function Results() {
   const session = useApp((s) => s.session);
   const player = useApp((s) => s.player);
   const kb = useApp((s) => s.inputKind === 'keyboard_mouse');
+  const friend = useApp((s) => s.friend);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [leaveArmed, setLeaveArmed] = useState(false);
@@ -49,7 +50,7 @@ export function Results() {
       <div className="results">
         <section className="panel col">
           <div className="eyebrow">{r.victory ? 'Odyssey XXII · The hall is cleansed' : `Fell in wave ${r.wave}`}</div>
-          <h1 className="h1" style={{ fontSize: 'clamp(34px, 4.4vw, 60px)' }}>{r.victory ? 'The hall is yours' : 'The wooers prevail'}</h1>
+          <h1 className="h1" style={{ fontSize: 'clamp(32px, 3.9vw, 56px)', letterSpacing: '0.16em' }}>{r.victory ? 'The hall is yours' : 'The wooers prevail'}</h1>
           <Meander />
           <div className="stat-row">
             <div className="stat"><div className="v">{r.score.toLocaleString()}</div><div className="k">Score</div></div>
@@ -89,7 +90,7 @@ export function Results() {
               ))}
             </div>
           ) : <p className="muted small" style={{ margin: 0 }}>No killcams this time — pin a wooer to a pillar or drop two with one throw.</p>}
-          <div className="h3" style={{ marginTop: 8 }}>Sent by Telemachus</div>
+          <div className="h3" style={{ marginTop: 8 }}>Sent by {friend?.name ?? 'Telemachus'}</div>
           {r.forged.length ? (
             <div className="forged-list">
               {r.forged.map((f) => (
@@ -103,7 +104,9 @@ export function Results() {
                 </div>
               ))}
             </div>
-          ) : <p className="muted small" style={{ margin: 0 }}>No weapons from the storeroom this match. Next time: call Telemachus{kb ? <> (<span className="kbd">C</span>), then ask for a weapon (<span className="kbd">Q</span>)</> : ' and raise both arms'}.</p>}
+          ) : <p className="muted small" style={{ margin: 0 }}>No weapons from the storeroom this match. {friend
+            ? <>Next time: call {friend.name}{kb ? <> <span className="nowrap">(<span className="kbd">C</span>)</span>, then ask for a weapon <span className="nowrap">(<span className="kbd">Q</span>)</span></> : ' with the phone sign, then raise both hands over your head'}.</>
+            : <>Add a Telemachus from the title screen and he can send you weapons mid-fight.</>}</p>}
         </section>
       </div>
     </div>

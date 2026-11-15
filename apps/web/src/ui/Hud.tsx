@@ -1,13 +1,14 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import type { Hand } from '@ithaca/shared';
 import { useApp, subtitleAt, isCallLive } from '../state/store';
 import { endCall, requestCall, requestWeapon, runtime, setMic, setupInput } from '../game/runtime';
 import { isKeyboardMouse, motionAvailable } from '../input';
-import { Btn, ClassIcon, fmtTime, useMenuNav } from './components';
+import { Btn, ClassIcon, fmtTime, isBodyInput, useMenuNav } from './components';
 import { CallChip } from './CallChip';
 import { FriendPip } from './FriendPip';
 import { Turntable } from './Turntable';
 import { CombatOverlay } from './CombatOverlay';
-import { KEYMAP } from './Calibration';
+import { BodyMoves, KEYMAP } from './Calibration';
 
 function HealthBlock() {
   const health = useApp((s) => s.hud.health);
@@ -39,24 +40,71 @@ function HealthBlock() {
   );
 }
 
-function HandsBlock() {
-  const [held, setHeld] = useState<{ l: string | null; r: string | null; q: number; a: 'left' | 'right' | null }>({ l: null, r: null, q: 0, a: null });
+interface HandInfo { held: string | null; seen: boolean; fist: boolean }
+interface HandsSnap { left: HandInfo; right: HandInfo; quiver: number; driven: Hand | null; unarmedLong: boolean; unseenLong: boolean; hover: boolean }
+const NO_HAND: HandInfo = { held: null, seen: true, fist: false };
+
+/** What each hand holds and (webcam) whether the tracker sees it / reads a fist — polled at 5 Hz, re-renders on change. */
+function useHands(body: boolean): HandsSnap {
+  const [snap, setSnap] = useState<HandsSnap>({ left: NO_HAND, right: NO_HAND, quiver: 0, driven: null, unarmedLong: false, unseenLong: false, hover: false });
   useEffect(() => {
+    let unarmedAt = 0, unseenAt = 0, key = '';
+    // fist read with Part C's grip hysteresis (packages/motion config gripOn 0.65 / gripOff 0.35), so the dot doesn't flicker
+    const fist: Record<Hand, boolean> = { left: false, right: false };
     const t = setInterval(() => {
-      const w = runtime.engine?.weapons;
-      if (!w) return;
-      const l = w.heldBy('left')?.name ?? null, r = w.heldBy('right')?.name ?? null, q = w.quiver;
-      // the mouse drives this hand (Shift swaps while held) — only worth showing when both hands hold something
-      const a = l && r ? runtime.engine?.drivenHand ?? null : null;
-      setHeld((p) => (p.l === l && p.r === r && p.q === q && p.a === a ? p : { l, r, q, a }));
-    }, 250);
+      const e = runtime.engine, w = e?.weapons;
+      if (!e || !w) return;
+      const st = body ? runtime.input?.getState() : null;
+      const info = (h: Hand): HandInfo => {
+        const hs = st?.hands[h];
+        if (hs?.visible) fist[h] = fist[h] ? hs.grip > 0.35 : hs.grip >= 0.65;
+        return { held: w.heldBy(h)?.name ?? null, seen: hs ? hs.visible : true, fist: !!hs?.visible && fist[h] };
+      };
+      const left = info('left'), right = info('right');
+      const now = performance.now();
+      const playing = e.mode === 'match';
+      const unarmed = playing && !left.held && !right.held && !w.drawing;
+      unarmedAt = unarmed ? unarmedAt || now : 0;
+      const unseen = playing && body && !left.seen && !right.seen;
+      unseenAt = unseen ? unseenAt || now : 0;
+      const next: HandsSnap = {
+        left, right, quiver: w.quiver,
+        // the mouse drives this hand (Shift swaps while held) — only worth showing when both hands hold something
+        driven: left.held && right.held ? e.drivenHand ?? null : null,
+        unarmedLong: unarmed && now - unarmedAt > 1200,
+        unseenLong: unseen && now - unseenAt > 1500,
+        hover: playing && !!e.overlay().hover,
+      };
+      const k = JSON.stringify(next);
+      if (k !== key) { key = k; setSnap(next); }
+    }, 200);
     return () => clearInterval(t);
-  }, []);
+  }, [body]);
+  return snap;
+}
+
+function HandsBlock({ hands, body }: { hands: HandsSnap; body: boolean }) {
+  const slot = (side: Hand, label: string) => {
+    const h = hands[side];
+    const driven = hands.driven === side;
+    // webcam: a dot per hand — green seen/open, brass fist, red not seen (the in-game hand ghosts and holds still)
+    const status = !body ? '' : !h.seen ? 'unseen' : h.fist ? 'fist' : 'open';
+    return (
+      <span className={`hand-slot ${h.held ? 'on' : ''} ${driven ? 'driven' : ''} ${status}`}
+        title={body ? (!h.seen ? 'The camera can’t see this hand' : h.fist ? 'Fist' : 'Open hand') : undefined}>
+        {body && <i className="dot" aria-hidden />}
+        {label} · {h.held ?? (body && !h.seen ? 'not seen' : 'empty')}
+        {body && !h.seen && h.held && <em className="unseen-tag"> · not seen</em>}
+        {driven ? ' ◂ mouse' : ''}
+      </span>
+    );
+  };
   return (
     <div className="hands-slots" aria-label="What you hold">
-      <span className={(held.l ? 'on' : '') + (held.a === 'left' ? ' driven' : '')}>L · {held.l ?? 'empty'}{held.a === 'left' ? ' ◂ mouse' : ''}</span>
-      <span className={(held.r ? 'on' : '') + (held.a === 'right' ? ' driven' : '')}>R · {held.r ?? 'empty'}{held.a === 'right' ? ' ◂ mouse' : ''}{held.a === 'right' ? <em className="muted"> · Shift: left</em> : ''}</span>
-      <span>Arrows · {held.q}</span>
+      {slot('left', 'L')}
+      {slot('right', 'R')}
+      <span>Arrows · {hands.quiver}</span>
+      {hands.driven === 'right' && <em className="muted">Shift: left hand</em>}
     </div>
   );
 }
@@ -171,6 +219,10 @@ function CallPanel() {
   const netMode = useApp((s) => s.netMode);
   const friend = useApp((s) => s.friend);
   const kb = useApp((s) => s.inputKind === 'keyboard_mouse');
+  // fighting alone: one small chip, not a panel — keeps the top-right of the hall clear
+  if (!friend && !isCallLive(call)) {
+    return <div className="tr solo"><span className="chip" title={netMode === 'mock' ? 'Mock hub' : undefined}><span className="dot" />Fighting alone</span></div>;
+  }
   return (
     <div className="tr">
       <div className="callpanel">
@@ -179,8 +231,7 @@ function CallPanel() {
           {call === 'connected' && <span className={`chip ${mic ? 'ok' : 'bad'}`} title="Push-to-talk (T)"><span className="dot" />{mic ? 'Mic' : 'Muted'}</span>}
         </div>
         {isCallLive(call) && <FriendPip />}
-        {!isCallLive(call) && friend && <div className="muted small">{kb ? <>Press <span className="kbd">C</span> to call {friend.name}.</> : <>Make the phone sign (or <span className="kbd">C</span>) to call {friend.name}.</>}</div>}
-        {!friend && <div className="muted small">No Telemachus set — fighting alone{netMode === 'mock' ? ' (mock)' : ''}.</div>}
+        {!isCallLive(call) && friend && <div className="muted small">{kb ? <>Press <span className="kbd">C</span> to call {friend.name}.</> : <>Make the phone sign by your ear (or <span className="kbd">C</span>) to call {friend.name}.</>}</div>}
       </div>
       <ForgeCard />
     </div>
@@ -207,26 +258,36 @@ function Subtitles() {
   );
 }
 
-function Prompts() {
+function Prompts({ hands }: { hands: HandsSnap }) {
   const call = useApp((s) => s.call.state);
   const scan = useApp((s) => s.scan.state);
   const pinned = useApp((s) => s.hud.pinnedPrompt);
   const bow = useApp((s) => s.bowMode);
   const draw = useApp((s) => s.hud.bowDraw);
   const kb = useApp((s) => s.inputKind === 'keyboard_mouse');
+  const body = useApp((s) => isBodyInput(s.inputKind));
+  const tracking = useApp((s) => s.tracking);
   const friend = useApp((s) => s.friend?.name ?? 'Telemachus');
   const solo = useApp((s) => !s.friend);
   if (pinned && !isCallLive(call)) {
     // fighting alone there's no one to call: point at what you CAN do
-    if (solo) return <div className="prompt big">{kb ? <>Surrounded — <span className="kbd">RMB</span> guard, strike the one who swings</> : 'Surrounded — guard, and strike the one who swings'}</div>;
+    if (solo) return <div className="prompt big">{kb ? <>Surrounded — <span className="kbd">RMB</span> guard, strike the one who swings</> : 'Surrounded — fists up to guard, strike the one who swings'}</div>;
     return kb
       ? <div className="prompt big">Press <span className="kbd">C</span> to call {friend}</div>
-      : <div className="prompt big">Make the phone sign to call {friend}</div>;
+      : <div className="prompt big">Make the phone sign by your ear to call {friend}</div>;
+  }
+  // webcam: say when the tracker is struggling — the in-game hands only ghost, which is easy to miss mid-fight
+  if (body && tracking === 'degraded') return <div className="prompt warn" role="status">Tracking is weak — face a light and keep both hands in view</div>;
+  if (body && hands.unseenLong) return <div className="prompt warn" role="status">We can’t see your hands — hold them up in front of you</div>;
+  if (hands.unarmedLong && !bow && !(kb && hands.hover)) {
+    return kb
+      ? <div className="prompt">Click a weapon on the table to take it · <span className="kbd">Tab</span> look down</div>
+      : <div className="prompt">Reach toward a weapon and <b>make a fist</b> to take it</div>;
   }
   if (call === 'connected' && (scan === 'idle' || scan === 'done')) {
     return kb
       ? <div className="prompt">Press <span className="kbd">Q</span> to ask {friend} for a weapon</div>
-      : <div className="prompt">Raise both arms to ask {friend} for a weapon</div>;
+      : <div className="prompt">Raise both hands over your head to ask {friend} for a weapon</div>;
   }
   if (bow && kb) {
     return <div className="prompt">{draw > 0 ? `Drawing… ${Math.round(draw * 100)}%` : 'Bow ready — hold LMB or Space to draw'} <span className="kbd">B</span></div>;
@@ -278,9 +339,11 @@ function Reticle() {
 
 function GestureRing() {
   const g = useApp((s) => s.pendingGesture);
+  const solo = useApp((s) => !s.friend);
   if (!g || g.progress <= 0) return null;
+  if (solo && (g.name === 'call_sign' || g.name === 'request_weapon')) return null;
   const r = 32, c = 2 * Math.PI * r;
-  const label = g.name === 'call_sign' ? 'Calling…' : g.name === 'request_weapon' ? 'Asking…' : g.name;
+  const label = g.name === 'call_sign' ? 'Calling…' : g.name === 'request_weapon' ? 'Asking for a weapon…' : g.name === 'drink' ? 'Drinking…' : g.name;
   return (
     <div style={{ position: 'absolute', top: '58%', left: '50%', transform: 'translateX(-50%)', textAlign: 'center' }}>
       <svg className="gesture-ring" viewBox="0 0 74 74">
@@ -295,7 +358,7 @@ function GestureRing() {
 function TrackingOverlay() {
   const tracking = useApp((s) => s.tracking);
   const kind = useApp((s) => s.inputKind);
-  if (kind === 'keyboard_mouse') return null;
+  if (!isBodyInput(kind)) return null;
   if (tracking === 'lost') {
     return (
       <div className="overlay-center" role="alert">
@@ -303,12 +366,12 @@ function TrackingOverlay() {
           <svg width="90" height="120" viewBox="0 0 64 86" aria-hidden><circle cx="32" cy="14" r="10" fill="#6e665b" /><path d="M14 84 L18 40 Q32 28 46 40 L50 84 Z" fill="#6e665b" /></svg>
           <h2 className="h2">We lost you</h2>
           <p className="lore" style={{ margin: 0 }}>Step back into the light. The hall waits — time is slowed.</p>
+          <p className="muted small" style={{ margin: 0 }}>Stand about 2 m from the camera, hips in view, a light in front of you.</p>
           <div className="pointer" style={{ pointerEvents: 'auto' }}><Btn onClick={() => void setupInput('keyboard_mouse')}>Switch to keyboard &amp; mouse</Btn></div>
         </div>
       </div>
     );
   }
-  if (tracking === 'degraded') return <div style={{ position: 'absolute', top: 120, left: 26 }}><span className="chip warn"><span className="dot" />Find better light</span></div>;
   return null;
 }
 
@@ -317,6 +380,8 @@ function PauseMenu({ onResume }: { onResume: () => void }) {
   const difficulty = useApp((s) => s.difficulty);
   const call = useApp((s) => s.call.state);
   const mic = useApp((s) => s.micEnabled);
+  const friend = useApp((s) => s.friend);
+  const body = isBodyInput(inputKind);
   const ref = useMenuNav<HTMLDivElement>(onResume);
   return (
     <div className="overlay-center" style={{ pointerEvents: 'auto' }}>
@@ -326,11 +391,12 @@ function PauseMenu({ onResume }: { onResume: () => void }) {
         <div className="field">
           <label>Controls (hot-swap)</label>
           <div className="seg">
-            <button aria-pressed={inputKind === 'motion'} disabled={!motionAvailable} title={motionAvailable ? undefined : 'Body tracking isn’t installed in this build'} onClick={() => void setupInput('motion')}>{motionAvailable ? 'Body (webcam)' : 'Body (webcam) · unavailable'}</button>
+            <button aria-pressed={body} disabled={!motionAvailable} title={motionAvailable ? undefined : 'Body tracking isn’t installed in this build'} onClick={() => void setupInput('motion')}>{motionAvailable ? 'Body (webcam)' : 'Body (webcam) · unavailable'}</button>
             <button aria-pressed={inputKind === 'keyboard_mouse'} onClick={() => void setupInput('keyboard_mouse')}>Keyboard &amp; mouse</button>
           </div>
+          {inputKind === 'replay' && <span className="muted small">Replaying a recorded webcam session.</span>}
         </div>
-        {inputKind === 'motion' && <Btn onClick={() => { void runtime.input?.calibrate?.(); }}>Recalibrate</Btn>}
+        {body && <Btn onClick={() => { void runtime.input?.calibrate?.(); }}>Recalibrate</Btn>}
         <div className="field">
           <label htmlFor="shake">Camera shake</label>
           <input id="shake" type="range" min={0} max={100} defaultValue={Math.round((runtime.engine?.shakeScale ?? 1) * 100)}
@@ -345,8 +411,16 @@ function PauseMenu({ onResume }: { onResume: () => void }) {
         </div>
         {isCallLive(call)
           ? <div className="row"><Btn onClick={() => setMic(!mic)} hotkey="T">{mic ? 'Mute mic' : 'Unmute mic'}</Btn><Btn variant="danger" onClick={endCall}>End call</Btn></div>
-          : <Btn variant="call" onClick={requestCall} hotkey="C">📞 Call Telemachus</Btn>}
+          : friend
+            ? <Btn variant="call" onClick={requestCall} hotkey="C">📞 Call {friend.name}</Btn>
+            : <p className="muted small" style={{ margin: 0 }}>Fighting alone — add a Telemachus from the title screen to call for weapons.</p>}
         <Btn variant="danger" onClick={() => { onResume(); runtime.engine?.quit(); }}>End the fight</Btn>
+        {body && (
+          <details open>
+            <summary className="muted small" style={{ cursor: 'pointer' }}>Body controls</summary>
+            <div style={{ marginTop: 10 }}><BodyMoves friend={!!friend} /></div>
+          </details>
+        )}
         <details>
           <summary className="muted small" style={{ cursor: 'pointer' }}>Keyboard controls</summary>
           <div className="keys" style={{ marginTop: 10 }}>
@@ -358,10 +432,46 @@ function PauseMenu({ onResume }: { onResume: () => void }) {
   );
 }
 
+const K = ({ children }: { children: ReactNode }) => <span className="kbd">{children}</span>;
+
+/** The always-handy cheat sheet (top-left, first seconds of a fight; H toggles). */
+function ControlsCard({ body, hidden }: { body: boolean; hidden: boolean }) {
+  const friend = useApp((s) => s.friend?.name ?? null);
+  const rows: [ReactNode, ReactNode][] = body
+    ? [
+      ['Reach + fist', 'take a weapon'],
+      ['Swing your arm', 'strike · punch to stab'],
+      ['Open your hand', 'throw (mid-swing)'],
+      ['Fists by your chin', 'guard'],
+      ['Lean', 'dodge'],
+      ...(friend ? [['Phone sign', `call ${friend}`] as [ReactNode, ReactNode]] : []),
+    ]
+    : [
+      [<K key="c">Click</K>, 'take a weapon'],
+      [<K key="t">Tab</K>, 'look down at the table'],
+      [<K key="m">Mouse</K>, <>swing · <K>W</K> thrust</>],
+      [<K key="r">RMB</K>, <>guard · <K>A</K>/<K>D</K> dodge</>],
+      [<><K>LMB</K> flick</>, <>throw · <K>X</K> set down</>],
+      [<K key="b">B</K>, <>bow · <K>E</K> drink</>],
+    ];
+  return (
+    <div className={`bl callpanel ctrl-card ${hidden ? 'away' : ''}`} aria-hidden={hidden}>
+      <div className="hud-label ctrl-head">{body ? 'How to fight' : 'Controls'}<span className="muted"><K>H</K> hide · <K>Esc</K> pause</span></div>
+      <div className="ctrl-grid">
+        {rows.map(([k, v], i) => <span key={i} style={{ display: 'contents' }}><span className="ctrl-k">{k}</span><span className="ctrl-v">{v}</span></span>)}
+      </div>
+    </div>
+  );
+}
+
 export function Hud() {
   const paused = useApp((s) => s.paused);
   const kb = useApp((s) => s.inputKind === 'keyboard_mouse');
+  const body = useApp((s) => isBodyInput(s.inputKind));
   const cine = useApp((s) => s.hud.slowmo);
+  const boss = useApp((s) => !!s.hud.boss);
+  const banner = useApp((s) => s.toasts.some((t) => t.kind === 'wave' || t.kind === 'trickshot' || t.kind === 'gift'));
+  const hands = useHands(body);
   const [hint, setHint] = useState(true);
 
   useEffect(() => {
@@ -373,19 +483,25 @@ export function Hud() {
         runtime.engine?.setPaused(p);
       } else if (e.code === 'KeyT' && !useApp.getState().paused) setMic(!useApp.getState().micEnabled);
       else if (e.code === 'KeyH') setHint((h) => !h);
+      // webcam: the screens promise "(or C)" / "(or Q)" — the keyboard controller isn't running to send them, so do it here
+      else if (body && !e.repeat && !useApp.getState().paused && e.code === 'KeyC') requestCall();
+      else if (body && !e.repeat && !useApp.getState().paused && e.code === 'KeyQ') requestWeapon();
     };
     window.addEventListener('keydown', onKey);
-    const t = setTimeout(() => setHint(false), 12000);
+    // webcam players stand back from the keyboard: their card stays up longer
+    const t = setTimeout(() => setHint(false), body ? 25000 : 15000);
     return () => { window.removeEventListener('keydown', onKey); clearTimeout(t); };
-  }, []);
+  }, [body]);
 
   const resume = () => { useApp.setState({ paused: false }); runtime.engine?.setPaused(false); };
 
   return (
     <div className={`hud ${cine ? 'cine' : ''}`}>
       <CombatOverlay />
-      <HealthBlock />
-      <HandsBlock />
+      <div className="dock-bl">
+        <HandsBlock hands={hands} body={body} />
+        <HealthBlock />
+      </div>
       <ScoreBlock />
       <CallPanel />
       <BossBar />
@@ -394,14 +510,10 @@ export function Hud() {
       <GestureRing />
       <div className="bc">
         <Subtitles />
-        <Prompts />
+        <Prompts hands={hands} />
       </div>
-      {kb && hint && (
-        <div className="bl callpanel small" style={{ maxWidth: 360 }}>
-          <div className="hud-label" style={{ marginBottom: 6 }}>Controls · <span className="kbd">H</span> hide</div>
-          <div className="muted">Click a weapon on the table to take it — hold <span className="kbd">Tab</span> to look down, click a second for your other hand · swing with the mouse · <span className="kbd">W</span> thrust · <span className="kbd">RMB</span> guard · flick + release <span className="kbd">LMB</span> to throw · <span className="kbd">X</span> set down · <span className="kbd">B</span> bow · <span className="kbd">A</span>/<span className="kbd">D</span> dodge</div>
-        </div>
-      )}
+      {/* the boss bar and the big banners take the top of the screen: the cheat sheet steps aside meanwhile */}
+      {hint && !boss && <ControlsCard body={body} hidden={banner} />}
       <TrackingOverlay />
       {kb && !paused && <Reticle />}
       {paused && <PauseMenu onResume={resume} />}

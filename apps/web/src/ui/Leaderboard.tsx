@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { TrickshotKind } from '@ithaca/shared';
 import { useApp } from '../state/store';
 import { runtime } from '../game/runtime';
+import { TRICK_TITLES } from '../game/engine/scoring';
 import type { LeaderRow } from '../net/types';
 import { Btn, Meander, TrickIcon, useMenuNav } from './components';
 
@@ -43,7 +44,7 @@ export function Leaderboard() {
                   <td>
                     <div className="row" style={{ gap: 6 }}>
                       {(Object.entries(r.trickshots ?? {}) as [TrickshotKind, number][]).filter(([, n]) => n > 0).slice(0, 5).map(([k, n]) => (
-                        <span key={k} className="row" style={{ gap: 3 }} title={k}><TrickIcon kind={k} size={20} /><span className="small num">{n}</span></span>
+                        <span key={k} className="row" style={{ gap: 3 }} title={TRICK_TITLES[k]}><TrickIcon kind={k} size={20} /><span className="small num">{n}</span></span>
                       ))}
                     </div>
                   </td>

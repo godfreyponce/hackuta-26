@@ -136,26 +136,19 @@ export function CombatOverlay() {
         ctx.fillRect(s.x - (w / 2) * f, s.y, w * f, h); // grows from the centre
         if (en.state === 'broken') {
           ctx.globalAlpha = 0.6 + 0.4 * Math.sin(performance.now() / 90);
-          ctx.font = `700 ${12 * k}px 'Cinzel', serif`;
+          ctx.font = `700 ${Math.max(12, 12 * k)}px 'Cinzel', serif`;
           ctx.textAlign = 'center';
+          ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,0.7)';
+          ctx.strokeText('STAGGERED — STRIKE', s.x, s.y - 8 * k);
           ctx.fillStyle = BRASS_HI;
           ctx.fillText('STAGGERED — STRIKE', s.x, s.y - 8 * k);
         }
       }
 
-      // ── hovered weapon on the table / floor: its name, click to take ──
+      // ── hovered weapon on the table / floor: its name + how to take it, on a plate (readable over the red cloth) ──
       if (o.hover) {
         const s = toScreen(o.hover.pos);
-        if (s.on) {
-          ctx.globalAlpha = 0.95;
-          ctx.font = `700 ${13 * k}px 'Cinzel', serif`;
-          ctx.textAlign = 'center';
-          const label = `${o.hover.name.toUpperCase()} · ${inputKindNow() === 'keyboard_mouse' ? 'CLICK' : 'GRIP'}`;
-          ctx.lineWidth = 4 * k; ctx.strokeStyle = 'rgba(0,0,0,0.75)';
-          ctx.strokeText(label, s.x, s.y - 22 * k);
-          ctx.fillStyle = BRASS_HI;
-          ctx.fillText(label, s.x, s.y - 22 * k);
-        }
+        if (s.on) hoverLabel(ctx, o.hover.name, inputKindNow() === 'keyboard_mouse' ? 'CLICK TO TAKE' : 'MAKE A FIST', s.x, s.y - 26 * k, k, W);
       }
 
       // ── counter window after a perfect dodge ──
@@ -185,6 +178,31 @@ export function CombatOverlay() {
     return () => cancelAnimationFrame(raf);
   }, []);
   return <canvas ref={ref} className="combat-overlay" aria-hidden />;
+}
+
+/** Weapon name (Cinzel, ivory) + the action (brass) on a dark rounded plate, kept inside the screen; ≥ 12 px at any size. */
+function hoverLabel(ctx: CanvasRenderingContext2D, name: string, action: string, x: number, y: number, k: number, W: number) {
+  const fs = Math.max(12, 14 * k);
+  const nameFont = `700 ${fs}px 'Cinzel', serif`, actFont = `800 ${fs * 0.78}px 'Montserrat Variable', 'Montserrat', sans-serif`;
+  const nm = name.toUpperCase(), sep = '   ';
+  ctx.font = nameFont; const wn = ctx.measureText(nm).width;
+  ctx.font = actFont; const wa = ctx.measureText(sep + action).width;
+  const padX = fs * 0.8, h = fs * 1.9, w = wn + wa + padX * 2;
+  const cx = Math.min(W - w / 2 - 8, Math.max(w / 2 + 8, x));
+  const left = cx - w / 2, top = y - h / 2;
+  ctx.save();
+  ctx.globalAlpha = 0.92;
+  ctx.fillStyle = 'rgba(12,9,7,0.82)';
+  ctx.strokeStyle = 'rgba(255,213,138,0.6)';
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.roundRect(left, top, w, h, h / 2); ctx.fill(); ctx.stroke();
+  ctx.globalAlpha = 1;
+  ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  ctx.font = nameFont; ctx.fillStyle = '#F3E9D6';
+  ctx.fillText(nm, left + padX, y + 1);
+  ctx.font = actFont; ctx.fillStyle = BRASS_HI;
+  ctx.fillText(sep + action, left + padX + wn, y + 1);
+  ctx.restore();
 }
 
 function glyph(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, kind: 'star' | 'x', color: string) {

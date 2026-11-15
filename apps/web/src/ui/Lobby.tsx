@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useApp, isCallLive } from '../state/store';
 import { endCall, ensureSession, reasonText, requestCall, setupInput, startMatch } from '../game/runtime';
 import { motionAvailable } from '../input';
-import { Btn, useMenuNav } from './components';
+import { Btn, isBodyInput, useMenuNav } from './components';
 import { CallChip } from './CallChip';
 import { FriendPip } from './FriendPip';
 import { audio } from '../game/engine/audio';
@@ -35,6 +35,8 @@ export function Lobby() {
   }, []);
 
   const live = isCallLive(call.state);
+  const body = isBodyInput(inputKind);
+  const fname = friend?.name ?? 'Telemachus';
   const start = () => { audio.unlock(); startMatch(); go('game'); };
 
   return (
@@ -92,20 +94,26 @@ export function Lobby() {
           <div className="field">
             <label>Controls</label>
             <div className="seg" role="group" aria-label="Controls">
-              <button aria-pressed={inputKind === 'motion'} disabled={!motionAvailable} title={motionAvailable ? undefined : 'Body tracking isn’t installed in this build'} onClick={() => void setupInput('motion')}>{motionAvailable ? 'Body (webcam)' : 'Body (webcam) · unavailable'}</button>
+              <button aria-pressed={body} disabled={!motionAvailable} title={motionAvailable ? undefined : 'Body tracking isn’t installed in this build'} onClick={() => void setupInput('motion')}>{motionAvailable ? 'Body (webcam)' : 'Body (webcam) · unavailable'}</button>
               <button aria-pressed={inputKind === 'keyboard_mouse'} onClick={() => void setupInput('keyboard_mouse')}>Keyboard &amp; mouse</button>
             </div>
           </div>
-          <ul className="muted small" style={{ margin: 0, paddingLeft: 18, lineHeight: 1.7 }}>
-            <li>Three waves of wooers, then Antinous behind a table-top shield.</li>
-            <li>Pin wooers to the pillars with spears and arrows for slow-motion killcams.</li>
-            {inputKind === 'keyboard_mouse' ? (<>
-              <li>When you’re pinned down, press <span className="kbd">C</span> to call {friend?.name ?? 'Telemachus'}.</li>
-              <li>Press <span className="kbd">Q</span> and {friend?.name ?? 'Telemachus'} sends whatever he’s holding.</li>
+          {inputKind === 'replay' && <span className="muted small" style={{ marginTop: -6 }}>Replaying a recorded webcam session — the recording moves your hands.</span>}
+          <ul className="muted small lobby-tips">
+            {body ? (<>
+              <li>Stand about 2 m back, hips in view, a light in front of you.</li>
+              <li><b>Reach toward a weapon and make a fist</b> — it flies to your hand. Open your hand mid-swing to throw.</li>
+              <li><b>Both fists up by your chin</b> to guard; lean to dodge.</li>
             </>) : (<>
-              <li>When you’re pinned down, <b>make the phone sign</b> (or press <span className="kbd">C</span>).</li>
-              <li><b>Raise both arms</b> (or <span className="kbd">Q</span>) and Telemachus sends whatever he’s holding.</li>
+              <li><b>Click a weapon</b> on the table to take it (hold <span className="kbd">Tab</span> to look down); swing with the mouse.</li>
+              <li><span className="kbd">RMB</span> guard · <span className="kbd">W</span> thrust · flick and release <span className="kbd">LMB</span> to throw.</li>
             </>)}
+            <li>Three waves of wooers, then Antinous behind a table-top shield. Pin them to the pillars for slow-motion killcams.</li>
+            {friend && (body ? (<>
+              <li>Pinned down? <b>Make the phone sign by your ear</b> (or <span className="kbd">C</span>) to call {fname}; <b>hands over your head</b> (or <span className="kbd">Q</span>) and he sends what he’s holding.</li>
+            </>) : (
+              <li>Pinned down? Press <span className="kbd">C</span> to call {fname}, then <span className="kbd">Q</span> and he sends what he’s holding.</li>
+            ))}
           </ul>
           <div className="spacer" />
           <Btn variant="primary" big autoFocus={live} onClick={start}>Start the fight</Btn>

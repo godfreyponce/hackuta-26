@@ -2,6 +2,10 @@ import { useEffect, useRef, type ReactNode, type CSSProperties } from 'react';
 import type { TrickshotKind, WeaponClass } from '@ithaca/shared';
 import { audio } from '../game/engine/audio';
 import { CLASS_ICON_PATHS } from '../net/mockCatalog';
+import type { InputKind } from '../input';
+
+/** Webcam body tracking — live ('motion') or a recorded session driving the same path ('replay'). */
+export const isBodyInput = (k: InputKind) => k === 'motion' || k === 'replay';
 
 /** Greek-key (meander) divider. Structural ornament — use sparingly. */
 export function Meander({ style }: { style?: CSSProperties }) {
