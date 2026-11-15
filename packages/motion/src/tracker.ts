@@ -8,7 +8,7 @@ export interface TrackerOptions {
   /** Use this element instead of creating a hidden one. */
   video?: HTMLVideoElement;
   deviceId?: string;
-  /** Drop to 960×540 + hands every other frame when fps < this. 0 disables. */
+  /** Drop to 960×540 + hands every other frame when processing can't keep this fps (detection ms/frame > 1000/this). 0 disables. */
   downgradeBelowFps: number;
 }
 
@@ -220,7 +220,10 @@ export class Tracker {
     if (this.stats.width !== this.video.videoWidth) this.updateResolution();
     const threshold = this.opts.downgradeBelowFps;
     if (threshold > 0 && !this.stats.handsEveryOtherFrame && now - this.startedAt > 3000) {
-      this.slowWindows = this.stats.fps < threshold ? this.slowWindows + 1 : 0;
+      // only when WE are the bottleneck: a Mac camera delivers 30 fps however fast detection is, and degrading then
+      // just halves the hand model's resolution and rate for nothing (detection ran ~11 ms/frame on an M-series GPU)
+      const processingBound = this.stats.msPerFrame > 1000 / threshold;
+      this.slowWindows = this.stats.fps < threshold && processingBound ? this.slowWindows + 1 : 0;
       if (this.slowWindows >= 2) void this.downgrade();
     }
   }

@@ -530,18 +530,39 @@ export class WeaponManager {
           if (score < bestScore) { bestScore = score; best = w; }
         }
       }
-      if (best) {
-        const w = best;
-        const from = this.gripWorld(w, new THREE.Vector3());
-        const quatFrom = w.body.rotation();
-        w.state = 'incoming';
-        this.setKinematic(w, GROUPS.none);
-        w.incoming = { from, to: new THREE.Vector3(), ctrl: new THREE.Vector3(), t: 0, dur: 0.14, toHand: h.side, quatFrom: new THREE.Quaternion(quatFrom.x, quatFrom.y, quatFrom.z, quatFrom.w) };
-        audio.whoosh(3);
-        return;
-      }
+      if (best) { this.pullTo(best, h); return; }
     }
     if (best) this.attach(best, h);
+  }
+
+  /** The weapon flies from where it lies into the hand (point-and-grip pull). */
+  pullTo(w: WeaponEnt, h: HandView) {
+    if (this.held[h.side] || (w.state !== 'racked' && w.state !== 'free')) return;
+    const from = this.gripWorld(w, new THREE.Vector3());
+    const quatFrom = w.body.rotation();
+    w.state = 'incoming';
+    this.setKinematic(w, GROUPS.none);
+    w.incoming = { from, to: new THREE.Vector3(), ctrl: new THREE.Vector3(), t: 0, dur: 0.14, toHand: h.side, quatFrom: new THREE.Quaternion(quatFrom.x, quatFrom.y, quatFrom.z, quatFrom.w) };
+    audio.whoosh(3);
+  }
+
+  /**
+   * Webcam fallback when a fist pointed at nothing: the nearest weapon still on the table (or loose within 2.5 m),
+   * preferring that hand's side and, for the left hand, the aspis. A fist never comes back empty while any remains.
+   */
+  nearestForHand(h: HandView): WeaponEnt | null {
+    let best: WeaponEnt | null = null, bestScore = Infinity;
+    for (const w of this.list) {
+      if ((w.state !== 'racked' && w.state !== 'free') || w.cls === 'arrow' || w.cls === 'bow') continue;
+      const gp = this.gripWorld(w, _v);
+      const d = gp.distanceTo(h.pos);
+      if (w.state === 'free' && d > 2.5) continue;
+      const sideBias = (h.side === 'left' ? gp.x - h.pos.x : h.pos.x - gp.x) > 0 ? 0.25 : 0; // wrong side of the hand
+      const shieldBias = w.cls === 'shield' ? (h.side === 'left' ? -0.4 : 0.6) : 0;
+      const score = d + sideBias + shieldBias;
+      if (score < bestScore) { bestScore = score; best = w; }
+    }
+    return best;
   }
 
   private attach(w: WeaponEnt, h: HandView) {

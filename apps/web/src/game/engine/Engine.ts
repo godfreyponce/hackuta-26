@@ -356,7 +356,15 @@ export class Engine {
           if (this.weapons.heldBy('left')) this.weapons.swapHands(); // a sword in the left goes to the right first
           if (!this.weapons.heldBy('left')) { this.weapons.grab(this.handViews.left, ray, true); break; }
         }
-        if (!this.weapons.heldBy(e.hand)) this.weapons.grab(this.handViews[e.hand], ray);
+        if (!this.weapons.heldBy(e.hand)) {
+          this.weapons.grab(this.handViews[e.hand], ray);
+          // webcam: a fist that pointed at nothing still takes something — what glows, else the nearest on the table
+          if (!isKeyboardMouse(this.input) && !this.weapons.heldBy(e.hand) && !this.weapons.drawing) {
+            const w = (this.hoverW && this.hoverW.state !== 'held' && this.hoverW.state !== 'incoming' ? this.hoverW : null) ?? this.weapons.nearestForHand(this.handViews[e.hand]);
+            if (w && !(w.cls === 'shield' && e.hand === 'right' && !this.weapons.heldBy('left'))) this.weapons.pullTo(w, this.handViews[e.hand]);
+            else if (w) this.weapons.pullTo(w, this.handViews.left); // the aspis goes on the left arm
+          }
+        }
         else {
           // already armed: the free hand takes what you point at (second blade → dual wield, aspis → sword & shield)
           const other = e.hand === 'right' ? 'left' : 'right';
