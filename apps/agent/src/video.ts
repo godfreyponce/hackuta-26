@@ -52,6 +52,16 @@ export const SPEECH_CHARS_PER_S = 16;
  * phone's jitter buffer more, and the friend needs a moment to finish reading.
  */
 export const CAPTION_LINGER_MS = 700;
+/** Guess: a chunk like "I," gets about 125 ms of audio, too short to read; it stays this long, and later chunks catch up. */
+export const CHUNK_MIN_MS = 300;
+
+/**
+ * A variation selector (U+FE0F, as in a vision-model quip's "⚔️") makes Pango abort the whole agent (exit 133, "Could
+ * not load fallback font"), and other emoji draw as black blobs, so captions drop both. © ® ™ stay: the font draws them.
+ * Control characters are dropped too: they are invalid in the SVG, so the whole chunk would fail to render.
+ */
+const NOT_DRAWN = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFE00-\uFE0F\u200D\u20E3\u{E0020}-\u{E007F}\u{E0100}-\u{E01EF}\p{Emoji_Modifier}\p{Regional_Indicator}]|(?![©®™])\p{Extended_Pictographic}/gu;
+const drawable = (text: string) => text.replace(NOT_DRAWN, '').replace(/\s+/g, ' ').trim();
 
 function wrap(text: string, maxChars: number): string[] {
   const lines: string[] = [];
@@ -81,12 +91,27 @@ function evenWrap(phrase: string): string[] {
 export function captionChunks(text: string): string[] {
   const phrases: string[] = [];
   let phrase: string[] = [];
-  for (const word of text.split(/\s+/).filter(Boolean)) {
+  for (const word of drawable(text).split(' ').filter(Boolean)) {
     phrase.push(word);
     if (/[.,!?;:]$/.test(word)) { phrases.push(phrase.join(' ')); phrase = []; }
   }
   if (phrase.length) phrases.push(phrase.join(' '));
   return phrases.flatMap(evenWrap);
+}
+
+/**
+ * When each chunk shows: at its character share of the audio, but never sooner than CHUNK_MIN_MS after the one before,
+ * and never after the line's audio ends (endCaption's clear would cancel it unseen).
+ */
+export function chunkStarts(chunks: string[], msPerChar: number): number[] {
+  const end = chunks.reduce((n, c) => n + c.length, 0) * msPerChar;
+  const starts: number[] = [];
+  let audio = 0;
+  for (const chunk of chunks) {
+    starts.push(starts.length ? Math.min(end, Math.max(audio, starts.at(-1)! + CHUNK_MIN_MS)) : 0);
+    audio += chunk.length * msPerChar;
+  }
+  return starts;
 }
 
 /** Small words, and the verbs, adjectives and adverbs of LINES, that are never the key word. */
@@ -135,6 +160,7 @@ function captionSvg(chunk: string, size: number, pillW: number): string {
  * fits it; a chunk too wide for the pill (one long word) gets a smaller font instead of running past it.
  */
 export async function renderCaption(chunk: string): Promise<Caption> {
+  chunk = drawable(chunk);
   const { info } = await sharp(Buffer.from(captionSvg(chunk, CAPTION_SIZE / MEASURE_SCALE, 0))).trim().toBuffer({ resolveWithObject: true });
   const textW = info.width * MEASURE_SCALE, room = PILL_MAX_W - 2 * PILL_PAD_X;
   const size = textW > room ? Math.floor((CAPTION_SIZE * room) / textW) : CAPTION_SIZE;
@@ -200,9 +226,9 @@ export class VideoRelay {
     const msPerChar = durationMs ? durationMs / chunks.reduce((n, c) => n + c.length, 0) : 1000 / SPEECH_CHARS_PER_S;
     this.clearCaption();
     const gen = this.captionGen;
-    let at = 0;
+    const starts = chunkStarts(chunks, msPerChar);
     let prev: Promise<unknown> = Promise.resolve();
-    for (const chunk of chunks) {
+    for (const [i, chunk] of chunks.entries()) {
       // In order, one at a time: started together, the first chunk waited about 120 ms behind the rest (measured).
       const rendered = prev.catch(() => {}).then(() => renderCaption(chunk));
       prev = rendered;
@@ -210,8 +236,7 @@ export class VideoRelay {
         (c) => { if (gen === this.captionGen) this.caption = c; },
         (e) => { if (gen === this.captionGen) this.caption = null; warn('caption_render_failed', { error: errText(e) }); },
       );
-      if (at === 0) show(); else this.captionTimers.push(setTimeout(show, at));
-      at += chunk.length * msPerChar;
+      if (i === 0) show(); else this.captionTimers.push(setTimeout(show, starts[i]));
     }
   }
 
