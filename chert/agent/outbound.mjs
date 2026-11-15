@@ -18,6 +18,10 @@ say('room_ready', { room });
 
 // The docs ask for the agent's video to be published before dialing.
 await new Promise(r => setTimeout(r, 5000));
+// The agent joins as a LiveKit-assigned identity (e.g. agent-AJ_...), not AGENT_NAME; Chert needs the real one.
+const agentInRoom = (await rooms.listParticipants(room)).find(p => p.identity !== bridgeIdentity);
+if (!agentInRoom) { say('agent_missing', { room }); process.exit(1); }
+say('agent_in_room', { identity: agentInRoom.identity, tracks: agentInRoom.tracks.map(t => t.source) });
 
 const token = new AccessToken(env.LIVEKIT_API_KEY, env.LIVEKIT_API_SECRET, { identity: bridgeIdentity, ttl: '30m' });
 token.addGrant({ room, roomJoin: true, canPublish: true, canSubscribe: true });
@@ -33,8 +37,8 @@ const created = await fetch(`${API}/calls`, {
   body: JSON.stringify({
     direction: 'outbound', mode: 'customer_managed', line_id: env.CHERT_LINE_ID,
     destination: env.OUTBOUND_TO, destination_type: 'phone',
-    media: { audio: true, video: true },
-    livekit_url: env.LIVEKIT_URL, participant_token: await token.toJwt(), remote_participant_identity: env.AGENT_NAME,
+    media: { audio: true, video: true }, when_busy: 'queue',
+    livekit_url: env.LIVEKIT_URL, participant_token: await token.toJwt(), remote_participant_identity: agentInRoom.identity,
   }),
 });
 const body = await created.json().catch(() => ({}));
