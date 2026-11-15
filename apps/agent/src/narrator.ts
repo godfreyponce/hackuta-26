@@ -16,7 +16,12 @@ export class Narrator {
   private timer: NodeJS.Timeout | null = null;
   private stopped = false;
 
-  constructor(private mixer: Mixer, private onSpoken: (text: string, priority: number) => void) {}
+  constructor(
+    private mixer: Mixer,
+    private onSpoken: (text: string, priority: number) => void,
+    /** Not called for a line that another line interrupted. */
+    private onFinished: (text: string) => void = () => {},
+  ) {}
 
   /** pcm = a cached render; without it the line streams from ElevenLabs. */
   say(text: string, priority: number, pcm?: Int16Array): void {
@@ -70,6 +75,6 @@ export class Narrator {
     this.onSpoken(item.text, item.priority);
     log('narration', { text: item.text, priority: item.priority, cached: !!item.pcm });
     await this.mixer.play(item.pcm ?? ttsStream(item.text));
-    if (this.current === item) { this.current = null; this.lastEnd = Date.now(); }
+    if (this.current === item) { this.current = null; this.lastEnd = Date.now(); this.onFinished(item.text); }
   }
 }

@@ -7,7 +7,9 @@ import {
   TrackSource, VideoBufferType, VideoFrame, VideoSource, VideoStream, dispose, type RemoteTrack, type RemoteTrackPublication,
   type RemoteParticipant,
 } from '@livekit/rtc-node';
-import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { resolve } from 'node:path';
+import sharp from 'sharp';
 import { RoomServiceClient } from 'livekit-server-sdk';
 import WebSocket from 'ws';
 
@@ -77,7 +79,7 @@ async function openGame() {
 /** The phone side: joins the FaceTime room as the bridge and publishes the caller's camera and mic. */
 async function openPhone(url: string, token: string) {
   const room = new Room();
-  const s = { joinedAt: 0, firstVoiceAt: 0, agentVideoFrames: 0, agentVideoSize: '', rms: [] as number[] };
+  const s = { joinedAt: 0, firstVoiceAt: 0, agentVideoFrames: 0, agentVideoSize: '', rms: [] as number[], lastAgentFrame: null as VideoFrame | null };
   room.on(RoomEvent.TrackSubscribed, (track: RemoteTrack, pub: RemoteTrackPublication) => {
     out('phone_sub', { name: pub.name });
     if (pub.name === 'quartermaster-audio') void (async () => {
@@ -90,7 +92,7 @@ async function openPhone(url: string, token: string) {
         if (n === 50) { s.rms.push(Math.round(acc / n)); acc = 0; n = 0; }
       }
     })();
-    if (pub.name === 'agent-video') void (async () => { for await (const { frame } of new VideoStream(track)) { s.agentVideoFrames++; s.agentVideoSize = `${frame.width}x${frame.height}`; } })();
+    if (pub.name === 'agent-video') void (async () => { for await (const { frame } of new VideoStream(track)) { s.agentVideoFrames++; s.agentVideoSize = `${frame.width}x${frame.height}`; s.lastAgentFrame = frame; } })();
   });
   // Solid frames that change shade (noise averages to one gray at 64x64), so the scanner's diff check passes.
   const cam = new VideoSource(1280, 720);
@@ -111,6 +113,27 @@ async function openPhone(url: string, token: string) {
   };
   const close = async () => { clearInterval(camTimer); await room.disconnect().catch(() => {}); };
   return { s, republishCam, close };
+}
+
+/**
+ * The caption as the friend sees it: warm (cream) pixels in the agent-video frame. The e2e game frame is plain grey,
+ * so only caption text is warm. Saves the frame as a PNG for a human to look at.
+ */
+async function captionCheck(frame: VideoFrame | null): Promise<void> {
+  if (!frame) return check('caption: an agent-video frame reached the phone', false);
+  const f = frame.convert(VideoBufferType.RGBA);
+  let n = 0, minX = f.width, maxX = -1, minY = f.height, maxY = -1;
+  for (let y = 0; y < f.height; y++) for (let x = 0; x < f.width; x++) {
+    const i = (y * f.width + x) * 4, r = f.data[i]!, b = f.data[i + 2]!;
+    if (r > 180 && r - b > 25) { n++; minX = Math.min(minX, x); maxX = Math.max(maxX, x); minY = Math.min(minY, y); maxY = Math.max(maxY, y); }
+  }
+  const dir = resolve('.cache/e2e');
+  mkdirSync(dir, { recursive: true });
+  const png = `${dir}/agent-video-caption.png`;
+  await sharp(Buffer.from(f.data), { raw: { width: f.width, height: f.height, channels: 4 } }).png().toFile(png);
+  const box = { textPixels: n, x: [minX, maxX], y: [minY, maxY], size: `${f.width}x${f.height}`, png };
+  check('caption burned into agent-video during the greeting (captions)', n > 200, box);
+  check('caption whole inside the 3:2 frame, in its lower half (captions)', n > 0 && minX >= 16 && maxX < f.width - 16 && minY >= f.height / 2 && maxY < f.height - 4, box);
 }
 
 const mockPhone = async (sid: string) => {
@@ -237,6 +260,7 @@ async function liveQueuedCall(): Promise<void> {
   check('connected on bridge_ready', await waitFor(() => g.has('call.status', 'connected'), 5_000));
   await sleep(3_000);
   check('greeting under 1.5 s after join (poll included)', phone.s.firstVoiceAt > 0 && phone.s.firstVoiceAt - phone.s.joinedAt < 1_500, phone.s.firstVoiceAt ? phone.s.firstVoiceAt - phone.s.joinedAt : null);
+  await captionCheck(phone.s.lastAgentFrame);
   await fakeEmit(c.id, { status: 'failed', type: 'failed', data: { reason: 'several_audio' } });
   check('failed with Chert reason (review #5)', await waitFor(() => g.msgs.some((m) => m.type === 'call.status' && m.state === 'failed' && m.reason === 'several_audio'), 5_000));
   check('POST /end sent after Chert failed (review #5)', (await fakeLast()).call!.endPosts === 1, (await fakeLast()).call!.endPosts);

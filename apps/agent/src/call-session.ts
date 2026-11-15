@@ -102,7 +102,11 @@ export class CallSession {
     this.keyBase = `ithaca-${this.sid}-${bootId}-${attempt}`;
     this.bridgeIdentity = this.mock ? MOCK_BRIDGE_IDENTITY : `facetime-bridge-${attempt}`;
     this.scanner = new CallerScanner(this.sid);
-    this.narrator = new Narrator(this.mixer, (text, priority) => this.hub.send({ type: 'narration', sessionId: this.sid, text, priority }));
+    this.narrator = new Narrator(
+      this.mixer,
+      (text, priority) => { this.video.setCaption(text); this.hub.send({ type: 'narration', sessionId: this.sid, text, priority }); },
+      () => this.video.setCaption(null),
+    );
   }
 
   /** Token for dev/fake-phone.html (mock-call only). */

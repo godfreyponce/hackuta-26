@@ -56,3 +56,17 @@ test('a line queued behind the farewell is dropped when stop() comes first', asy
   await tick();
   assert.deepEqual(spoken, ['farewell']);
 });
+
+test('the caption clears when a line ends, but not when a higher line interrupts it (captions)', async () => {
+  const mixer = new FakeMixer();
+  const events: string[] = [];
+  const narrator = new Narrator(mixer as unknown as Mixer, (t) => events.push(`show ${t}`), (t) => events.push(`clear ${t}`));
+  narrator.say('flavor', PRIORITY.flavor, Int16Array.of(1));
+  await tick();
+  narrator.say('scan', PRIORITY.scan, Int16Array.of(2));
+  await tick();
+  mixer.endCurrent();
+  await tick();
+  assert.deepEqual(events, ['show flavor', 'show scan', 'clear scan']);
+  narrator.stop();
+});
