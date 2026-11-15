@@ -4,7 +4,10 @@ import {
   TrackSource, VideoSource, VideoStream, type RemoteParticipant, type RemoteTrack, type RemoteTrackPublication,
 } from '@livekit/rtc-node';
 import { AccessToken, RoomServiceClient } from 'livekit-server-sdk';
-import { ChertError, chertEventKind, CHERT_TIMEOUT_MS, CREATE_AFTER_CANCEL_MAX_MS, createCall, endCall, getCallStatus, getEvents, isQueuedStatus, type ChertEvent } from './chert.ts';
+import {
+  ChertError, chertEventKind, CREATE_AFTER_CANCEL_MAX_MS, createCall, endCall, endConfirmed, END_CALL_MAX_MS, getCallStatus, getEvents,
+  isQueuedStatus, terminalStatus, type ChertEvent,
+} from './chert.ts';
 import type { CallState, GameEvent, ServerToAgent, WeaponSpawn } from './contracts/protocol.ts';
 import { env } from './env.ts';
 import type { Hub } from './hub.ts';
@@ -28,7 +31,7 @@ const WEB_GONE_GRACE_MS = 10_000; // guess: long enough for a page reload to rej
 const WEAPON_WAIT_MS = 20_000; // spec D.3: Part D guarantees a prefab fallback by 15 s
 const TRACKS_VISIBLE_WAIT_MS = 3_000; // guess: the server showed the second track about 200 ms late in the fake-Chert e2e
 /** Longest that end() can take; main's hard stop on signals must be longer. */
-export const END_MAX_MS = Math.max(SETUP_WAIT_MS, CREATE_AFTER_CANCEL_MAX_MS, FAREWELL_WAIT_MS) + CHERT_TIMEOUT_MS + CLEANUP_MARGIN_MS;
+export const END_MAX_MS = Math.max(SETUP_WAIT_MS, CREATE_AFTER_CANCEL_MAX_MS, FAREWELL_WAIT_MS) + END_CALL_MAX_MS + CLEANUP_MARGIN_MS;
 const AGENT_FT_IDENTITY = 'quartermaster';
 const AGENT_GAME_IDENTITY = 'quartermaster-relay';
 const ALLOWED_FT_TRACKS = new Set(['agent-video', 'quartermaster-audio']);
@@ -67,6 +70,8 @@ export class CallSession {
   private dialedAt = 0;
   private allocatedAt = 0; // when Chert took the call off the shared-line queue
   private statusAt202: string | undefined;
+  private lastStatus: string | undefined;
+  private chertSaidEnded = false; // a later POST /end may get a 4xx for a call that is already over
   private timers: NodeJS.Timeout[] = [];
   private playerMic: RemoteTrack | null = null;
   private lastWeapon: WeaponSpawn | null = null;
@@ -263,12 +268,12 @@ export class CallSession {
     this.callId = id;
     if (queued) this.statusAt202 = status;
     log('chert_call_created', { callId: id, queued, ms: Date.now() - this.dialedAt });
+    await noteActiveCall(id, `${this.keyBase}-end`).catch(() => {});
     if (this.ending) {
       log('chert_call_created_after_end', { callId: id });
       await this.endChert();
       return;
     }
-    await noteActiveCall(id, `${this.keyBase}-end`).catch(() => {});
     void this.pollEvents();
   }
 
@@ -290,28 +295,37 @@ export class CallSession {
     return this.chertEnd;
   }
 
+  /**
+   * Each tick reads the status and the events. Allocation is applied before the events, so the deadline counts from it;
+   * a terminal status is applied after them, so an end event's reason wins.
+   */
   private async pollEvents(): Promise<void> {
     const seen = new Set<string>();
     while (!this.ending && this.callId) {
-      if (!this.allocatedAt) await this.checkQueue();
+      const [status, events] = await Promise.all([
+        getCallStatus(this.callId).catch((e) => { warn('chert_status_failed', { error: errText(e) }); return undefined; }),
+        getEvents(this.callId).catch((e) => { warn('chert_poll_failed', { error: errText(e) }); return []; }),
+      ]);
+      if (this.ending) return;
+      if (status !== undefined && status !== this.lastStatus) { this.lastStatus = status; log('chert_status', { status }); }
+      if (status && !this.allocatedAt) this.checkQueue(status);
+      for (const ev of events) {
+        if (seen.has(ev.id)) continue;
+        seen.add(ev.id);
+        log('chert_event', { type: ev.type, reason: ev.reason });
+        this.onChertEvent(ev);
+        if (this.ending) return;
+      }
+      const ended = status ? terminalStatus(status) : null;
+      if (ended) { this.chertSaidEnded = true; void this.end(ended === 'failed' ? 'chert_failed' : 'remote_ended', ended, { quick: true }); return; }
       if (this.allocatedAt && !this.bridgeReadyAt && Date.now() - this.allocatedAt > ANSWER_TIMEOUT_MS) { await this.end('no_answer', 'failed'); return; }
-      try {
-        for (const ev of await getEvents(this.callId)) {
-          if (seen.has(ev.id)) continue;
-          seen.add(ev.id);
-          log('chert_event', { type: ev.type, reason: ev.reason });
-          this.onChertEvent(ev);
-          if (this.ending) return;
-        }
-      } catch (e) { warn('chert_poll_failed', { error: errText(e) }); }
       await sleep(POLL_MS);
     }
   }
 
   /** While the call waits on the shared line, the no-answer clock has not started. */
-  private async checkQueue(): Promise<void> {
-    const status = await getCallStatus(this.callId!).catch((e) => { warn('chert_status_failed', { error: errText(e) }); return undefined; });
-    if (!status || isQueuedStatus(status, this.statusAt202)) return;
+  private checkQueue(status: string): void {
+    if (isQueuedStatus(status, this.statusAt202)) return;
     this.allocatedAt = Date.now();
     log('chert_call_allocated', { status, queuedMs: this.allocatedAt - this.dialedAt });
   }
@@ -322,8 +336,8 @@ export class CallSession {
       case 'ready': this.onBridgeReady(ev.type); break;
       case 'ringing': if (this.state === 'dialing') this.status('ringing'); break;
       case 'no_video': this.say('cantSee', PRIORITY.scan); break;
-      case 'ended': void this.end(ev.reason ?? 'remote_ended', 'ended', { quick: true }); break;
-      case 'failed': void this.end(ev.reason ?? 'chert_failed', 'failed', { quick: true }); break;
+      case 'ended': this.chertSaidEnded = true; void this.end(ev.reason ?? 'remote_ended', 'ended', { quick: true }); break;
+      case 'failed': this.chertSaidEnded = true; void this.end(ev.reason ?? 'chert_failed', 'failed', { quick: true }); break;
       case 'other': break;
     }
   }
@@ -435,6 +449,7 @@ export class CallSession {
     this.status('ending', reason);
     for (const t of this.timers) clearTimeout(t);
     this.scanner.cancel();
+    let endStatus = 0;
     try {
       // A connect or a create in flight would otherwise finish after cleanup and leave a room or a call behind.
       // Once POST /calls has started, wait for its whole retry run: a late reply is the only way to learn the call id.
@@ -443,13 +458,14 @@ export class CallSession {
         const f = pick('farewell');
         await Promise.race([this.narrator.sayNow(f.text, PRIORITY.greeting, f.pcm), sleep(FAREWELL_WAIT_MS)]);
       }
-      if (this.callId) log('chert_end', { status: await this.endChert() });
+      if (this.callId) log('chert_end', { status: (endStatus = await this.endChert()) });
     } finally {
       this.narrator.stop();
       await Promise.allSettled([...this.relays.closeAll(), this.mixer.close(), this.video.close()]);
       this.cleanedUp = true;
       await this.releaseRooms();
-      if (this.callId) await clearActiveCall().catch(() => {});
+      if (this.callId && (this.chertSaidEnded || endConfirmed(endStatus))) await clearActiveCall().catch(() => {});
+      else if (this.callId) warn('chert_end_unconfirmed_kept_for_recovery', { callId: this.callId, status: endStatus });
       this.status(final, reason);
       log('call_cleaned_up', { ftRoom: this.ftRoom, elapsedMs: this.bridgeReadyAt ? Date.now() - this.bridgeReadyAt : 0 });
       this.onDone();

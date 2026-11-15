@@ -2,7 +2,7 @@
 // We note the live call on disk and clean up leftovers on the next start.
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { RoomServiceClient } from 'livekit-server-sdk';
-import { endCall } from './chert.ts';
+import { endCall, endConfirmed } from './chert.ts';
 import { env } from './env.ts';
 import { errText, log, warn } from './log.ts';
 
@@ -22,7 +22,7 @@ export async function recoverLeftovers(): Promise<void> {
     const { callId, endKey } = JSON.parse(await readFile(FILE, 'utf8')) as { callId: string; endKey: string };
     const status = await endCall(callId, endKey);
     log('recovered_leftover_call', { callId, status });
-    await clearActiveCall();
+    if (endConfirmed(status)) await clearActiveCall();
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code !== 'ENOENT') warn('recover_call_failed', { error: errText(e) });
   }

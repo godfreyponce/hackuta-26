@@ -7,6 +7,7 @@ import {
   TrackSource, VideoBufferType, VideoFrame, VideoSource, VideoStream, dispose, type RemoteTrack, type RemoteTrackPublication,
   type RemoteParticipant,
 } from '@livekit/rtc-node';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { RoomServiceClient } from 'livekit-server-sdk';
 import WebSocket from 'ws';
 
@@ -220,6 +221,44 @@ async function liveEndDuringCreate(): Promise<void> {
   await g.close();
 }
 
+const ACTIVE_CALL_FILE = new URL('../.cache/active-call.json', import.meta.url);
+
+async function liveCreate(next: Record<string, unknown>) {
+  const before = (await fakeLast()).createCount;
+  await post('/fake-chert/_next', next);
+  const g = await openGame();
+  g.send('call.request', { friendId: 'friend-1' });
+  const sent = Date.now() + 15_000;
+  while (Date.now() < sent && (await fakeLast()).createCount === before) await sleep(100);
+  return { g, c: (await fakeLast()).call! };
+}
+
+async function liveStatusEnd(): Promise<void> {
+  out('scenario', { name: 'live: odd events shape, then Chert ends by status only (coord review #2, #3)' });
+  const { g, c } = await liveCreate({ oddShape: true });
+  await fakeEmit(c.id, { status: 'active', type: 'bridge_ready' });
+  check('connected although the events shape is unknown (coord #2)', await waitFor(() => g.has('call.status', 'connected'), 5_000));
+  await fakeEmit(c.id, { status: 'completed' });
+  check('a terminal status with no end event ends the call (coord #3)', await waitFor(() => g.msgs.some((m) => m.type === 'call.status' && m.state === 'ended' && m.reason === 'remote_ended'), 5_000));
+  await sleep(1_000);
+  check('a call Chert ended leaves no recovery record', !existsSync(ACTIVE_CALL_FILE));
+  check('no polling after the end', (await fakeLast()).call!.pollsAfterEnd === 0, (await fakeLast()).call!.pollsAfterEnd);
+  await g.close();
+}
+
+async function liveFailedEnd(): Promise<void> {
+  out('scenario', { name: 'live: the web ends the call and POST /end fails (coord review #1)' });
+  const { g, c } = await liveCreate({ endStatus: 503 });
+  await sleep(1_000);
+  g.send('call.end');
+  check('ends', await waitFor(() => g.has('call.status', 'ended'), 15_000));
+  await sleep(1_000);
+  check('a failed POST /end is tried twice (coord #1)', (await fakeLast()).call!.endPosts === 2, (await fakeLast()).call!.endPosts);
+  check('a failed POST /end keeps the recovery record (coord #1)', existsSync(ACTIVE_CALL_FILE) && readFileSync(ACTIVE_CALL_FILE, 'utf8').includes(c.id));
+  rmSync(ACTIVE_CALL_FILE, { force: true }); // the fake call has no real counterpart to recover
+  await g.close();
+}
+
 const health = await (await fetch(`${AGENT}/health`)).json() as { mode: string; chert: string | null };
 out('agent', health);
 if (health.mode === 'live' && !health.chert?.startsWith(`${HUB}/fake-chert`)) {
@@ -233,6 +272,8 @@ if (health.mode === 'mock-call') {
 } else {
   await liveQueuedCall();
   await liveEndDuringCreate();
+  await liveStatusEnd();
+  await liveFailedEnd();
 }
 out('result', { failures });
 await dispose();

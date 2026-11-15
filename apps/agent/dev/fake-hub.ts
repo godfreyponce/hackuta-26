@@ -18,11 +18,12 @@ const webs = new Map<string, Set<WebSocket>>();
 const forgeCalls = new Map<string, number>();
 
 // ── fake Chert (for `pnpm dev:fake-chert`): the agent runs AGENT_MODE=live against /fake-chert. No real calls. ──
-type FakeCall = { id: string; key: string; body: Record<string, unknown>; status: string; events: Array<Record<string, unknown>>; endPosts: number; pollsAfterEnd: number; agentTracksAtCreate: string[] };
+type FakeCall = { id: string; key: string; body: Record<string, unknown>; status: string; events: Array<Record<string, unknown>>; endPosts: number; pollsAfterEnd: number; agentTracksAtCreate: string[]; oddShape: boolean; endStatus: number };
 const calls = new Map<string, FakeCall>();
 let lastCall: FakeCall | null = null;
 let createCount = 0;
-let nextCreate: { queued?: boolean; delayMs?: number } = {};
+/** oddShape: events come back in an unknown shape. endStatus: every POST /end answers with this status. */
+let nextCreate: { queued?: boolean; delayMs?: number; oddShape?: boolean; endStatus?: number } = {};
 const rooms = new RoomServiceClient(LIVEKIT_URL.replace(/^wss:/, 'https:'), LIVEKIT_API_KEY, LIVEKIT_API_SECRET);
 
 async function fakeChert(method: string, path: string, req: IncomingMessage, json: (code: number, b: unknown) => void): Promise<void> {
@@ -42,12 +43,12 @@ async function fakeChert(method: string, path: string, req: IncomingMessage, jso
     const raw = (await body(req)).toString();
     const existing = [...calls.values()].find((c) => c.key === key);
     if (existing) return JSON.stringify(existing.body) === raw ? json(201, { data: { id: existing.id } }) : json(409, { error: { code: 'idempotency_conflict' } });
-    const { queued = false, delayMs = 0 } = nextCreate;
+    const { queued = false, delayMs = 0, oddShape = false, endStatus = 0 } = nextCreate;
     nextCreate = {};
     const b = JSON.parse(raw) as Record<string, unknown>;
     const ftRoom = /"room":"([^"]+)"/.exec(Buffer.from(String(b.participant_token).split('.')[1] ?? '', 'base64url').toString())?.[1] ?? '';
     const agent = (await rooms.listParticipants(ftRoom).catch(() => [])).find((p) => p.identity === b.remote_participant_identity);
-    const c: FakeCall = { id: randomBytes(4).toString('hex'), key, body: b, status: queued ? 'queued' : 'allocating', events: queued ? [{ id: 'ev-0', type: 'call.queued' }] : [], endPosts: 0, pollsAfterEnd: 0, agentTracksAtCreate: agent?.tracks.map((t) => t.name) ?? [] };
+    const c: FakeCall = { id: randomBytes(4).toString('hex'), key, body: b, status: queued ? 'queued' : 'allocating', events: queued ? [{ id: 'ev-0', type: 'call.queued' }] : [], endPosts: 0, pollsAfterEnd: 0, agentTracksAtCreate: agent?.tracks.map((t) => t.name) ?? [], oddShape, endStatus };
     calls.set(c.id, c);
     lastCall = c;
     createCount++;
@@ -59,7 +60,8 @@ async function fakeChert(method: string, path: string, req: IncomingMessage, jso
   if (parts[0] !== 'calls' || !c) return json(404, { error: { code: 'not_found' } });
   if (method === 'GET' && c.endPosts) c.pollsAfterEnd++;
   if (method === 'GET' && parts.length === 2) return json(200, { data: { id: c.id, status: c.status } });
-  if (method === 'GET' && parts[2] === 'events') return json(200, { data: c.events });
+  if (method === 'GET' && parts[2] === 'events') return json(200, c.oddShape ? { result: { log: c.events } } : { data: c.events });
+  if (method === 'POST' && parts[2] === 'end' && c.endStatus) { c.endPosts++; return json(c.endStatus, { error: { code: 'fake_end_failure' } }); }
   if (method === 'POST' && parts[2] === 'end') { c.endPosts++; c.status = 'ended'; log('fake_chert_end', { id: c.id }); return json(202, {}); }
   json(404, { error: { code: 'not_found' } });
 }
