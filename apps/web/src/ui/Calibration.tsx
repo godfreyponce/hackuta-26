@@ -5,10 +5,11 @@ import { CALIBRATION_ORDER, type CalibrationStepInfo } from '../input';
 import { Btn, useMenuNav } from './components';
 
 const STEPS = [
-  { id: 'frame', label: 'Step back until your waist is visible', hint: 'About 2 m from the Mac, light in front of you' },
-  { id: 'guard', label: 'Raise your guard for 3 seconds', hint: 'Fists up by your face' },
-  { id: 'bow', label: 'String the bow', hint: 'Left arm straight out, pull your right hand to your chin' },
-  { id: 'grip', label: 'Make a fist, then open your hand', hint: 'Both hands, slowly' },
+  // wording follows Part C's checks (packages/motion/src/calibration.ts) so the player does what is measured
+  { id: 'frame', label: 'Step back until your hips are visible', hint: 'About 2 m from the Mac, light in front of you' },
+  { id: 'guard', label: 'Raise your guard: both fists up by your chin', hint: 'Hold still for 2 seconds' },
+  { id: 'bow', label: 'Left arm straight out to your LEFT side', hint: 'At shoulder height, like holding a bow — sideways, not toward the screen' },
+  { id: 'grip', label: 'Make a fist, then open your hand', hint: 'Both hands, three times' },
 ];
 
 export const KEYMAP: [string, string][] = [

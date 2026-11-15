@@ -8,6 +8,7 @@ import { WeaponManager, type HandView, type WeaponEnt } from './weapons';
 import { Gauntlet } from './hands';
 import { Trails } from './trails';
 import { loadBodyTemplate, type BodyTemplate } from './skinnedBody';
+import { PlayerBody } from './playerBody';
 import { Director, type WaveDef } from './director';
 import { Scoring, TRICK_POINTS, TRICK_TITLES } from './scoring';
 import { audio } from './audio';
@@ -161,6 +162,9 @@ export class Engine {
     return e;
   }
   private bodyTpl: BodyTemplate | null = null;
+  /** first-person body (VR-style): arms to the gauntlets, torso and legs below the camera */
+  private playerBody: PlayerBody | null = null;
+  private trackedElbows: Record<Hand, THREE.Vector3 | null> = { left: null, right: null };
 
   private build() {
     this.world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
@@ -169,6 +173,10 @@ export class Engine {
     this.scene.add(this.hall.group);
     this.scene.add(this.fx.group);
     this.scene.add(this.trails.group);
+    if (this.bodyTpl) {
+      try { this.playerBody = new PlayerBody(this.bodyTpl, HALL.eye.y); this.scene.add(this.playerBody.root); }
+      catch (err) { console.warn('[engine] first-person body unavailable', err); this.playerBody = null; }
+    }
     this.fx.hearth = HALL.hearth.clone();
     this.fx.braziers = [new THREE.Vector3(-1.5, 1.08, -1.4), ...HALL.doors.map((d) => new THREE.Vector3(d.x * 1.55, 1.2, HALL.zFar + 1.4))];
 
@@ -254,7 +262,9 @@ export class Engine {
       hitstop: (ms) => this.hitstop(ms),
       shake: (v) => this.addTrauma(v),
       playerPos: () => this.eye,
-      kbPull: () => isKeyboardMouse(this.input),
+      // point-and-grip pull: the cursor ray (keyboard/mouse) or the ray from your eye through your tracked hand
+      // (webcam) — the table sits below where a tracked hand can reach, so reaching toward a weapon + a fist takes it
+      kbPull: () => true,
       drivenHand: () => (isKeyboardMouse(this.input) ? this.input.mode.activeHand : null),
       cutCap: (hand) => {
         if (!isKeyboardMouse(this.input)) return null;
@@ -393,6 +403,28 @@ export class Engine {
     }
     const h = this.handViews[hand];
     return { origin: this.eye.clone(), dir: h.pos.clone().sub(this.eye).normalize() };
+  }
+
+  /** Pose the first-person body after the hands: webcam elbows (Part C's tracked skeleton) steer the arms. */
+  private updatePlayerBody(state: PlayerInputState | null, realDt: number, playing: boolean) {
+    const pb = this.playerBody;
+    if (!pb) return;
+    const on = playing && !!state;
+    pb.setVisible(on);
+    // webcam (VR-style): your real forearm joins the gauntlet, so its vambrace tube goes; keyboard keeps the tuned
+    // viewmodel (there the forearm sits below the narrow view and the gauntlet would float)
+    const tracked = this.input?.kind === 'motion' || this.input?.kind === 'replay';
+    this.hands.left.setForearmVisible(!(on && tracked)); this.hands.right.setForearmVisible(!(on && tracked));
+    if (!on || !state) return;
+    const dbg = this.input as unknown as { getDebugBody?: () => { ok: boolean; elbow: Record<Hand, { x: number; y: number; z: number }> } | null };
+    const body = this.input?.kind === 'motion' ? dbg.getDebugBody?.() ?? null : null;
+    const up = new THREE.Vector3(0, 1, 0);
+    for (const side of ['left', 'right'] as const) {
+      const el = body?.ok ? body.elbow[side] : null;
+      if (el) this.trackedElbows[side] = (this.trackedElbows[side] ?? new THREE.Vector3()).set(el.x, el.y, el.z).applyAxisAngle(up, this.yaw).add(this.eye);
+      else this.trackedElbows[side] = null;
+    }
+    pb.update({ eye: this.eye, yaw: this.yaw, crouch: state.body.crouch ?? 0, hands: this.handViews, elbows: this.trackedElbows }, realDt);
   }
 
   private bodyToWorldDir(v: THREE.Vector3) { return v.applyAxisAngle(new THREE.Vector3(0, 1, 0), this.yaw); }
@@ -830,6 +862,7 @@ export class Engine {
       } else g.update(hv.pos, hv.quat, hs.grip, hs.visible, !!heldW, realDt);
     }
     this.hands.left.setHealth(this.health / 100);
+    this.updatePlayerBody(state, realDt, playing);
     // blade history for deflect timing (last 0.5 s)
     for (const side of ['left', 'right'] as const) {
       const w = this.weapons.heldBy(side);
@@ -860,7 +893,9 @@ export class Engine {
     } else {
       cam.position.copy(this.eye);
       const drawing = this.weapons.drawing && (state?.bowDraw ?? 0) > 0.2;
-      const fovTarget = drawing ? 48 : this.slow.active ? 48 : 55;
+      // webcam: a wider, VR-like view so your tracked hands and arms stay in frame through the fighting range
+      const wide = this.input?.kind === 'motion' || this.input?.kind === 'replay';
+      const fovTarget = (drawing ? 48 : this.slow.active ? 48 : 55) + (wide ? 20 : 0);
       this.fov = damp(this.fov, fovTarget, 6, realDt);
       // handheld sway ~0.3° @ 0.7 Hz + trauma² shake (≤ 2°)
       const sway = THREE.MathUtils.degToRad(0.3);
@@ -879,7 +914,9 @@ export class Engine {
       const fighting = !unarmed && near;
       const full = tab || (cy < -0.92 && !fighting);
       const glance = this.mode === 'match' && unarmed && !near ? 0.45 : 0;
-      const target = full ? (fighting ? 0.5 : 0.62) : Math.max(glance, cy < -0.55 && !fighting ? Math.min(1, (-0.55 - cy) / 0.37) * 0.42 : 0);
+      // webcam: the head rests a little lower (≈11°) — your hands and forearms ride the bottom of the view
+      const bodyTilt = this.input?.kind === 'motion' || this.input?.kind === 'replay' ? 0.2 : 0;
+      const target = bodyTilt + (full ? (fighting ? 0.5 : 0.62) : Math.max(glance, cy < -0.55 && !fighting ? Math.min(1, (-0.55 - cy) / 0.37) * 0.42 : 0));
       this.lookDown = damp(this.lookDown, target, full ? 12 : 6, realDt);
       const pitch = -0.1 - this.lookDown + Math.sin(t * 0.7 * Math.PI * 2) * sway * 0.6 + (Math.sin(t * 37) * 0.5 + Math.sin(t * 23) * 0.5) * maxRot * sh;
       const yaw = this.yaw + Math.sin(t * 0.43 * Math.PI * 2) * sway + Math.sin(t * 31 + 1) * maxRot * sh;
@@ -910,6 +947,19 @@ export class Engine {
         }
         this.weapons.setHover(this.hoverW, this.realT);
       }
+    } else if (this.mode === 'match' && this.input) {
+      // webcam: the weapon your free hand points at (eye → hand) glows and is named — make a fist to take it
+      this.hoverAcc += realDt;
+      if (this.hoverAcc > 0.1) {
+        this.hoverAcc = 0;
+        let w: ReturnType<WeaponManager['pickRay']> = null;
+        for (const h of ['right', 'left'] as const) {
+          if (w || this.weapons.heldBy(h) || !this.handViews[h].visible) continue;
+          w = this.weapons.pickRay(this.aimRay(h));
+        }
+        if (w !== this.hoverW) { this.hoverW = w; if (w) audio.ui('move'); }
+      }
+      this.weapons.setHover(this.hoverW, this.realT);
     }
   }
 

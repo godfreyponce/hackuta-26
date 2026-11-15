@@ -5,6 +5,10 @@ import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { runtime } from '../game/runtime';
 import { P } from '../game/engine/humanoid';
+import { useApp } from '../state/store';
+
+/** read at draw time (the overlay draws on its own rAF loop, outside React renders) */
+const inputKindNow = () => useApp.getState().inputKind;
 
 const BRASS = '#C49A4A';
 const BRASS_HI = '#FFD58A';
@@ -146,7 +150,7 @@ export function CombatOverlay() {
           ctx.globalAlpha = 0.95;
           ctx.font = `700 ${13 * k}px 'Cinzel', serif`;
           ctx.textAlign = 'center';
-          const label = `${o.hover.name.toUpperCase()} · CLICK`;
+          const label = `${o.hover.name.toUpperCase()} · ${inputKindNow() === 'keyboard_mouse' ? 'CLICK' : 'GRIP'}`;
           ctx.lineWidth = 4 * k; ctx.strokeStyle = 'rgba(0,0,0,0.75)';
           ctx.strokeText(label, s.x, s.y - 22 * k);
           ctx.fillStyle = BRASS_HI;

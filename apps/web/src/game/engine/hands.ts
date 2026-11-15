@@ -8,6 +8,9 @@ const bronze = () => new THREE.MeshStandardMaterial({ color: '#6A5236', metalnes
 
 export class Gauntlet {
   readonly root = new THREE.Group();
+  /** the vambrace pieces: hidden when the first-person body supplies a real forearm */
+  private forearm: THREE.Object3D[] = [];
+  setForearmVisible(v: boolean) { for (const o of this.forearm) o.visible = v; }
   readonly body: InstanceType<typeof RAPIER.RigidBody>;
   private fingers: { base: THREE.Group; tip: THREE.Group }[] = [];
   private thumb: { base: THREE.Group; tip: THREE.Group };
@@ -37,6 +40,7 @@ export class Gauntlet {
     const bracer = new THREE.Mesh(new THREE.CylinderGeometry(0.043, 0.05, 0.2, 10, 1, false), [mat, leather, leather]);
     bracer.position.set(0, -0.135, -0.004);
     this.root.add(bracer);
+    this.forearm.push(bracer);
     const cuff = new THREE.Mesh(new THREE.TorusGeometry(0.047, 0.008, 5, 14), matEdge);
     cuff.rotation.x = Math.PI / 2;
     cuff.position.set(0, -0.04, -0.004);
@@ -44,9 +48,11 @@ export class Gauntlet {
     const cuff2 = cuff.clone();
     cuff2.position.y = -0.23;
     this.root.add(cuff2);
+    this.forearm.push(cuff2);
     const wrap = new THREE.Mesh(new THREE.CylinderGeometry(0.042, 0.042, 0.06, 10), leather);
     wrap.position.set(0, -0.06, -0.004);
     this.root.add(wrap);
+    this.forearm.push(wrap);
 
     const segGeo = new THREE.BoxGeometry(0.019, 0.042, 0.021);
     segGeo.translate(0, 0.021, 0);

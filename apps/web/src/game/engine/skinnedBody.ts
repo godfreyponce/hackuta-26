@@ -237,6 +237,9 @@ export class SkinnedBody {
     this.collapsed.clear();
   }
 
+  /** Keep these bones collapsed for good (the first-person body: no head before the camera, gauntlets for hands). */
+  hideBones(keys: ('head' | 'neck' | 'handL' | 'handR')[]) { for (const k of keys) this.collapsed.add(k); }
+
   /** Pose the bones from our part poses (world space). */
   apply(pose: PartPose[]) {
     this.root.updateWorldMatrix(true, false);
