@@ -53,7 +53,7 @@ test('a GLB of another color is not reused', async () => {
   assert.equal(spawn.fallback, true);
 });
 
-test('a reused GLB carries the cached thumb and pipeline, not a new crop', async () => {
+test('a reused GLB carries the cached thumb, not the new crop thumb', async () => {
   const cached = await cachedPan();
   const { spawn, doc } = await forgeOnce('s-hit');
   assert.equal(spawn.fallback, false);

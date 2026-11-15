@@ -130,12 +130,9 @@ async function runPipeline(forgeId: string, jpeg: Buffer, sessionId: string, v: 
   try {
     return await withTimeout((async () => {
       progress('crop', 15);
-      const crop = async () => {
-        const c = await cropForModel(jpeg, v.bbox);
-        thumbFileId = await putFile('thumbs', c.thumbJpeg, `${forgeId}.jpg`, 'image/jpeg');
-        progress('crop', 30);
-        return c.png1024;
-      };
+      const { png1024, thumbJpeg } = await cropForModel(jpeg, v.bbox);
+      thumbFileId = await putFile('thumbs', thumbJpeg, `${forgeId}.jpg`, 'image/jpeg');
+      progress('crop', 30);
 
       let glbFileId: string;
       let reusedFrom: WeaponDocId | undefined;
@@ -146,11 +143,9 @@ async function runPipeline(forgeId: string, jpeg: Buffer, sessionId: string, v: 
         reusedFrom = cached._id;
         // The thumb must show what this GLB was built from, not today's crop with the hand in it.
         if (cached.thumbFileId) thumbFileId = cached.thumbFileId.toHexString();
-        else await crop();
         log.info({ object: v.object_name }, 'forge: reusing cached GLB');
         progress('3d', 90);
       } else {
-        const png1024 = await crop();
         progress('3d', 40);
         const tick = setInterval(() => progress('3d', 60), 1500);
         let made: Awaited<ReturnType<typeof generateGlb>>;
