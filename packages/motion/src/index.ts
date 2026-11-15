@@ -14,3 +14,4 @@ export { createReplayController } from './replay';
 export type { ReplayController, ReplayOptions } from './replay';
 export { Recorder, parseRecording, runReplay, downloadRecording } from './recording';
 export type { ReplayRunResult } from './recording';
+export { replayProfile } from './recording';

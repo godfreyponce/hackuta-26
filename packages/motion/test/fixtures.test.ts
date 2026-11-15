@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import type { InputEvent } from '@ithaca/shared';
-import { parseRecording, runReplay } from '../src/recording';
+import { parseRecording, replayProfile, runReplay } from '../src/recording';
 
 const DIR = fileURLToPath(new URL('../fixtures/', import.meta.url));
 
@@ -35,7 +35,7 @@ describe('reference recordings (fixtures/)', () => {
     const key = Object.keys(EXPECT).find((k) => file.toLowerCase().startsWith(k));
     it(`${file} → ${key ? EXPECT[key]?.join(', ') : '(no expectation; just must not crash)'}`, () => {
       const rec = parseRecording(readFileSync(join(DIR, file), 'utf8'));
-      const types = new Set(runReplay(rec).events.map((e) => e.event.type));
+      const types = new Set(runReplay(rec, replayProfile(rec)).events.map((e) => e.event.type));
       for (const t of key ? (EXPECT[key] ?? []) : []) expect(types, `${file} should fire ${t}`).toContain(t);
     });
   }

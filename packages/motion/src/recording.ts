@@ -1,7 +1,8 @@
 // C.7 recordings: {t, poseWorld, poseImage, hands} per frame, as JSON.
 import type { InputEvent } from '@ithaca/shared';
 import { Engine } from './engine';
-import type { Profile } from './profile';
+import { HANDS } from './mapping';
+import { cloneProfile, DEFAULT_PROFILE, type Profile } from './profile';
 import type { RawFrame, RawHand, RawLandmark, Recording } from './types';
 
 /** 5 min at 60 fps. Older frames are dropped beyond this. */
@@ -99,6 +100,33 @@ export interface ReplayRunResult {
  * Runs a recording through a fresh Engine as fast as possible — deterministic, for tuning and tests.
  * `config` overrides are not applied here; mutate `config` before calling.
  */
+/**
+ * The profile to replay a recording with: the one saved in it (new recordings), otherwise the default
+ * profile with the grip range rebuilt from the recording's own hand data — the same 5th/95th-percentile
+ * rule the calibration fist/open step uses. Without this, a player whose open hand reads ~0.4 raw curl
+ * never "opens" under the uncalibrated default range, even though they were calibrated live.
+ */
+export function replayProfile(recording: Recording): Profile {
+  if (recording.meta.profile) return cloneProfile(recording.meta.profile);
+  const p = cloneProfile(DEFAULT_PROFILE);
+  const probe = new Engine(p);
+  probe.aspect = recording.meta.aspect;
+  probe.begin();
+  const raw: Record<'left' | 'right', number[]> = { left: [], right: [] };
+  for (const f of recording.frames) {
+    probe.push(f, f.t);
+    for (const h of HANDS) if (probe.body.hand[h] && probe.body.handFresh[h]) raw[h].push(probe.body.gripRaw[h]);
+  }
+  for (const h of HANDS) {
+    const s = [...raw[h]].sort((a, b) => a - b);
+    if (s.length < 10) continue;
+    const lo = s[Math.round((s.length - 1) * 0.05)] ?? 0;
+    const hi = s[Math.round((s.length - 1) * 0.95)] ?? 1;
+    if (hi - lo > 0.25) p.grip[h] = { min: lo, max: hi };
+  }
+  return p;
+}
+
 export function runReplay(recording: Recording, profile?: Profile | null): ReplayRunResult {
   const engine = new Engine(profile ?? null);
   engine.aspect = recording.meta.aspect;

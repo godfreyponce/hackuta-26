@@ -93,7 +93,7 @@ export function createMotionController(opts: MotionControllerOptions = {}): Moti
     onCalibrationStep: (cb) => engine.onCalibrationStep(cb),
     getProfile: () => engine.profile,
     startRecording(label?: string) {
-      recorder.start({ label, aspect: tracker.aspect, width: tracker.stats.width, height: tracker.stats.height });
+      recorder.start({ label, aspect: tracker.aspect, width: tracker.stats.width, height: tracker.stats.height, profile: cloneProfile(engine.profile) });
     },
     stopRecording: () => recorder.stop(),
     getRecordingInfo: () => ({ recording: recorder.recording, frames: recorder.frameCount, durationMs: recorder.durationMs }),

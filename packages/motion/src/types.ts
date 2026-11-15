@@ -34,6 +34,8 @@ export interface Recording {
     label?: string;
     /** Video width / height — needed to measure distances in image space. */
     aspect: number;
+    /** Calibration active while recording, so replays judge grip the same way the live run did. */
+    profile?: import('./profile').Profile;
     width: number;
     height: number;
   };

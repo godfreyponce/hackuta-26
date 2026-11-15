@@ -4,7 +4,7 @@ import { HandLandmarker, PoseLandmarker } from '@mediapipe/tasks-vision';
 import type { CalibrationResult, InputController, InputEvent } from '@ithaca/shared';
 import { createMotionController, type MotionDebug } from '../controller';
 import { clearSavedProfile } from '../profile';
-import { downloadRecording, parseRecording } from '../recording';
+import { downloadRecording, parseRecording, replayProfile } from '../recording';
 import { createReplayController } from '../replay';
 import type { CalibrationStep, PendingGesture, RawLandmark, Recording } from '../types';
 import type { Profile } from '../profile';
@@ -175,7 +175,7 @@ export function mountMotionLab(root: HTMLElement, opts: MotionLabOptions = {}): 
     }
     stop();
     errorEl.textContent = '';
-    const c = createReplayController(rec, { loop: true });
+    const c = createReplayController(rec, { loop: true, profile: replayProfile(rec) });
     controller = c;
     unsub = c.on(logEvent);
     await c.start();
