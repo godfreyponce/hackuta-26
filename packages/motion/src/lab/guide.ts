@@ -175,7 +175,7 @@ export const GUIDE_STEPS: StepDef[] = [
         },
         hint: (c) =>
           c.flags?.nocked
-            ? `draw ${fmt(c.state.bowDraw * 100, 0)}% · needs > ${fmt(config.bowMinDraw * 100, 0)}% before you open`
+            ? `draw ${fmt(c.state.bowDraw * 100, 0)}% · needs > ${fmt(Math.max(config.bowMinDraw, config.bowLooseMinDraw) * 100, 0)}% before you open`
             : 'Arrow dropped: your left arm bent or dropped. Straighten it, then fist back on your left wrist to nock again',
       },
     ],
