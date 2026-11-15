@@ -1,0 +1,73 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`golden: passing moves and calibration are unchanged > block 1`] = `
+[
+  "583 block_start",
+  "1117 block_end",
+]
+`;
+
+exports[`golden: passing moves and calibration are unchanged > calibration: steps and measured profile 1`] = `
+[
+  "step_back",
+  "guard",
+  "bow",
+  "grip",
+  "done",
+]
+`;
+
+exports[`golden: passing moves and calibration are unchanged > calibration: steps and measured profile 2`] = `"{"version":1,"calibrated":true,"armLengthM":0.56,"shoulderWidthM":0.34,"upperArmImgRatio":0.8235,"forearmImgRatio":0.8235,"neutral":{"x":0.8889,"y":0.6,"swImg":0.136},"grip":{"left":{"min":0.0428,"max":1},"right":{"min":0.0428,"max":1}}}"`;
+
+exports[`golden: passing moves and calibration are unchanged > call sign 1`] = `
+[
+  "300 swing right 18.100 -0.147,0.987,-0.064",
+  "317 grab right",
+  "1300 call_sign",
+]
+`;
+
+exports[`golden: passing moves and calibration are unchanged > dodge left / right and crouch (body state) 1`] = `
+[
+  "-0.8824 0.0000 0.0000",
+  "0.8823 0.0000 0.0000",
+  "0.0000 0.7353 0.0000",
+]
+`;
+
+exports[`golden: passing moves and calibration are unchanged > drink 1`] = `
+[
+  "17 grab right",
+  "400 swing right 17.851 -0.224,0.971,-0.085",
+  "1017 drink right",
+  "1400 swing right 17.851 0.224,-0.971,0.085",
+]
+`;
+
+exports[`golden: passing moves and calibration are unchanged > hand positions over a reach (mapping/filters untouched) 1`] = `
+[
+  "0.2346 -0.2824 -0.6494 -0.0000 0.0012 -0.0005",
+]
+`;
+
+exports[`golden: passing moves and calibration are unchanged > request weapon 1`] = `
+[
+  "1117 request_weapon",
+]
+`;
+
+exports[`golden: passing moves and calibration are unchanged > right + left grab/release 1`] = `
+[
+  "367 grab right",
+  "783 release right",
+  "1200 grab left",
+  "1583 release left",
+]
+`;
+
+exports[`golden: passing moves and calibration are unchanged > sword swing 1`] = `
+[
+  "17 grab right",
+  "633 swing right 2.260 -0.977,0.000,-0.213",
+]
+`;
