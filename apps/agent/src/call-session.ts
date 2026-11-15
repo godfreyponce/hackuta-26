@@ -16,6 +16,7 @@ import { clearActiveCall, noteActiveCall } from './recovery.ts';
 import { errText, log, maskPhone, warn } from './log.ts';
 import { Mixer } from './mixer.ts';
 import { Narrator, PRIORITY } from './narrator.ts';
+import { pinAction } from './pin.ts';
 import { RelaySlots } from './relay-slots.ts';
 import { CallerScanner } from './scanner.ts';
 import { cropRgba, OUT_H, OUT_W, relayable, VideoRelay } from './video.ts';
@@ -85,6 +86,8 @@ export class CallSession {
   private awaitingWeapon = false;
   private scanRequested = false;
   private autoScanUsed = false;
+  private scanFailed = false;
+  private scanAfterPin = false;
   private weaponTimer: NodeJS.Timeout | null = null;
   private ending: Promise<void> | null = null;
   private cleanedUp = false;
@@ -104,7 +107,7 @@ export class CallSession {
     this.narrator = new Narrator(
       this.mixer,
       (text, priority, durationMs) => { this.video.showCaption(text, durationMs); this.hub.send({ type: 'narration', sessionId: this.sid, text, priority }); },
-      () => this.video.endCaption(),
+      (text) => { this.video.endCaption(); this.onLineFinished(text); },
     );
   }
 
@@ -441,11 +444,7 @@ export class CallSession {
       case 'wave_cleared': this.say('waveCleared', PRIORITY.flavor); break;
       case 'health_low': this.say('healthLow', PRIORITY.danger); break;
       case 'boss_spawn': this.say('bossSpawn', PRIORITY.danger); break;
-      case 'player_pinned':
-        // "Pinned again ... another weapon" only once a weapon came and no ask is open; the first pin started the call.
-        // Weapon priority (80) never goes stale, so a pin right after a weapon waits behind the quip and weapon line; one copy at a time, since it never expires.
-        if (this.lastWeapon && !this.scanner.scanning && !this.awaitingWeapon && !this.narrator.pending(pick('pinned', this.friend.name).text)) this.say('pinned', PRIORITY.weapon);
-        break;
+      case 'player_pinned': this.onPinned(); break;
       case 'trickshot':
         if (e.data?.trickshot === 'pin') this.say('pin', PRIORITY.trickshot);
         else if (e.data?.trickshot === 'multi_kill') this.say('multiKill', PRIORITY.trickshot);
@@ -455,6 +454,27 @@ export class CallSession {
       case 'match_end': void this.end('match_end', 'ended'); break;
       default: break;
     }
+  }
+
+  private onPinned(): void {
+    const l = pick('pinned', this.friend.name);
+    const action = pinAction({
+      weaponCame: !!this.lastWeapon,
+      scanFailed: this.scanFailed,
+      askOpen: this.scanner.scanning || this.awaitingWeapon,
+      linePending: this.narrator.pending(l.text),
+    });
+    if (action === 'silent') return;
+    // The scan starts when the line ends, so the scan lines (90) do not cut it off.
+    this.scanAfterPin = action === 'sayAndScan';
+    // Weapon priority (80) never goes stale, so a pin right after a weapon waits behind the quip and weapon line.
+    this.narrator.say(l.text, PRIORITY.weapon, l.pcm);
+  }
+
+  private onLineFinished(text: string): void {
+    if (!this.scanAfterPin || this.ending || text !== pick('pinned', this.friend.name).text) return;
+    this.scanAfterPin = false;
+    if (!this.scanner.scanning && !this.awaitingWeapon) void this.runScan();
   }
 
   private friendKill(e: GameEvent): void {
@@ -467,6 +487,7 @@ export class CallSession {
     if (this.ending || !this.bridgeReadyAt) return this.scanStatus('failed', { reason: 'not_connected' });
     if (this.scanner.scanning) return this.scanStatus('looking');
     if (this.awaitingWeapon) return this.scanStatus('forging');
+    this.scanAfterPin = false;
     this.scanStatus('looking');
     this.say('scanLooking', PRIORITY.scan);
     let nudged = false;
@@ -475,6 +496,7 @@ export class CallSession {
     });
     if (this.ending) return;
     if (!hit) {
+      this.scanFailed = true;
       this.scanStatus('failed', { reason: 'no_object' });
       this.say('scanFailed', PRIORITY.scan);
       return;
@@ -486,6 +508,7 @@ export class CallSession {
     this.weaponTimer = setTimeout(() => {
       if (!this.awaitingWeapon || this.ending) return;
       this.awaitingWeapon = false;
+      this.scanFailed = true;
       warn('weapon_spawn_timeout', { waitedMs: WEAPON_WAIT_MS });
       this.scanStatus('failed', { reason: 'forge_timeout' });
     }, WEAPON_WAIT_MS);
@@ -495,6 +518,7 @@ export class CallSession {
   private onWeapon(w: WeaponSpawn): void {
     if (this.ending) return;
     this.lastWeapon = w;
+    this.scanAfterPin = false;
     const fromOurScan = this.awaitingWeapon;
     this.awaitingWeapon = false;
     if (this.weaponTimer) clearTimeout(this.weaponTimer);

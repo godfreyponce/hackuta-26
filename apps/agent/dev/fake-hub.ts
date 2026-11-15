@@ -16,6 +16,7 @@ const log = (event: string, f: Record<string, unknown> = {}) => console.log(JSON
 let agent: WebSocket | null = null;
 const webs = new Map<string, Set<WebSocket>>();
 const forgeCalls = new Map<string, number>();
+const forgeMiss = new Set<string>(); // sessions whose forge calls all return no_object (POST /_forge-miss)
 
 // ── fake Chert (for `pnpm dev:fake-chert`): the agent runs AGENT_MODE=live against /fake-chert. No real calls. ──
 type FakeCall = { id: string; key: string; body: Record<string, unknown>; status: string; events: Array<Record<string, unknown>>; endPosts: number; pollsAfterEnd: number; agentTracksAtCreate: string[]; oddShape: boolean; endStatus: number };
@@ -109,6 +110,11 @@ const server = createServer(async (req, res) => {
       res.writeHead(200, { 'content-type': 'text/html' });
       return res.end(await readFile(new URL('./game-stub.html', import.meta.url)));
     }
+    if (req.method === 'POST' && url.pathname === '/_forge-miss') {
+      const { sessionId, miss } = JSON.parse((await body(req)).toString()) as { sessionId: string; miss: boolean };
+      if (miss) forgeMiss.add(sessionId); else forgeMiss.delete(sessionId);
+      return json(200, {});
+    }
     if (url.pathname.startsWith('/fake-chert/')) return await fakeChert(req.method ?? 'GET', url.pathname.slice('/fake-chert'.length), req, json);
     if (req.method === 'GET' && url.pathname === '/api/health') return json(200, { ok: true, mongo: false, agentConnected: !!agent });
     if (req.method === 'POST' && url.pathname === '/api/sessions') {
@@ -129,7 +135,7 @@ const server = createServer(async (req, res) => {
       const n = (forgeCalls.get(sid) ?? 0) + 1;
       forgeCalls.set(sid, n);
       log('forge', { sid, n, bytes: raw.length });
-      if (n % 3 !== 2) return json(200, { detected: false, reason: 'no_object' }); // detect on the 2nd try, to exercise the loop
+      if (forgeMiss.has(sid) || n % 3 !== 2) return json(200, { detected: false, reason: 'no_object' }); // detect on the 2nd try, to exercise the loop
       const forgeId = randomBytes(4).toString('hex');
       setTimeout(() => {
         const weapon = {

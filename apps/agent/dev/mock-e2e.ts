@@ -197,7 +197,7 @@ async function mockMainLoop(): Promise<void> {
   // The real-call window: the pin comes while the quip and the weapon line still wait in the queue.
   g.send('game.event', { event: { kind: 'player_pinned', t: 30_000 } });
   g.send('game.event', { event: { kind: 'player_pinned', t: 30_500 } }); // the game may repeat it
-  check('a pin sent right after the weapon came says pinned again (owner)', await waitFor(() => said().some((t) => /^Adam's pinned again! Warrior Godfrey, find him another weapon!$/.test(t)), 25_000), said());
+  check('a pin sent right after the weapon came says pinned again (owner)', await waitFor(() => said().some((t) => /^Adam's pinned again! Warrior Godfrey, find him another weapon!$/.test(t)), 45_000), said()); // guess: two quips and two streamed weapon lines can wait ahead of it
   await sleep(10_000); // a second copy would play within the line plus the 2.5 s gap
   check('pinned again plays once: the starting pin stays silent and a repeat is not queued twice (owner)', said().filter((t) => /pinned again/.test(t)).length === 1, said());
   g.send('call.end');
@@ -220,6 +220,32 @@ async function mockEndDuringSetup(): Promise<void> {
   const health = await (await fetch(`${AGENT}/health`)).json() as { call: unknown };
   check('agent idle again', health.call === null, health.call);
   await g.close();
+}
+
+async function mockPinAfterFailedScan(): Promise<void> {
+  out('scenario', { name: 'a pin after a failed first scan says pinned again and scans again (owner)' });
+  const g = await openGame();
+  await post('/_forge-miss', { sessionId: g.sid, miss: true });
+  g.send('call.request', { friendId: 'friend-1' });
+  await waitFor(() => g.has('call.status', 'ringing'), 15_000);
+  const phone = await mockPhone(g.sid);
+  await waitFor(() => g.has('call.status', 'connected'), 5_000);
+  check('the auto-scan fails with no_object', await waitFor(() => g.msgs.some((m) => m.type === 'scan.status' && m.state === 'failed' && m.reason === 'no_object'), 30_000));
+  await post('/_forge-miss', { sessionId: g.sid, miss: false });
+  const from = g.msgs.length;
+  const later = () => g.msgs.slice(from);
+  const isPinned = (m: { type: string; text?: unknown }) => m.type === 'narration' && /^Adam's pinned again! Warrior Godfrey, find him another weapon!$/.test(String(m.text));
+  g.send('game.event', { event: { kind: 'player_pinned', t: 20_000 } });
+  check('the pin says pinned again', await waitFor(() => later().some(isPinned), 15_000), later().map((m) => `${m.type} ${m.state ?? m.text ?? ''}`));
+  check('then a new scan brings a weapon', await waitFor(() => later().some((m) => m.type === 'scan.status' && m.state === 'done'), 30_000), later().map((m) => `${m.type} ${m.state ?? m.text ?? ''}`));
+  const pinAt = later().findIndex(isPinned);
+  const lookAt = later().findIndex((m) => m.type === 'scan.status' && m.state === 'looking');
+  check('the new scan starts after the pinned line', pinAt >= 0 && lookAt > pinAt, { pinAt, lookAt });
+  const looks = later().filter((m) => m.type === 'scan.status' && m.state === 'looking').length;
+  check('the pin starts exactly one new scan', looks === 1, looks);
+  g.send('call.end');
+  check('call ends', await waitFor(() => g.has('call.status', 'ended'), 10_000));
+  await Promise.all([phone.close(), g.close()]);
 }
 
 async function mockWebGone(): Promise<void> {
@@ -401,6 +427,7 @@ check('/health shows linesReady (integration #8)', health.linesReady === true, h
 if (health.mode === 'mock-call') {
   await mockMainLoop();
   await mockEndDuringSetup();
+  await mockPinAfterFailedScan();
   await mockWebGone();
 } else {
   await liveQueuedCall();
