@@ -189,18 +189,37 @@ async function mockWebGone(): Promise<void> {
 // ── live-path scenarios against the fake Chert ──
 
 type FakeCall = { id: string; body: Record<string, unknown>; status: string; endPosts: number; pollsAfterEnd: number; agentTracksAtCreate: string[] };
-const fakeLast = async () => (await (await fetch(`${HUB}/fake-chert/_last`)).json()) as { call: FakeCall | null; createCount: number };
+type FakeQueue = { id: string; state: string; gets: number; deletes: number };
+const fakeLast = async () => (await (await fetch(`${HUB}/fake-chert/_last`)).json()) as { call: FakeCall | null; createCount: number; queue: FakeQueue | null };
+/** Waits until the fake Chert holds a new queue entry for this create. */
+async function newQueue(before: string | undefined): Promise<FakeQueue | null> {
+  const until = Date.now() + 15_000;
+  for (;;) {
+    const q = (await fakeLast()).queue;
+    if (q && q.id !== before) return q;
+    if (Date.now() > until) return null;
+    await sleep(100);
+  }
+}
 const fakeEmit = (id: string, e: Record<string, unknown>) => post('/fake-chert/_emit', { id, ...e });
 
 async function liveQueuedCall(): Promise<void> {
-  out('scenario', { name: 'live: queued on the shared line, answered, then Chert fails it' });
-  const before = (await fakeLast()).createCount;
-  await post('/fake-chert/_next', { queued: true });
+  out('scenario', { name: 'live: queued on the shared line (real 202 shape), turn comes, answered, then Chert fails it (live 3)' });
+  const { createCount: before, queue: oldQueue } = await fakeLast();
+  await post('/fake-chert/_next', { lineBusy: true });
   const g = await openGame();
   g.send('call.request', { friendId: 'friend-1' });
-  const sent = Date.now() + 15_000;
+  const q = await newQueue(oldQueue?.id);
+  check('create queued by Chert', !!q);
+  check('line busy and the position shown to the web (live 3)', await waitFor(() => g.msgs.some((m) => m.type === 'call.status' && m.state === 'dialing' && m.reason === 'line_busy_1'), 5_000));
+  await sleep(3_500);
+  const waited = (await fakeLast()).queue!;
+  check('still dialing while queued, no call placed (live 3)', !g.has('call.status', 'failed') && !g.has('call.status', 'ended') && (await fakeLast()).createCount === before);
+  check('queue entry polled about every 1.5 s (live 3)', waited.gets >= 2 && waited.gets <= 4, waited.gets);
+  await post('/fake-chert/_queue', { state: 'ready' });
+  const sent = Date.now() + 5_000;
   while (Date.now() < sent && (await fakeLast()).createCount === before) await sleep(100);
-  check('create sent', (await fakeLast()).createCount > before);
+  check('repeat POST with the same key places the call when the turn comes (live 3)', (await fakeLast()).createCount === before + 1);
   const c = (await fakeLast()).call!;
   check('when_busy is queue', c.body.when_busy === 'queue', c.body.when_busy);
   check('remote identity is the agent', c.body.remote_participant_identity === 'quartermaster', c.body.remote_participant_identity);
@@ -221,6 +240,38 @@ async function liveQueuedCall(): Promise<void> {
   await sleep(1_000);
   check('no polling after the end', (await fakeLast()).call!.pollsAfterEnd === 0, (await fakeLast()).call!.pollsAfterEnd);
   await Promise.all([phone.close(), g.close()]);
+}
+
+async function liveQueueCancelled(): Promise<void> {
+  out('scenario', { name: 'live: the web ends the call while it waits in the queue (live 3)' });
+  const { createCount: before, queue: oldQueue } = await fakeLast();
+  await post('/fake-chert/_next', { lineBusy: true });
+  const g = await openGame();
+  g.send('call.request', { friendId: 'friend-1' });
+  check('create queued by Chert', !!(await newQueue(oldQueue?.id)));
+  await sleep(2_000);
+  g.send('call.end');
+  check('ends', await waitFor(() => g.has('call.status', 'ended'), 10_000));
+  await sleep(500);
+  const { queue, createCount } = await fakeLast();
+  check('queue entry cancelled with DELETE (live 3)', queue!.deletes === 1, queue!.deletes);
+  check('no call placed', createCount === before, createCount - before);
+  check('no FaceTime room left behind', !(await roomExists(`ft-${g.sid}-1`)));
+  await g.close();
+}
+
+async function liveQueueExpired(): Promise<void> {
+  out('scenario', { name: 'live: Chert drops our queue entry (expired) (live 3)' });
+  const { createCount: before, queue: oldQueue } = await fakeLast();
+  await post('/fake-chert/_next', { lineBusy: true });
+  const g = await openGame();
+  g.send('call.request', { friendId: 'friend-1' });
+  check('create queued by Chert', !!(await newQueue(oldQueue?.id)));
+  await post('/fake-chert/_queue', { state: 'expired' });
+  check('fails with line_busy (live 3)', await waitFor(() => g.msgs.some((m) => m.type === 'call.status' && m.state === 'failed' && m.reason === 'line_busy'), 10_000));
+  check('no call placed', (await fakeLast()).createCount === before);
+  check('no FaceTime room left behind', !(await roomExists(`ft-${g.sid}-1`)));
+  await g.close();
 }
 
 async function liveEndDuringCreate(): Promise<void> {
@@ -291,6 +342,8 @@ if (health.mode === 'mock-call') {
   await mockWebGone();
 } else {
   await liveQueuedCall();
+  await liveQueueCancelled();
+  await liveQueueExpired();
   await liveEndDuringCreate();
   await liveStatusEnd();
   await liveFailedEnd();

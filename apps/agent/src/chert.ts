@@ -50,7 +50,25 @@ const RETRY_DELAYS_MS = [500, 1_000, 2_000];
 /** Longest a create can run once the session ends: a backoff wait, the try in flight, and the one extra try. */
 export const CREATE_AFTER_CANCEL_MAX_MS = Math.max(...RETRY_DELAYS_MS) + 2 * CHERT_TIMEOUT_MS;
 
-export async function createCall(c: CreateCall, idempotencyKey: string, cancelled: () => boolean = () => false): Promise<{ id: string; queued: boolean; status: string | undefined }> {
+/** A busy shared line: Chert holds our place. Repeat the create with the same key once `state` is no longer waiting. */
+export type QueueEntry = { id: string; state: string; position: number | null };
+export type Created = { id: string; queued: boolean; status: string | undefined } | { queue: QueueEntry };
+
+type RawQueue = { id?: unknown; state?: unknown; position?: unknown; call_id?: unknown };
+
+/** The 202 nests the entry under data.queue; the GET reply shape is unseen, so the entry directly under data counts too. */
+function rawQueue(body: unknown): RawQueue | undefined {
+  const d = (body as { data?: RawQueue & { queue?: RawQueue } })?.data;
+  return d?.queue ?? (typeof d?.state === 'string' ? d : undefined);
+}
+
+function queueEntry(body: unknown): QueueEntry | null {
+  const q = rawQueue(body);
+  if (typeof q?.id !== 'string') return null;
+  return { id: q.id, state: String(q.state ?? 'unknown'), position: typeof q.position === 'number' ? q.position : null };
+}
+
+export async function createCall(c: CreateCall, idempotencyKey: string, cancelled: () => boolean = () => false): Promise<Created> {
   const body = JSON.stringify({
     direction: 'outbound', mode: 'customer_managed', line_id: env.CHERT_LINE_ID,
     destination: c.destination, destination_type: 'phone',
@@ -68,6 +86,10 @@ export async function createCall(c: CreateCall, idempotencyKey: string, cancelle
       // Only the 201 envelope (id under data) was seen in the dry run; a 202 may put the id at the top.
       const call = r.data?.id ? r.data : r;
       if ((status === 201 || status === 202 || status === 200) && call.id) return { id: call.id, queued: status === 202, status: call.status };
+      const placed = status === 202 ? rawQueue(res)?.call_id : undefined;
+      if (typeof placed === 'string') return { id: placed, queued: false, status: undefined };
+      const queue = status === 202 ? queueEntry(res) : null;
+      if (queue) return { queue };
       const code = (typeof r.error === 'object' ? r.error?.code : r.error) ?? r.code ?? 'unknown';
       if (status >= 400 && status < 500) throw new ChertError(status, code);
       throw new Error(`chert ${status} ${code}`);
@@ -163,6 +185,18 @@ export async function getCallStatus(callId: string): Promise<string | undefined>
   if (!rawStatusLogged.has(callId)) { rawStatusLogged.add(callId); logRaw('chert_call_raw', body); }
   const d = (body as { data?: { status?: string; state?: string } }).data;
   return d?.status ?? d?.state;
+}
+
+export async function getQueueEntry(queueId: string): Promise<QueueEntry> {
+  const { status, body } = await req(`/calls/queue/${queueId}`, { headers: headers() });
+  const q = queueEntry(body);
+  if (!q) throw new Error(`chert queue ${status} no entry`);
+  return q;
+}
+
+/** DELETE /calls/queue/<id>: gives up our place on the shared line. */
+export async function cancelQueueEntry(queueId: string): Promise<number> {
+  return (await req(`/calls/queue/${queueId}`, { method: 'DELETE', headers: headers() })).status;
 }
 
 const END_RETRY_DELAY_MS = 500; // guess

@@ -1,7 +1,7 @@
 // Chert REST client: when_busy queue (1d078dd), 202 = queued, failure reasons from events (review #5).
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
-import { chertEventKind, createCall, endCall, endConfirmed, getEvents, isQueuedStatus, queuedNameAfter202, startsRingClock, terminalStatus } from '../src/chert.ts';
+import { cancelQueueEntry, chertEventKind, createCall, endCall, endConfirmed, getEvents, getQueueEntry, isQueuedStatus, queuedNameAfter202, startsRingClock, terminalStatus } from '../src/chert.ts';
 
 const realFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = realFetch; });
@@ -227,4 +227,42 @@ test('terminal statuses match whole words only (reviewer #6)', () => {
   for (const s of ['suspended', 'cancel_requested', 'end_requested', 'pending']) assert.equal(terminalStatus(s), null, s);
   assert.equal(terminalStatus('call.ended'), 'ended');
   assert.equal(terminalStatus('CALL_FAILED'), 'failed');
+});
+
+// Live 3: Chert's real 202 for a busy shared line has no call id, only a queue entry.
+const QUEUED_202 = {
+  data: {
+    queued: true,
+    queue: { id: 'q1', kind: 'call', state: 'waiting', position: 1, expires_at: '2026-11-15T03:48:48.114078+00:00', call_id: null },
+    next_step: 'Repeat this request with the same Idempotency-Key to place the call once queue.state is ready.',
+  },
+};
+
+test('a 202 with a queue entry and no call id returns the queue entry (live 3)', async () => {
+  const calls = stubFetch(() => Response.json(QUEUED_202, { status: 202 }));
+  assert.deepEqual(await createCall(call, 'key-q'), { queue: { id: 'q1', state: 'waiting', position: 1 } });
+  assert.equal(calls.length, 1);
+});
+
+test('the queue entry is read from GET /calls/queue/<id> (live 3)', async () => {
+  const calls = stubFetch(() => Response.json({ data: { ...QUEUED_202.data, queue: { ...QUEUED_202.data.queue, state: 'ready', position: null } } }));
+  assert.deepEqual(await getQueueEntry('q1'), { id: 'q1', state: 'ready', position: null });
+  assert.match(calls[0]!.url, /\/calls\/queue\/q1$/);
+});
+
+test('a 202 whose queue entry already has a call id gives that call id (reviewer #1)', async () => {
+  stubFetch(() => Response.json({ data: { ...QUEUED_202.data, queue: { ...QUEUED_202.data.queue, state: 'placed', call_id: 'c7' } } }, { status: 202 }));
+  assert.deepEqual(await createCall(call, 'key-p'), { id: 'c7', queued: false, status: undefined });
+});
+
+test('a GET reply with the entry directly under data still parses (reviewer #2)', async () => {
+  stubFetch(() => Response.json({ data: { id: 'q2', state: 'waiting', position: 2 } }));
+  assert.deepEqual(await getQueueEntry('q2'), { id: 'q2', state: 'waiting', position: 2 });
+});
+
+test('the queue entry is cancelled with DELETE /calls/queue/<id> (live 3)', async () => {
+  const calls = stubFetch(() => Response.json({ data: { queued: false } }));
+  assert.equal(await cancelQueueEntry('q1'), 200);
+  assert.equal(calls[0]!.init.method, 'DELETE');
+  assert.match(calls[0]!.url, /\/calls\/queue\/q1$/);
 });

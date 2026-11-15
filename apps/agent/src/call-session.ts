@@ -5,8 +5,8 @@ import {
 } from '@livekit/rtc-node';
 import { AccessToken, RoomServiceClient } from 'livekit-server-sdk';
 import {
-  ChertError, chertEventKind, CREATE_AFTER_CANCEL_MAX_MS, createCall, endCall, endConfirmed, END_CALL_MAX_MS, getCallStatus, getEvents,
-  isQueuedStatus, queuedNameAfter202, startsRingClock, terminalStatus, type ChertEvent,
+  cancelQueueEntry, ChertError, chertEventKind, CREATE_AFTER_CANCEL_MAX_MS, createCall, endCall, endConfirmed, END_CALL_MAX_MS, getCallStatus,
+  getEvents, getQueueEntry, isQueuedStatus, queuedNameAfter202, startsRingClock, terminalStatus, type ChertEvent, type Created, type QueueEntry,
 } from './chert.ts';
 import type { CallState, GameEvent, ServerToAgent, WeaponSpawn } from './contracts/protocol.ts';
 import { env } from './env.ts';
@@ -30,6 +30,9 @@ const SETUP_WAIT_MS = 10_000; // guess: the LiveKit connects before POST /calls 
 const CLEANUP_MARGIN_MS = 3_000; // guess: disconnects plus deleteRoom
 const WEB_GONE_GRACE_MS = 10_000; // guess: long enough for a page reload to rejoin
 const WEAPON_WAIT_MS = 20_000; // spec D.3: Part D guarantees a prefab fallback by 15 s
+const QUEUE_POLL_MS = 1_500; // chert/agent/outbound.mjs polls at this rate
+const QUEUE_WAIT_MAX_MS = 120_000; // Chert's 202: "Chert keeps its place for up to 2 minutes"
+const QUEUE_GONE = new Set(['cancelled', 'canceled', 'expired']);
 const TRACKS_VISIBLE_WAIT_MS = 3_000; // guess: the server showed the second track about 200 ms late in the fake-Chert e2e
 /** Longest that end() can take; main's hard stop on signals must be longer. */
 export const END_MAX_MS = Math.max(SETUP_WAIT_MS, CREATE_AFTER_CANCEL_MAX_MS, FAREWELL_WAIT_MS) + END_CALL_MAX_MS + CLEANUP_MARGIN_MS;
@@ -65,6 +68,8 @@ export class CallSession {
   private narrator: Narrator;
   private scanner: CallerScanner;
   private callId: string | null = null;
+  private queueId: string | null = null; // our place on the busy shared line; DELETEd at the end unless it became a call
+  private queueCancel: Promise<number> | null = null;
   private chertEnd: Promise<number> | null = null;
   private setup: Promise<void> | null = null;
   private bridgeReadyAt = 0;
@@ -267,10 +272,14 @@ export class CallSession {
     const bridgeToken = await mint(this.bridgeIdentity, this.ftRoom, '30m');
     if (this.ending) return;
     this.dialedAt = Date.now();
-    const { id, queued, status } = await createCall({
+    const create = () => createCall({
       destination: this.friend.phoneE164, livekitUrl: env.LIVEKIT_URL,
       participantToken: bridgeToken, remoteIdentity: this.ft.localParticipant!.identity,
     }, `${this.keyBase}-create`, () => !!this.ending);
+    const first = await create();
+    const created = 'queue' in first ? await this.waitForTurn(first.queue, create) : first;
+    if (!created) { await this.cancelQueue(); return; } // doEnd may have passed its own cancel before the 202 came
+    const { id, queued, status } = created;
     this.callId = id;
     if (queued) this.statusAt202 = status;
     this.queuedNameUnknown = queued && !status;
@@ -282,6 +291,40 @@ export class CallSession {
       return;
     }
     void this.pollEvents();
+  }
+
+  /**
+   * Busy shared line (live 3). The room and our video stay up while we wait. Chert places the call only when we repeat
+   * the create with the same key after our turn comes. Returns null if the session ends first; end() cancels the entry.
+   */
+  private async waitForTurn(entry: QueueEntry, create: () => Promise<Created>): Promise<Exclude<Created, { queue: QueueEntry }> | null> {
+    this.queueId = entry.id;
+    const giveUpAt = Date.now() + QUEUE_WAIT_MAX_MS;
+    let q = entry;
+    let shown: number | null | undefined;
+    for (;;) {
+      if (this.ending) return null;
+      if (QUEUE_GONE.has(q.state)) { warn('chert_queue_gone', { queueId: q.id, state: q.state }); throw new ChertError(0, 'line_busy'); }
+      if (q.state === 'waiting') {
+        if (q.position !== shown) { shown = q.position; log('chert_queued', { queueId: q.id, position: q.position }); this.status('dialing', `line_busy_${q.position ?? 'unknown'}`); }
+      } else {
+        log('chert_queue_turn', { queueId: q.id, state: q.state, waitedMs: Date.now() - this.dialedAt });
+        const next = await create();
+        if (!('queue' in next)) { this.status('dialing'); return next; }
+        q = next.queue;
+      }
+      if (Date.now() > giveUpAt) { warn('chert_queue_wait_over', { queueId: q.id, waitedMs: Date.now() - this.dialedAt }); throw new ChertError(0, 'line_busy'); }
+      await sleep(QUEUE_POLL_MS);
+      if (this.ending) return null;
+      q = await getQueueEntry(q.id).catch((e) => { warn('chert_queue_poll_failed', { error: errText(e) }); return q; });
+    }
+  }
+
+  /** DELETE the queue entry once, whoever asks first. */
+  private cancelQueue(): Promise<number> {
+    if (!this.queueId) return Promise.resolve(0);
+    this.queueCancel ??= cancelQueueEntry(this.queueId).catch((e) => { warn('chert_queue_cancel_failed', { error: errText(e) }); return 0; });
+    return this.queueCancel;
   }
 
   /** Chert checks the room on the server, which can list a just-published track a moment after we have it. */
@@ -472,6 +515,7 @@ export class CallSession {
         await Promise.race([this.narrator.sayNow(f.text, PRIORITY.greeting, f.pcm), sleep(FAREWELL_WAIT_MS)]);
       }
       if (this.callId) log('chert_end', { status: (endStatus = await this.endChert()) });
+      else if (this.queueId) log('chert_queue_cancel', { queueId: this.queueId, status: await this.cancelQueue() });
     } finally {
       this.narrator.stop();
       await Promise.allSettled([...this.relays.closeAll(), this.mixer.close(), this.video.close()]);
