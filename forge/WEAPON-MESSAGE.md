@@ -1,4 +1,4 @@
-> **Dry-run prototype protocol.** The game does not use it. The real protocol is spec 4.1 (`packages/shared/src/protocol.ts`), which `apps/server` speaks.
+> **Old prototype protocol.** No game code uses it. The protocol in use is spec 4.1 (`packages/shared/src/protocol.ts`), which `apps/server` speaks. The Chert agent described here serves port 8787, the same port as `apps/server`, so never run the two together. The agent in use is `apps/agent`.
 
 # Weapon messages: game and call side
 
