@@ -1,52 +1,74 @@
-// Captions burned into agent-video: the friend in FaceTime reads what the Quartermaster says. Each page is at most
-// 2 lines, sits whole inside the game (above the bottom letterbox bar of the 3:2 frame), and leaves no pixels behind
-// once it clears.
+// Captions burned into agent-video (owner pick: style 5, big short chunks): one short phrase at a time, large heavy
+// black sans on a small off-white pill, one key word in blue, near the bottom of the game. Each chunk sits whole
+// inside the game (above the bottom letterbox bar of the 3:2 frame) and leaves no pixels behind once it clears.
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { dispose, type VideoFrame } from '@livekit/rtc-node';
 import { LINES } from '../src/lines.ts';
-import { AGENT_H, AGENT_W, CAPTION_LINGER_MS, captionPages, drawCaption, GAME_BOTTOM, renderCaption, VideoRelay } from '../src/video.ts';
+import { AGENT_H, AGENT_W, CAPTION_LINGER_MS, CHUNK_MAX_CHARS, captionChunks, drawCaption, GAME_BOTTOM, keyWord, renderCaption, VideoRelay } from '../src/video.ts';
 
-/** Grey frame, caption page drawn, bounding box of the bright (text) pixels. */
-async function textBox(lines: string[]) {
+/** Grey frame, caption chunk drawn: bounding box of every changed pixel (the pill), and the count of blue pixels. */
+async function pillBox(chunk: string) {
   const frame = new Uint8Array(AGENT_W * AGENT_H * 4).fill(128);
-  const caption = await renderCaption(lines);
+  const caption = await renderCaption(chunk);
   drawCaption(frame, caption);
-  let minX = AGENT_W, maxX = -1, minY = AGENT_H, maxY = -1;
+  let minX = AGENT_W, maxX = -1, minY = AGENT_H, maxY = -1, blue = 0;
   for (let y = 0; y < AGENT_H; y++) for (let x = 0; x < AGENT_W; x++) {
     const i = (y * AGENT_W + x) * 4;
-    if (frame[i]! > 200 && frame[i + 1]! > 180) { minX = Math.min(minX, x); maxX = Math.max(maxX, x); minY = Math.min(minY, y); maxY = Math.max(maxY, y); }
+    if (frame[i] !== 128 || frame[i + 1] !== 128 || frame[i + 2] !== 128) { minX = Math.min(minX, x); maxX = Math.max(maxX, x); minY = Math.min(minY, y); maxY = Math.max(maxY, y); }
+    if (frame[i + 2]! > 200 && frame[i]! < 120) blue++;
   }
-  return { frame, caption, minX, maxX, minY, maxY };
+  return { frame, caption, minX, maxX, minY, maxY, blue };
 }
 
-const SIDE = 16; // text must not touch the frame edges
+const SIDE = 16; // the pill must not touch the frame edges
 const quip = 'Behold, the Enchanted Golden Frying Pan of the Western Isles, forged in fire and fury, heavier than it looks and twice as mean as a suitor on a bad day!';
 const longWord = 'Behold the Antidisestablishmentarianismophobicbroomstickofdoom, Telemachus!';
 const TEXTS = [...Object.values(LINES).flat(), quip, longWord, 'Your Enchanted Golden Frying Pan of Ithaca just flattened a suitor. Ha!'];
 
-test('every fixed line and a long forge quip: pages of at most 2 lines, whole inside the game, nothing in the bottom bar', async () => {
+test('every fixed line and a long forge quip: one short line per chunk, pill whole inside the game, nothing in the bottom bar', async () => {
   for (const text of TEXTS) {
-    for (const page of captionPages(text)) {
-      assert.ok(page.length >= 1 && page.length <= 2, `${text}: page of ${page.length} lines`);
-      const b = await textBox(page);
-      assert.ok(b.maxX >= 0 && b.minX >= SIDE && b.maxX < AGENT_W - SIDE, `${page.join(' / ')}: text x ${b.minX}..${b.maxX}`);
-      assert.ok(b.minY >= AGENT_H / 2, `${page.join(' / ')}: text starts at y ${b.minY}`);
-      for (let i = GAME_BOTTOM * AGENT_W * 4; i < b.frame.length; i++) if (b.frame[i] !== 128) assert.fail(`${page.join(' / ')}: pixel byte ${i} changed in the bottom bar`);
+    for (const chunk of captionChunks(text)) {
+      assert.ok(chunk.length >= 1 && chunk.length <= CHUNK_MAX_CHARS, `${text}: chunk "${chunk}" is ${chunk.length} chars`);
+      const b = await pillBox(chunk);
+      assert.ok(b.maxX >= 0 && b.minX >= SIDE && b.maxX < AGENT_W - SIDE, `${chunk}: pill x ${b.minX}..${b.maxX}`);
+      assert.ok(b.minY >= AGENT_H / 2, `${chunk}: pill starts at y ${b.minY}`);
+      assert.ok(b.maxY < GAME_BOTTOM, `${chunk}: pill ends at y ${b.maxY}`);
     }
   }
 });
 
-test('the pages together are the web subtitle text: nothing cut, no ellipsis added', () => {
+test('a chunk ends at a phrase break: a chunk never runs on past a sentence end', () => {
+  for (const text of TEXTS) for (const chunk of captionChunks(text)) {
+    assert.ok(!/[.!?;:,]\s/.test(chunk), `"${chunk}" runs past a phrase break`);
+  }
+  assert.deepEqual(captionChunks('Two with one throw!'), ['Two with one throw!']);
+  assert.ok(captionChunks(LINES.greeting[0]).includes('Telemachus!'));
+});
+
+test('the chunks together are the web subtitle text: nothing cut, no ellipsis added', () => {
   const letters = (t: string) => t.replace(/\s+/g, '');
-  for (const text of TEXTS) assert.equal(letters(captionPages(text).flat().join('')), letters(text));
+  for (const text of TEXTS) assert.equal(letters(captionChunks(text).join('')), letters(text));
   assert.equal(quip.length, 152);
 });
 
+test('key word: the last word not in NOT_KEY (stand-in for the last noun), drawn in blue', async () => {
+  assert.equal(keyWord("Your father's home."), 'home.');
+  assert.equal(keyWord('Telemachus!'), 'Telemachus!');
+  assert.equal(keyWord('Two with one throw!'), 'throw!');
+  assert.equal(keyWord('Hold it up to the camera'), 'camera');
+  assert.equal(keyWord('A double! Ha!'), 'double!');
+  assert.equal(keyWord('Wave cleared.'), 'Wave');
+  assert.equal(keyWord('the camera, nice and steady.'), 'camera,');
+  assert.equal(keyWord("I'll tell you when"), undefined, 'a chunk of only small words has no key word');
+  assert.ok((await pillBox("Your father's home.")).blue > 100, 'no blue key word pixels');
+  assert.equal((await pillBox('Ha!')).blue, 0, 'blue drawn with no key word');
+});
+
 test('the caption leaves every row above its band unchanged', async () => {
-  const [page] = captionPages('Show me what you\'ve got! Hold it up to the camera, nice and steady.');
-  const b = await textBox(page!);
+  const [chunk] = captionChunks('Show me what you\'ve got! Hold it up to the camera, nice and steady.');
+  const b = await pillBox(chunk!);
   assert.ok(b.caption.top > AGENT_H / 2, `band starts at ${b.caption.top}`);
   for (let i = 0; i < b.caption.top * AGENT_W * 4; i++) if (b.frame[i] !== 128) assert.fail(`pixel byte ${i} changed above the band`);
 });
@@ -79,11 +101,13 @@ test('agent-video: caption pixels while a line plays, still there just after its
   }
 });
 
-test('agent-video: a long line pages through its audio by character share, and the last page clears after the linger', async () => {
-  const pages = captionPages(quip);
-  assert.ok(pages.length >= 3, `${pages.length} pages`);
-  const ms = 2_400, perChar = ms / pages.reduce((n, p) => n + p.join(' ').length, 0);
-  const starts = pages.map((_, i) => pages.slice(0, i).reduce((n, p) => n + p.join(' ').length * perChar, 0));
+test('agent-video: a long line steps through its chunks by character share of its audio, and the last clears after the linger', async () => {
+  const chunks = captionChunks(quip);
+  assert.ok(chunks.length >= 3, `${chunks.length} chunks`);
+  // 4.8 s is twice the measured speech rate (16 chars/s). A chunk can show up to about 90 ms late (render stalls,
+  // measured) and the card frame comes every 67 ms, so each chunk is checked 3/4 of the way through its share.
+  const ms = 4_800, perChar = ms / chunks.reduce((n, p) => n + p.length, 0);
+  const starts = chunks.map((_, i) => chunks.slice(0, i).reduce((n, p) => n + p.length * perChar, 0));
   const relay = new VideoRelay();
   let last: VideoFrame | null = null;
   relay.source.captureFrame = (f: VideoFrame) => { last = f; };
@@ -95,21 +119,21 @@ test('agent-video: a long line pages through its audio by character share, and t
     const t0 = Date.now();
     relay.showCaption(quip, ms);
     const seen: Buffer[] = [];
-    for (let i = 0; i < pages.length; i++) {
-      const end = i + 1 < pages.length ? starts[i + 1]! : ms;
-      await sleep(t0 + (starts[i]! + end) / 2 - Date.now());
+    for (let i = 0; i < chunks.length; i++) {
+      const end = i + 1 < chunks.length ? starts[i + 1]! : ms;
+      await sleep(t0 + starts[i]! + 0.75 * (end - starts[i]!) - Date.now());
       seen.push(frame());
     }
     for (const [i, f] of seen.entries()) {
-      assert.ok(!f.equals(plain), `page ${i + 1}: no caption`);
-      if (i) assert.ok(!f.equals(seen[i - 1]!), `page ${i + 1} still shows page ${i}`);
+      assert.ok(!f.equals(plain), `chunk ${i + 1}: no caption`);
+      if (i) assert.ok(!f.equals(seen[i - 1]!), `chunk ${i + 1} still shows chunk ${i}`);
     }
     await sleep(t0 + ms - Date.now());
     relay.endCaption();
     await sleep(CAPTION_LINGER_MS - 300);
-    assert.ok(frame().equals(seen.at(-1)!), 'the last page left before the linger ended');
+    assert.ok(frame().equals(seen.at(-1)!), 'the last chunk left before the linger ended');
     await sleep(600);
-    assert.ok(frame().equals(plain), 'caption pixels left after the last page cleared');
+    assert.ok(frame().equals(plain), 'caption pixels left after the last chunk cleared');
   } finally {
     await relay.close();
   }

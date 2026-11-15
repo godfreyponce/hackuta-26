@@ -31,14 +31,18 @@ async function titleCard(title: string, subtitle: string): Promise<VideoFrame> {
 export type Caption = { data: Uint8Array; top: number; height: number };
 
 /**
- * 28 px: a portrait iPhone (390 pt wide) shows the 640 px frame at about 0.61x, so 28 px is about 17 pt, the iOS body
- * text size. Guess: that FaceTime shows our frame full width in portrait; the next live call confirms it.
+ * Owner pick, caption style 5 (big short chunks): one short phrase at a time in 40 px heavy black sans on an off-white
+ * pill, one key word in blue, the pill's bottom 14 px above the game's bottom. Sizes and colors are the owner's mockup.
+ * A portrait iPhone shows the 640 px frame at about 0.61x, so 40 px is about 24 pt.
  */
-const CAPTION_SIZE = 28;
-const CAPTION_MAX_LINES = 2;
-const CAPTION_INSET = 32; // text inset from each side
-/** Georgia bold measured in sharp at 0.47 to 0.555 em per character over LINES; 0.6 leaves room for wider words. */
+const CAPTION_SIZE = 40;
+const CAPTION_FONT = 'Helvetica Neue, Helvetica, Arial, sans-serif';
+const INK = '#111', KEY_BLUE = '#2f6bff';
+const PILL_H = 64, PILL_PAD_X = 28, PILL_GAP = 14;
+const PILL_MAX_W = AGENT_W - 2 * 24;
+/** Guess: the mockup's heavy sans runs about 0.48 em per character; 0.6 leaves room for wide words. */
 const EM_PER_CHAR = 0.6;
+export const CHUNK_MAX_CHARS = Math.floor((PILL_MAX_W - 2 * PILL_PAD_X) / (CAPTION_SIZE * EM_PER_CHAR));
 /** First row of the bottom letterbox bar: friend-view is OUT_W x OUT_H (640x360 by contract, callMedia.ts), centered. */
 export const GAME_BOTTOM = (AGENT_H + OUT_H) / 2;
 /** For a streamed line, whose length is unknown. Measured: the 22 cached ElevenLabs lines run 11 to 19 characters per second, 16.1 over all. */
@@ -62,23 +66,74 @@ function wrap(text: string, maxChars: number): string[] {
   return lines;
 }
 
-/** A line wrapped for agent-video and cut into pages of at most CAPTION_MAX_LINES lines, shown one after another. */
-export function captionPages(text: string): string[][] {
-  const lines = wrap(text, Math.floor((AGENT_W - 2 * CAPTION_INSET) / (CAPTION_SIZE * EM_PER_CHAR)));
-  const pages: string[][] = [];
-  for (let i = 0; i < lines.length; i += CAPTION_MAX_LINES) pages.push(lines.slice(i, i + CAPTION_MAX_LINES));
-  return pages;
+/** The fewest chunks that fit, made as even as possible, so a phrase does not end on one stray word. */
+function evenWrap(phrase: string): string[] {
+  const fewest = wrap(phrase, CHUNK_MAX_CHARS);
+  for (let w = Math.ceil(phrase.length / fewest.length); w < CHUNK_MAX_CHARS; w++) {
+    const lines = wrap(phrase, w);
+    if (lines.length === fewest.length) return lines;
+  }
+  return fewest;
 }
 
-/** One caption page as a band at the bottom of the game, above the letterbox bar, so the friend can read it in FaceTime. */
-export async function renderCaption(lines: string[]): Promise<Caption> {
-  const lineH = Math.round(CAPTION_SIZE * 1.25), pad = 10, height = lines.length * lineH + 2 * pad;
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${AGENT_W}" height="${height}">
-    <rect x="16" y="0" width="${AGENT_W - 32}" height="${height}" rx="10" fill="#000" fill-opacity="0.72"/>
-    ${lines.map((l, i) => `<text x="50%" y="${pad + (i + 1) * lineH - Math.round(CAPTION_SIZE * 0.3)}" text-anchor="middle" font-family="Georgia, serif" font-weight="bold" font-size="${CAPTION_SIZE}" fill="#f3e6c4">${esc(l)}</text>`).join('')}
+/** A line cut into one-line chunks, shown one after another: a chunk ends at every phrase break (. , ! ? ; :). */
+export function captionChunks(text: string): string[] {
+  const phrases: string[] = [];
+  let phrase: string[] = [];
+  for (const word of text.split(/\s+/).filter(Boolean)) {
+    phrase.push(word);
+    if (/[.,!?;:]$/.test(word)) { phrases.push(phrase.join(' ')); phrase = []; }
+  }
+  if (phrase.length) phrases.push(phrase.join(' '));
+  return phrases.flatMap(evenWrap);
+}
+
+/** Small words, and the verbs, adjectives and adverbs of LINES, that are never the key word. */
+const NOT_KEY = new Set(`show hold thank couldn't last nice steady badly moving cleared closing pinned cornered explodes catch fill
+  find watch breathe hurry come long bleeding sharp the and but for nor yet you your yours him his her hers its
+  it's they them their our ours she we us me my mine i'll i'm i've you've you're he's she's they've they're
+  that's there's what who this that these those there here with from into onto over under about than then when
+  how why all any some was were are been have has had did does can can't could would will won't don't just now
+  too very much more still not off out ha hah quick again see let get got take tell need ask keep make done`.split(/\s+/));
+
+function keyIndex(words: string[]): number {
+  for (let i = words.length - 1; i >= 0; i--) {
+    const bare = words[i]!.toLowerCase().replace(/[^a-z']/g, '');
+    if (bare.length >= 3 && !NOT_KEY.has(bare)) return i;
+  }
+  return -1;
+}
+
+/**
+ * The chunk's word drawn in blue. The owner asked for the last noun; without a tagger this is the last word of 3 or
+ * more letters that is not in NOT_KEY, so a verb or adjective outside NOT_KEY can still win.
+ */
+export function keyWord(chunk: string): string | undefined {
+  const words = chunk.split(' ');
+  return words[keyIndex(words)];
+}
+
+/** pillW 0 draws the text alone, for measuring. */
+function captionSvg(chunk: string, size: number, pillW: number): string {
+  const words = chunk.split(' '), key = keyIndex(words);
+  const spans = words.map((w, i) => `<tspan fill="${i === key ? KEY_BLUE : INK}">${esc(w)}${i < words.length - 1 ? ' ' : ''}</tspan>`).join('');
+  const pill = pillW ? `<rect x="${(AGENT_W - pillW) / 2}" y="1" width="${pillW}" height="${PILL_H}" rx="${PILL_H / 2}" fill="#fbfcff" stroke="#dfe4ee"/>` : '';
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${AGENT_W}" height="${PILL_H + 2}">${pill}
+    <text xml:space="preserve" x="${AGENT_W / 2}" y="${1 + PILL_H / 2 + Math.round(size * 0.35)}" text-anchor="middle" font-family="${CAPTION_FONT}" font-weight="800" font-size="${size}" letter-spacing="-0.4">${spans}</text>
   </svg>`;
-  const data = new Uint8Array(await sharp(Buffer.from(svg)).ensureAlpha().raw().toBuffer());
-  return { data, top: GAME_BOTTOM - height - 8, height };
+}
+
+/**
+ * One chunk as a pill near the bottom of the game, above the letterbox bar. The text is measured first so the pill
+ * fits it; a chunk too wide for the pill (one long word) gets a smaller font instead of running past it.
+ */
+export async function renderCaption(chunk: string): Promise<Caption> {
+  const { info } = await sharp(Buffer.from(captionSvg(chunk, CAPTION_SIZE, 0))).trim().toBuffer({ resolveWithObject: true });
+  const room = PILL_MAX_W - 2 * PILL_PAD_X;
+  const size = info.width > room ? Math.floor((CAPTION_SIZE * room) / info.width) : CAPTION_SIZE;
+  const pillW = Math.round((info.width * size) / CAPTION_SIZE) + 2 * PILL_PAD_X;
+  const data = new Uint8Array(await sharp(Buffer.from(captionSvg(chunk, size, pillW))).ensureAlpha().raw().toBuffer());
+  return { data, top: GAME_BOTTOM - PILL_GAP - PILL_H - 1, height: PILL_H + 2 };
 }
 
 /** Blends the caption into an AGENT_W x AGENT_H RGBA buffer in place. */
@@ -130,23 +185,26 @@ export class VideoRelay {
   }
 
   /**
-   * Shows a line as captions: its pages in turn, each for its character share of the line's audio (durationMs for a
-   * cached line, else SPEECH_CHARS_PER_S). The last page stays until endCaption or the next line.
+   * Shows a line as captions: its chunks in turn, each for its character share of the line's audio (durationMs for a
+   * cached line, else SPEECH_CHARS_PER_S). The last chunk stays until endCaption or the next line.
    */
   showCaption(text: string, durationMs?: number): void {
-    const pages = captionPages(text).map((lines) => ({ lines, chars: lines.join(' ').length }));
-    const msPerChar = durationMs ? durationMs / pages.reduce((n, p) => n + p.chars, 0) : 1000 / SPEECH_CHARS_PER_S;
+    const chunks = captionChunks(text);
+    const msPerChar = durationMs ? durationMs / chunks.reduce((n, c) => n + c.length, 0) : 1000 / SPEECH_CHARS_PER_S;
     this.clearCaption();
     const gen = this.captionGen;
     let at = 0;
-    for (const { lines, chars } of pages) {
-      const page = renderCaption(lines);
-      const show = () => void page.then(
+    let prev: Promise<unknown> = Promise.resolve();
+    for (const chunk of chunks) {
+      // In order, one at a time: started together, the first chunk waited about 120 ms behind the rest (measured).
+      const rendered = prev.catch(() => {}).then(() => renderCaption(chunk));
+      prev = rendered;
+      const show = () => void rendered.then(
         (c) => { if (gen === this.captionGen) this.caption = c; },
         (e) => { if (gen === this.captionGen) this.caption = null; warn('caption_render_failed', { error: errText(e) }); },
       );
       if (at === 0) show(); else this.captionTimers.push(setTimeout(show, at));
-      at += chars * msPerChar;
+      at += chunk.length * msPerChar;
     }
   }
 
@@ -156,7 +214,7 @@ export class VideoRelay {
   }
 
   private clearCaption(): void {
-    this.captionGen++; // a page still rendering must not come back
+    this.captionGen++; // a chunk still rendering must not come back
     for (const t of this.captionTimers) clearTimeout(t);
     this.captionTimers = [];
     this.caption = null;
