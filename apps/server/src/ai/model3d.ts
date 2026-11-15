@@ -48,9 +48,12 @@ export async function generateGlb(png1024: Buffer, objectName: string): Promise<
   const form = new FormData();
   form.append('image', new Blob([new Uint8Array(input)], { type: 'image/png' }), 'object.png');
   form.append('texture_resolution', env.SF3D_TEXTURE_RES);
-  form.append('foreground_ratio', '0.85');
-  form.append('remesh', 'none');
   const endpoint = env.FORGE_3D_MODEL === 'spar' ? 'stable-point-aware-3d' : 'stable-fast-3d';
+  // SPAR answers 400 to foreground_ratio below 1, so these two go to Stable Fast 3D only.
+  if (endpoint === 'stable-fast-3d') {
+    form.append('foreground_ratio', '0.85');
+    form.append('remesh', 'none');
+  }
   let res: Response;
   try {
     res = await fetch(`${STABILITY}/3d/${endpoint}`, {
