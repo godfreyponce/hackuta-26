@@ -30,11 +30,21 @@ async function titleCard(title: string, subtitle: string): Promise<VideoFrame> {
 /** RGBA rows [top, top + height) of agent-video, drawn over the frame; alpha is per pixel. */
 export type Caption = { data: Uint8Array; top: number; height: number };
 
-const CAPTION_SIZES = [24, 20]; // px; the smaller one only when the line needs more than CAPTION_MAX_LINES at 24
-const CAPTION_MAX_LINES = 3;
+/**
+ * 28 px: a portrait iPhone (390 pt wide) shows the 640 px frame at about 0.61x, so 28 px is about 17 pt, the iOS body
+ * text size. Guess: that FaceTime shows our frame full width in portrait; the next live call confirms it.
+ */
+const CAPTION_SIZE = 28;
+const CAPTION_MAX_LINES = 2;
 const CAPTION_INSET = 32; // text inset from each side
 /** Georgia bold measured in sharp at 0.47 to 0.555 em per character over LINES; 0.6 leaves room for wider words. */
 const EM_PER_CHAR = 0.6;
+/** Bottom row of the game inside agent-video: friend-view is OUT_W x OUT_H, letterboxed with equal bars. */
+export const GAME_BOTTOM = (AGENT_H + OUT_H) / 2;
+/** Measured: the 22 cached ElevenLabs lines run 11 to 19 characters per second, 16.1 over all of them. */
+export const SPEECH_CHARS_PER_S = 16;
+/** Guess: how long a caption stays after its audio ends, so the friend can finish reading the last words. */
+export const CAPTION_LINGER_MS = 700;
 
 function wrap(text: string, maxChars: number): string[] {
   const lines: string[] = [];
@@ -48,22 +58,23 @@ function wrap(text: string, maxChars: number): string[] {
   return lines.map((l) => (l.length > maxChars ? `${l.slice(0, maxChars - 1)}…` : l));
 }
 
-/** The Quartermaster's line as a band at the bottom of agent-video, so the friend can read it in FaceTime. */
-export async function renderCaption(text: string): Promise<Caption> {
-  let size = CAPTION_SIZES[0]!, lines: string[] = [];
-  for (const s of CAPTION_SIZES) {
-    size = s;
-    lines = wrap(text, Math.floor((AGENT_W - 2 * CAPTION_INSET) / (s * EM_PER_CHAR)));
-    if (lines.length <= CAPTION_MAX_LINES) break;
-  }
-  if (lines.length > CAPTION_MAX_LINES) lines = [...lines.slice(0, CAPTION_MAX_LINES - 1), `${lines[CAPTION_MAX_LINES - 1]}…`];
-  const lineH = Math.round(size * 1.25), pad = 10, height = lines.length * lineH + 2 * pad;
+/** A line wrapped for agent-video and cut into pages of at most CAPTION_MAX_LINES lines, shown one after another. */
+export function captionPages(text: string): string[][] {
+  const lines = wrap(text, Math.floor((AGENT_W - 2 * CAPTION_INSET) / (CAPTION_SIZE * EM_PER_CHAR)));
+  const pages: string[][] = [];
+  for (let i = 0; i < lines.length; i += CAPTION_MAX_LINES) pages.push(lines.slice(i, i + CAPTION_MAX_LINES));
+  return pages;
+}
+
+/** One caption page as a band at the bottom of the game, above the letterbox bar, so the friend can read it in FaceTime. */
+export async function renderCaption(lines: string[]): Promise<Caption> {
+  const lineH = Math.round(CAPTION_SIZE * 1.25), pad = 10, height = lines.length * lineH + 2 * pad;
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${AGENT_W}" height="${height}">
     <rect x="16" y="0" width="${AGENT_W - 32}" height="${height}" rx="10" fill="#000" fill-opacity="0.72"/>
-    ${lines.map((l, i) => `<text x="50%" y="${pad + (i + 1) * lineH - Math.round(size * 0.3)}" text-anchor="middle" font-family="Georgia, serif" font-weight="bold" font-size="${size}" fill="#f3e6c4">${esc(l)}</text>`).join('')}
+    ${lines.map((l, i) => `<text x="50%" y="${pad + (i + 1) * lineH - Math.round(CAPTION_SIZE * 0.3)}" text-anchor="middle" font-family="Georgia, serif" font-weight="bold" font-size="${CAPTION_SIZE}" fill="#f3e6c4">${esc(l)}</text>`).join('')}
   </svg>`;
   const data = new Uint8Array(await sharp(Buffer.from(svg)).ensureAlpha().raw().toBuffer());
-  return { data, top: AGENT_H - height - 8, height };
+  return { data, top: GAME_BOTTOM - height - 8, height };
 }
 
 /** Blends the caption into an AGENT_W x AGENT_H RGBA buffer in place. */
@@ -82,7 +93,8 @@ export class VideoRelay {
   readonly source = new VideoSource(AGENT_W, AGENT_H);
   private card: VideoFrame | null = null;
   private caption: Caption | null = null;
-  private captionText: string | null = null;
+  private captionGen = 0;
+  private captionTimers: NodeJS.Timeout[] = [];
   private lastLive = 0;
   private timer: NodeJS.Timeout | null = null;
   private stream: VideoStream | null = null;
@@ -113,15 +125,36 @@ export class VideoRelay {
     })();
   }
 
-  /** Shows text as a caption until the next call; null clears it. */
-  setCaption(text: string | null): void {
-    this.captionText = text;
-    this.caption = null; // a line that fails to render must not keep the old caption up
-    if (text === null) return;
-    void renderCaption(text).then(
-      (c) => { if (this.captionText === text) this.caption = c; },
-      (e) => warn('caption_render_failed', { error: errText(e) }),
-    );
+  /**
+   * Shows a line as captions: its pages in turn, each for its share of the line at SPEECH_CHARS_PER_S. The last page
+   * stays until endCaption or the next line.
+   */
+  showCaption(text: string): void {
+    this.clearCaption();
+    const gen = this.captionGen;
+    let at = 0;
+    for (const lines of captionPages(text)) {
+      const page = renderCaption(lines);
+      const show = () => void page.then(
+        (c) => { if (gen === this.captionGen) this.caption = c; },
+        (e) => { if (gen === this.captionGen) this.caption = null; warn('caption_render_failed', { error: errText(e) }); },
+      );
+      if (at === 0) show(); else this.captionTimers.push(setTimeout(show, at));
+      at += (lines.join(' ').length / SPEECH_CHARS_PER_S) * 1000;
+    }
+  }
+
+  /** The line's audio ended: clear its caption CAPTION_LINGER_MS later, unless a newer line has replaced it. */
+  endCaption(): void {
+    const gen = this.captionGen;
+    this.captionTimers.push(setTimeout(() => { if (gen === this.captionGen) this.clearCaption(); }, CAPTION_LINGER_MS));
+  }
+
+  private clearCaption(): void {
+    this.captionGen++; // a page still rendering must not come back
+    for (const t of this.captionTimers) clearTimeout(t);
+    this.captionTimers = [];
+    this.caption = null;
   }
 
   /** copy: the frame is reused (the title card), so draw on a copy instead of in place. */
@@ -134,6 +167,7 @@ export class VideoRelay {
 
   async close(): Promise<void> {
     if (this.timer) clearInterval(this.timer);
+    this.clearCaption();
     void this.stream?.cancel().catch(() => {});
     await this.source.close();
   }

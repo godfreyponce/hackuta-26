@@ -11,6 +11,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { resolve } from 'node:path';
 import sharp from 'sharp';
 import { RoomServiceClient } from 'livekit-server-sdk';
+import { GAME_BOTTOM } from '../src/video.ts';
 import WebSocket from 'ws';
 
 const HUB = 'http://localhost:8787';
@@ -133,7 +134,11 @@ async function captionCheck(frame: VideoFrame | null): Promise<void> {
   await sharp(Buffer.from(f.data), { raw: { width: f.width, height: f.height, channels: 4 } }).png().toFile(png);
   const box = { textPixels: n, x: [minX, maxX], y: [minY, maxY], size: `${f.width}x${f.height}`, png };
   check('caption burned into agent-video during the greeting (captions)', n > 200, box);
-  check('caption whole inside the 3:2 frame, in its lower half (captions)', n > 0 && minX >= 16 && maxX < f.width - 16 && minY >= f.height / 2 && maxY < f.height - 4, box);
+  check('caption whole inside the game, in its lower half (captions)', n > 0 && minX >= 16 && maxX < f.width - 16 && minY >= f.height / 2 && maxY < GAME_BOTTOM, box);
+  // The band is dark over the grey game; its last rows above the bottom letterbox bar must still be game grey.
+  let sum = 0, px = 0;
+  for (let y = GAME_BOTTOM - 4; y < GAME_BOTTOM; y++) for (let x = 100; x < f.width - 100; x++) { sum += f.data[(y * f.width + x) * 4 + 1]!; px++; }
+  check('caption band ends above the bottom letterbox bar (captions)', sum / px > 150, { gapGreen: Math.round(sum / px), rows: [GAME_BOTTOM - 4, GAME_BOTTOM - 1] });
 }
 
 const mockPhone = async (sid: string) => {
