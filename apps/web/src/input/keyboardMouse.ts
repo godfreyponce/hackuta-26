@@ -24,10 +24,13 @@ export interface KeyboardMouseController extends InputController {
   readonly mode: KbMode;
   /** Normalized device coords of the cursor (for the reticle). */
   readonly cursor: { x: number; y: number };
+  /** The engine reports which hands actually hold a melee weapon (drives the visible-blade "lever" pose). */
+  setArmed(hand: Hand, armed: boolean, bladeM?: number, holding?: boolean): void;
 }
 
-const REST_LEFT = new THREE.Vector3(-0.3, -0.4, -0.5);
-const REST_RIGHT = new THREE.Vector3(0.24, -0.32, -0.5);
+// resting hands sit low, out of the way of the view (and of the weapon table when you glance down)
+const REST_LEFT = new THREE.Vector3(-0.3, -0.5, -0.34);
+const REST_RIGHT = new THREE.Vector3(0.28, -0.48, -0.36);
 const SHOULDER = { left: new THREE.Vector3(-0.2, -0.28, 0.02), right: new THREE.Vector3(0.2, -0.28, 0.02) };
 const WORLD_UP = new THREE.Vector3(0, 1, 0);
 
@@ -49,7 +52,16 @@ class HandTrack {
   grip = 0;
   gripping = false;
   swingArmed = true;
-  constructor(p: THREE.Vector3) { this.pos = p.clone(); this.target = p.clone(); }
+  /** where this hand's blade point is (lags the cursor on a spring → weight) and its velocity */
+  tip = new THREE.Vector3();
+  tipVel = new THREE.Vector3();
+  armed = false;
+  /** grip → point distance of the held weapon (m) */
+  blade = 0.65;
+  /** holding anything (blade, shield, bow) — grips are sticky */
+  holding = false;
+  shield = false;
+  constructor(p: THREE.Vector3) { this.pos = p.clone(); this.target = p.clone(); this.tip.copy(p).multiplyScalar(2); }
   record(t: number) {
     this.hist.push({ t, x: this.pos.x, y: this.pos.y, z: this.pos.z });
     while (this.hist.length > 2 && t - this.hist[0].t > 200) this.hist.shift();
@@ -67,6 +79,17 @@ class HandTrack {
   }
 }
 
+/** Unity-style SmoothDamp on a vector (critically damped, stable at any dt). */
+function smoothDamp(cur: THREE.Vector3, target: THREE.Vector3, vel: THREE.Vector3, smoothTime: number, dt: number) {
+  if (dt <= 0) return;
+  const omega = 2 / smoothTime, x = omega * dt;
+  const e = 1 / (1 + x + 0.48 * x * x + 0.235 * x * x * x);
+  const cx = cur.x - target.x, cy = cur.y - target.y, cz = cur.z - target.z;
+  const tx = (vel.x + omega * cx) * dt, ty = (vel.y + omega * cy) * dt, tz = (vel.z + omega * cz) * dt;
+  vel.set((vel.x - omega * tx) * e, (vel.y - omega * ty) * e, (vel.z - omega * tz) * e);
+  cur.set(target.x + (cx + tx) * e, target.y + (cy + ty) * e, target.z + (cz + tz) * e);
+}
+
 export function createKeyboardMouseController(): KeyboardMouseController {
   const listeners = new Set<(e: InputEvent) => void>();
   const modeListeners = new Set<(m: KbMode) => void>();
@@ -79,6 +102,7 @@ export function createKeyboardMouseController(): KeyboardMouseController {
   const cursor = { x: 0.25, y: -0.35 };
   let reach = 0.7;
   let lunge = 0;
+  let thrust = 0;
   const mode: KbMode = { bow: false, activeHand: 'right' };
   const keys = new Set<string>();
   let lmb = false;
@@ -136,25 +160,6 @@ export function createKeyboardMouseController(): KeyboardMouseController {
     if (d > 0.12) emit({ type: 'bow_release', draw: d, aim: { x: aimDir.x, y: aimDir.y, z: aimDir.z } });
   }
 
-  function gripHand(h: Hand, on: boolean) {
-    const tr = hands[h];
-    if (tr.gripping === on) return;
-    tr.gripping = on;
-    if (on) emit({ type: 'grab', hand: h });
-    else {
-      // flick velocity from raw cursor samples (the rendered hand is smoothed and lags fast flicks)
-      const flick = cursorVel(h === mode.activeHand ? 90 : 0, tmp);
-      const speed = flick.length();
-      rayDir(aimDir);
-      let vel: THREE.Vector3;
-      if (speed > 1.0) {
-        // Mouse flicks are planar — inject the aim ray so throws travel where you point.
-        vel = tmp2.copy(aimDir).multiplyScalar(2.4 + Math.min(speed, 8) * 1.5).addScaledVector(flick, 0.35);
-      } else vel = tmp2.copy(flick);
-      emit({ type: 'release', hand: h, vel: { x: vel.x, y: vel.y, z: vel.z } });
-    }
-  }
-
   // ── DOM handlers ─────────────────────────────────────────────
   const isTyping = () => {
     const a = document.activeElement as HTMLElement | null;
@@ -175,12 +180,18 @@ export function createKeyboardMouseController(): KeyboardMouseController {
       case 'KeyC': emit({ type: 'call_sign' }); break;
       case 'KeyQ': emit({ type: 'request_weapon' }); break;
       case 'KeyF': {
-        const h = mode.activeHand;
-        if (hands[h].gripping) {
-          hands[h].gripping = false;
+        // quick throw: the active hand's weapon, else the other hand's
+        const h = hands[mode.activeHand].holding ? mode.activeHand : (mode.activeHand === 'right' ? 'left' : 'right');
+        if (hands[h].holding && !(mode.bow && h === 'left')) {
           rayDir(aimDir);
           emit({ type: 'release', hand: h, vel: { x: aimDir.x * 7, y: aimDir.y * 7 + 0.6, z: aimDir.z * 7 } });
         }
+        break;
+      }
+      case 'KeyX': {
+        // set the weapon down (active hand first)
+        const h = hands[mode.activeHand].holding ? mode.activeHand : (mode.activeHand === 'right' ? 'left' : 'right');
+        if (hands[h].holding) emit({ type: 'release', hand: h, vel: { x: 0, y: 0, z: 0 } });
         break;
       }
       case 'ShiftLeft': case 'ShiftRight':
@@ -215,15 +226,24 @@ export function createKeyboardMouseController(): KeyboardMouseController {
   function setLeft(down: boolean) {
     if (down === lmb) return;
     lmb = down;
+    if (mode.bow) { if (down) startDraw(); else loose(); return; }
+    const h = mode.activeHand, tr = hands[h];
     if (down) {
-      if (mode.bow) startDraw();
-      else gripHand(mode.activeHand, true);
-    } else if (mode.bow) loose();
-    else {
-      gripHand(mode.activeHand, false);
-      // A left grip latched while Shift was held is released with the button too.
-      if (mode.activeHand === 'right' && hands.left.gripping) gripHand('left', false);
+      // click: an empty hand takes what you point at; if it's already armed, your FREE hand takes it
+      // (second sword → dual wield, aspis → sword & shield)
+      tr.gripping = true;
+      emit({ type: 'grab', hand: h });
+      return;
     }
+    tr.gripping = false;
+    // grips are sticky — the weapon stays in your hand; releasing during a fast flick THROWS it
+    if (!tr.holding) return;
+    const flick = cursorVel(90, tmp);
+    const speed = flick.length();
+    if (speed < 2.2) return;
+    rayDir(aimDir);
+    const vel = tmp2.copy(aimDir).multiplyScalar(2.4 + Math.min(speed, 8) * 1.5).addScaledVector(flick, 0.35);
+    emit({ type: 'release', hand: h, vel: { x: vel.x, y: vel.y, z: vel.z } });
   }
   function setRight(down: boolean) {
     if (down === rmb) return;
@@ -256,6 +276,7 @@ export function createKeyboardMouseController(): KeyboardMouseController {
   const onContext = (e: Event) => e.preventDefault();
   const onBlur = () => {
     keys.clear();
+    lmb = false; hands.left.gripping = false; hands.right.gripping = false; // grips are sticky: nothing drops
     if (rmb) { rmb = false; emit({ type: 'block_end' }); }
     if (drawing) loose();
   };
@@ -286,7 +307,11 @@ export function createKeyboardMouseController(): KeyboardMouseController {
     // (RMB) it turns crosswise in front of the face to catch blows.
     const f = tmp;
     if (mode.bow && h === 'left') f.copy(rayDir(aimDir));
-    else if (rmb) f.set(h === 'right' ? -0.92 : 0.92, 0.24, -0.32).normalize();
+    else if (tr.shield) f.set(h === 'right' ? -0.12 : 0.12, rmb ? 0.12 : 0.02, -1).normalize(); // aspis face → the enemy
+    else if (rmb && !hands.left.shield && !hands.right.shield) f.set(h === 'right' ? -0.92 : 0.92, 0.24, -0.32).normalize();
+    else if (tr.armed && h === mode.activeHand) f.subVectors(tr.tip, tr.pos).normalize();
+    else if (tr.armed) f.set(h === 'right' ? -0.3 : 0.3, 0.8, -0.5).normalize(); // off-hand blade raised to parry
+    else if (h === mode.activeHand && !mode.bow) f.subVectors(tr.tip, tr.pos).normalize(); // empty hand reaching
     else {
       rayDir(aimDir);
       const sh = tmp2.copy(tr.pos).sub(SHOULDER[h]).normalize();
@@ -324,30 +349,57 @@ export function createKeyboardMouseController(): KeyboardMouseController {
       const rest = tmp2.copy(L.target).addScaledVector(aimDir, -0.09).add(tmp.set(0.03, 0.02, 0));
       R.target.copy(rest).lerp(tmp.set(0.05, -0.13, -0.14), state.bowDraw);
       L.grip = 1; R.grip = drawing ? 1 : 0.4;
-    } else if (rmb) {
+    } else if (rmb && !L.shield && !R.shield) {
       // guard: sword raised crosswise in front of the face, through all three attack lanes
       L.target.set(-0.16, -0.04, -0.46);
       R.target.set(0.2, 0.0, -0.52);
     } else {
       const active = hands[mode.activeHand];
+      const off = mode.activeHand === 'right' ? L : R;
       // auto-lunge: a fast swing with a weapon extends the arm (mouse can't push forward)
-      lunge = damp(lunge, active.gripping && active.vel.length() > 1.5 ? 0.24 : 0, 10, dt);
-      active.target.copy(aimDir).multiplyScalar(reach + lunge);
-      if (mode.activeHand === 'right' && !L.gripping) L.target.lerp(REST_LEFT, 1 - Math.exp(-4 * dt));
+      lunge = damp(lunge, active.armed && active.tipVel.length() > 3.2 ? 0.22 : 0, 10, dt);
+      if (active.armed) {
+        // LEVER: the cursor marks where the blade's POINT goes; the hand rides between shoulder and point,
+        // so the whole blade is on screen as a diagonal from the lower corner to the reticle and sweeps
+        // visibly as you move the mouse (instead of pointing straight down the line of sight)
+        // W = thrust: drive the point straight out along the line of the blade
+        thrust = damp(thrust, keys.has('KeyW') ? 0.34 : 0, keys.has('KeyW') ? 22 : 9, dt);
+        const goal = tmp.copy(aimDir).multiplyScalar(reach + 0.45 + lunge + thrust);
+        // critically damped follow (frame-rate independent): the point trails a hair behind the cursor
+        smoothDamp(active.tip, goal, active.tipVel, 0.07, dt);
+        const sh = SHOULDER[mode.activeHand];
+        const d = tmp2.copy(active.tip).sub(sh);
+        const len = Math.max(0.3, d.length());
+        // hand sits one blade-length back from the point along the shoulder→point line (clamped to the arm)
+        active.target.copy(sh).addScaledVector(d, clamp(len - active.blade, 0.26, 0.62) / len);
+      } else {
+        // empty hand reaches toward what you point at from the lower corner (the cursor ray does the picking),
+        // instead of sitting dead-centre under the reticle where its bracer blocks the view
+        const sh = SHOULDER[mode.activeHand];
+        const d = tmp2.copy(aimDir).multiplyScalar(1.0).sub(sh);
+        active.target.copy(sh).addScaledVector(d, 0.44 / Math.max(0.3, d.length()));
+        active.tip.copy(aimDir).multiplyScalar(1.0); active.tipVel.set(0, 0, 0);
+      }
+      // the other hand: a second blade is held up on its side as a parrying blade; an empty hand rests
+      const sx = off === L ? -1 : 1;
+      if (off.armed) off.target.lerp(tmp.set(sx * 0.27, -0.24, -0.5), 1 - Math.exp(-8 * dt));
+      // aspis: carried low at your side (rim in the corner); on guard it comes up in front — you look over its rim
+      else if (off.shield) off.target.lerp(rmb ? tmp.set(sx * 0.27, -0.42, -0.62) : tmp.set(sx * 0.44, -0.42, -0.46), 1 - Math.exp(-(rmb ? 16 : 10) * dt));
+      else if (!off.gripping) off.target.lerp(off === L ? REST_LEFT : REST_RIGHT, 1 - Math.exp(-4 * dt));
     }
     if (!mode.bow) {
-      L.grip = damp(L.grip, L.gripping ? 1 : 0, 25, dt);
-      R.grip = damp(R.grip, R.gripping ? 1 : 0, 25, dt);
+      L.grip = damp(L.grip, L.gripping || L.holding ? 1 : 0, 25, dt);
+      R.grip = damp(R.grip, R.gripping || R.holding ? 1 : 0, 25, dt);
     }
     for (const h of ['left', 'right'] as const) {
       const tr = hands[h];
       tr.pos.lerp(tr.target, 1 - Math.exp(-28 * dt));
       tr.record(now);
       writeHand(h, tr);
-      const speed = tr.vel.length();
-      if (tr.gripping && tr.swingArmed && speed > 2.2) {
+      const speed = tr.armed ? tr.tipVel.length() * 0.6 : tr.vel.length();
+      if ((tr.armed || tr.gripping) && tr.swingArmed && speed > 2.2) {
         tr.swingArmed = false;
-        const d = tmp.copy(tr.vel).normalize();
+        const d = tmp.copy(tr.armed ? tr.tipVel : tr.vel).normalize();
         emit({ type: 'swing', hand: h, speed, dir: { x: d.x, y: d.y, z: d.z } });
       } else if (speed < 1.0) tr.swingArmed = true;
     }
@@ -385,6 +437,7 @@ export function createKeyboardMouseController(): KeyboardMouseController {
     on(cb) { listeners.add(cb); return () => listeners.delete(cb); },
     onMode(cb) { modeListeners.add(cb); return () => modeListeners.delete(cb); },
     setCamera(m) { cam = m; },
+    setArmed(h, a, bladeM, holding) { const t = hands[h]; t.armed = a; if (bladeM) t.blade = bladeM; t.holding = holding ?? a; t.shield = !!t.holding && !a && !(mode.bow && h === 'left'); },
     setTarget(el) { attach(el); },
     getDebugVideo: () => null,
   };

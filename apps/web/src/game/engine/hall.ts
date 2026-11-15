@@ -20,8 +20,11 @@ export const HALL = {
   eye: new THREE.Vector3(0, 1.65, 0),
   columnX: 3.25,
   columnZ: [-4.2, -8.6, -13, -17.4, -21.8],
-  rackZ: -0.9,
-  rackTop: 1.12,
+  // the weapon table in front of Odysseus (centre z, top height, depth, width)
+  rackZ: -0.8,
+  rackTop: 0.8,
+  tableDepth: 0.6,
+  tableWidth: 1.6,
 };
 
 export interface HallRig {
@@ -287,16 +290,25 @@ export function buildHall(world: InstanceType<typeof RAPIER.World> | null): Hall
   doorPivot.add(leaf);
   group.add(doorPivot);
 
-  // ── weapon rack in front of the player ──
+  // ── the weapon table in front of Odysseus (weapons lie on it; look down / point low to take one) ──
   const rackGeo: THREE.BufferGeometry[] = [];
-  const rz = HALL.rackZ, rt = HALL.rackTop;
-  const top = new THREE.BoxGeometry(1.5, 0.08, 0.38); top.translate(0.05, rt, rz); rackGeo.push(top);
-  for (const dx of [-0.62, 0.72]) { const l = new THREE.BoxGeometry(0.08, rt, 0.3); l.translate(dx, rt / 2, rz); rackGeo.push(l); }
-  const peg = new THREE.BoxGeometry(0.06, 0.5, 0.06); peg.translate(-0.55, rt + 0.25, rz - 0.1); rackGeo.push(peg);
-  const ring = new THREE.TorusGeometry(0.05, 0.012, 5, 12); ring.rotateX(Math.PI / 2); ring.translate(0.55, rt + 0.04, rz); rackGeo.push(ring);
+  const rz = HALL.rackZ, rt = HALL.rackTop, td = HALL.tableDepth, tw = HALL.tableWidth;
+  const top = new THREE.BoxGeometry(tw, 0.05, td); top.translate(0, rt - 0.025, rz); rackGeo.push(top);
+  const apron = new THREE.BoxGeometry(tw - 0.12, 0.09, td - 0.1); apron.translate(0, rt - 0.09, rz); rackGeo.push(apron);
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+    const leg = new THREE.CylinderGeometry(0.035, 0.028, rt - 0.05, 8);
+    leg.translate(sx * (tw / 2 - 0.08), (rt - 0.05) / 2, rz + sz * (td / 2 - 0.07));
+    rackGeo.push(leg);
+  }
+  const stretcher = new THREE.BoxGeometry(tw - 0.16, 0.04, 0.04); stretcher.translate(0, 0.16, rz); rackGeo.push(stretcher);
   const rack = new THREE.Mesh(mergeGeometries(rackGeo.map((g) => (g.index ? g.toNonIndexed() : g)).map((g) => { for (const k of Object.keys(g.attributes)) if (k !== 'position' && k !== 'normal') g.deleteAttribute(k); return g; })), woodMat);
   rack.castShadow = false; rack.receiveShadow = true;
   group.add(rack);
+  // a dyed runner on the table (Ithaca red with a dark border)
+  const runner = new THREE.Mesh(new THREE.BoxGeometry(tw - 0.3, 0.006, td - 0.16), new THREE.MeshStandardMaterial({ color: '#6e1f22', roughness: 0.95 }));
+  runner.position.set(0, rt + 0.003, rz);
+  runner.receiveShadow = true;
+  group.add(runner);
 
   // ── lights ──
   const hemi = new THREE.HemisphereLight(LIGHT.ambientSky, LIGHT.ambientGround, 0.6);
@@ -360,7 +372,7 @@ export function buildHall(world: InstanceType<typeof RAPIER.World> | null): Hall
     addStaticCuboid(world, staticHandles, W + 0.5, H / 2, zMid, 0.5, H / 2, len / 2);
     addStaticCuboid(world, staticHandles, 0, H / 2, HALL.zFar - 0.5, W, H / 2, 0.5);
     addStaticCuboid(world, staticHandles, 0, H / 2, HALL.zNear + 0.5, W, H / 2, 0.5);
-    addStaticCuboid(world, staticHandles, 0.05, HALL.rackTop / 2, HALL.rackZ, 0.75, HALL.rackTop / 2, 0.19); // rack
+    addStaticCuboid(world, staticHandles, 0, HALL.rackTop / 2, HALL.rackZ, HALL.tableWidth / 2, HALL.rackTop / 2, HALL.tableDepth / 2); // weapon table
     for (const p of colPositions) {
       const body = world.createRigidBody(RAPIER.RigidBodyDesc.fixed().setTranslation(p.x, colH / 2 + 0.2, p.z));
       const col = world.createCollider(RAPIER.ColliderDesc.cylinder(colH / 2, 0.36).setCollisionGroups(GROUPS.static).setFriction(0.9), body);

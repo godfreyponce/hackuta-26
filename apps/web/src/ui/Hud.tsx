@@ -368,7 +368,7 @@ export function Hud() {
       {kb && hint && (
         <div className="bl callpanel small" style={{ maxWidth: 360 }}>
           <div className="hud-label" style={{ marginBottom: 6 }}>Controls · <span className="kbd">H</span> hide</div>
-          <div className="muted">Point at the rack + hold <span className="kbd">LMB</span> to grab · flick + release to throw · <span className="kbd">B</span> bow · <span className="kbd">RMB</span> guard · <span className="kbd">A</span>/<span className="kbd">D</span> dodge · <span className="kbd">C</span> call · <span className="kbd">Q</span> weapon</div>
+          <div className="muted">Click a weapon on the table to take it (click a second for your other hand) · swing with the mouse · <span className="kbd">W</span> thrust · <span className="kbd">RMB</span> guard · flick + release <span className="kbd">LMB</span> to throw · <span className="kbd">X</span> set down · <span className="kbd">B</span> bow · <span className="kbd">A</span>/<span className="kbd">D</span> dodge</div>
         </div>
       )}
       <TrackingOverlay />

@@ -34,7 +34,7 @@ export interface WeaponEnt {
   state: WState;
   hand: Hand | null;
   rackPose: { pos: THREE.Vector3; quat: THREE.Quaternion } | null;
-  rackKind: 'bow' | 'dagger' | 'spear' | 'forged' | null;
+  rackKind: 'bow' | 'dagger' | 'spear' | 'forged' | 'shield' | null;
   segA: THREE.Vector3; segB: THREE.Vector3; radius: number;
   prevTip: THREE.Vector3; prevCenter: THREE.Vector3; tip: THREE.Vector3; center: THREE.Vector3;
   speed: number;
@@ -133,6 +133,14 @@ class ArrowInstancer {
 const loader = new GLTFLoader();
 const glbCache = new Map<string, Promise<THREE.Object3D>>();
 
+/** A weapon lying on the table: local +Y (blade/shaft axis) along `axis`, local +Z toward `face`. */
+function lyingQuat(axis: THREE.Vector3, face: THREE.Vector3) {
+  const y = axis.clone().normalize();
+  const z = face.clone().addScaledVector(y, -face.dot(y)).normalize();
+  const x = new THREE.Vector3().crossVectors(y, z);
+  return new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, y, z));
+}
+
 function loadGlb(url: string, timeoutMs = 8000): Promise<THREE.Object3D> {
   const hit = glbCache.get(url);
   if (hit) return hit.then((o) => o.clone(true));
@@ -228,6 +236,7 @@ export class WeaponManager {
   blocking = false;
   private daggerTimer = 0;
   private spearTimer = 0;
+  private shieldTimer = 0;
   t = 0;
   realT = 0;
   private speedHist = new Map<number, { t: number; sp: number }[]>();
@@ -317,25 +326,39 @@ export class WeaponManager {
     this.place(w, w.rackPose.pos, w.rackPose.quat);
   }
 
+  /**
+   * The weapon table in front of Odysseus (top view, player at the origin facing −Z):
+   *   aspis leaning on the left end · two xiphoi side by side, hilts toward you (dual wield) ·
+   *   the Bow of Odysseus along the front-right · a spear across the back.
+   */
   spawnStarterKit() {
-    const rz = HALL.rackZ, top = HALL.rackTop;
-    // Odysseus's bow on its peg
+    const top = HALL.rackTop, rz = HALL.rackZ;
     const bow = buildBowStave();
     const bw = this.create('bow', BOW_SPEC, bow.group, 'Bow of Odysseus');
     this.bowTips = { top: bow.tipTop, bottom: bow.tipBottom };
     bw.rackKind = 'bow';
-    bw.rackPose = { pos: new THREE.Vector3(-0.86, top + 0.3, rz + 0.05), quat: new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0.5, -0.32)) };
+    // standing at the table's right end, string toward you
+    bw.rackPose = { pos: new THREE.Vector3(0.7, 0.66, rz - 0.12), quat: lyingQuat(new THREE.Vector3(0.06, 1, 0), new THREE.Vector3(-0.4, 0, 1)) };
     this.rack(bw);
     this.spawnDagger(0);
     this.spawnDagger(1);
     this.spawnSpear();
+    this.spawnShield();
   }
 
   private daggerSlot(i: number) {
-    return {
-      pos: new THREE.Vector3(-0.12 + i * 0.24, HALL.rackTop + 0.34, HALL.rackZ),
-      quat: new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI),
-    };
+    // hilts at the front edge, blades pointing away and fanned slightly outward
+    const dir = i === 0 ? new THREE.Vector3(-0.08, 0, -1) : new THREE.Vector3(0.1, 0, -1);
+    return { pos: new THREE.Vector3(i === 0 ? 0.02 : 0.24, HALL.rackTop + 0.022, HALL.rackZ + 0.25), quat: lyingQuat(dir, new THREE.Vector3(0, 1, 0)) };
+  }
+  private spawnShield() {
+    const w = this.create('shield', WEAPON_CLASSES.shield, buildAspis(0.8), 'Aspis of Ithaca');
+    w.rackKind = 'shield';
+    // leaning against the table's left end, face toward Odysseus
+    // lying face-up on the left of the table, tipped toward you
+    w.rackPose = { pos: new THREE.Vector3(-0.42, HALL.rackTop + 0.05, HALL.rackZ - 0.02), quat: lyingQuat(new THREE.Vector3(0.1, 1, 0.35), new THREE.Vector3(0, 0, -1)) };
+    this.rack(w);
+    return w;
   }
   private spawnDagger(i: number) {
     const g = buildBlade(DAGGER_SPEC.lengthM);
@@ -352,7 +375,8 @@ export class WeaponManager {
     holder.add(s);
     const w = this.create('spear', WEAPON_CLASSES.spear, holder, 'Spear of Ithaca');
     w.rackKind = 'spear';
-    w.rackPose = { pos: new THREE.Vector3(0.98, 0.86, HALL.rackZ + 0.05), quat: new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -0.06) };
+    // standing against the table's right end beside the bow, point up
+    w.rackPose = { pos: new THREE.Vector3(0.86, 0.9, HALL.rackZ - 0.2), quat: lyingQuat(new THREE.Vector3(-0.08, 1, 0.04), new THREE.Vector3(0, 0, 1)) };
     this.rack(w);
     return w;
   }
@@ -395,12 +419,12 @@ export class WeaponManager {
   }
 
   // ── hand interaction ──
-  grab(h: HandView, aimRay?: { origin: THREE.Vector3; dir: THREE.Vector3 }) {
+  grab(h: HandView, aimRay?: { origin: THREE.Vector3; dir: THREE.Vector3 }, rayOnly = false) {
     if (this.held[h.side]) return;
     const moving = h.vel.length() > 0.4;
     let best: WeaponEnt | null = null;
     let bestD = Infinity;
-    for (const w of this.list) {
+    for (const w of rayOnly ? [] : this.list) {
       if (w.state !== 'racked' && w.state !== 'free') continue;
       if (w.cls === 'arrow') continue;
       const gp = this.gripWorld(w, _v);
@@ -410,7 +434,7 @@ export class WeaponManager {
       if (d < r && d < bestD) { best = w; bestD = d; }
     }
     // return-to-sender: snatch an enemy arrow out of the air
-    if (!best) {
+    if (!best && !rayOnly) {
       const ar = this.enemies.catchArrow(h.pos, 0.42);
       if (ar) {
         const w = this.create('arrow', ARROW_SPEC, null, 'Returned Arrow');
@@ -426,11 +450,13 @@ export class WeaponManager {
       let bestRay = 0.2;
       for (const w of this.list) {
         if ((w.state !== 'racked' && w.state !== 'free') || w.cls === 'arrow') continue;
+        // point anywhere along the weapon (grip → point), not just at its grip
         const gp = this.gripWorld(w, _v);
+        const rayEnd = _v3.copy(aimRay.origin).addScaledVector(aimRay.dir, 4);
+        const perp = Math.sqrt(segSegDistLocal(aimRay.origin, rayEnd, gp, w.tip.lengthSq() > 0 ? w.tip : gp));
         const along = _v2.subVectors(gp, aimRay.origin).dot(aimRay.dir);
         if (along < 0.2 || along > 3.5) continue;
-        const perp = _v3.copy(aimRay.origin).addScaledVector(aimRay.dir, along).distanceTo(gp);
-        const tol = 0.12 + along * 0.05;
+        const tol = 0.1 + along * 0.05;
         if (perp < tol && perp / tol < bestRay / 0.2 + 1e-6) { best = w; bestRay = (perp / tol) * 0.2; }
       }
       // a dropped blade on the floor is usually below the view: take the nearest free weapon within 2.5 m
@@ -538,8 +564,10 @@ export class WeaponManager {
     return true;
   }
   ensureBow(h: HandView): boolean {
-    const cur = this.held[h.side];
+    let cur = this.held[h.side];
     if (cur?.cls === 'bow') return true;
+    // the bow needs the left hand: a shield or blade there goes back on the table (or is set down)
+    if (cur && cur.rackPose) { this.held[h.side] = null; cur.hand = null; this.rack(cur); cur = null; }
     if (cur) return false;
     const bow = this.list.find((w) => w.cls === 'bow' && w.state !== 'gone');
     if (!bow) return false;
@@ -649,8 +677,9 @@ export class WeaponManager {
         const off = _v.set(0, 0, 0);
         if (w.cls === 'shield') {
           // carried low at the side so it doesn't blind you; raised to center while blocking
-          if (this.blocking) off.set(w.hand === 'left' ? 0.1 : -0.1, 0.04, -0.06);
-          else off.set(w.hand === 'left' ? -0.16 : 0.2, -0.24, 0.06);
+          // the hand pose already places it (low at the side; up in front on guard) — small hold offset only
+          if (this.blocking) off.set(w.hand === 'left' ? 0.04 : -0.04, 0, -0.03);
+          else off.set(w.hand === 'left' ? -0.04 : 0.04, -0.02, 0.02);
         }
         const p = _v2.copy(h.pos).add(off);
         w.body.setNextKinematicTranslation({ x: p.x, y: p.y, z: p.z });
@@ -988,6 +1017,11 @@ export class WeaponManager {
       this.fx.gold(w.rackPose!.pos, 16);
       audio.lyre([7], 0, 523);
     } else if (daggers.length >= 2) this.daggerTimer = Math.min(this.daggerTimer, 14);
+    const shields = this.list.filter((w) => w.rackKind === 'shield' && w.state !== 'gone');
+    if (!shields.length) {
+      this.shieldTimer += dt;
+      if (this.shieldTimer > 20) { this.shieldTimer = 0; const w = this.spawnShield(); this.fx.gold(w.rackPose!.pos, 16); }
+    } else this.shieldTimer = 0;
     const spears = this.list.filter((w) => w.rackKind === 'spear' && (w.state === 'racked' || w.state === 'held' || w.state === 'incoming'));
     if (!spears.length) {
       this.spearTimer += dt;

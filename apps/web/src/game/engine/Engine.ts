@@ -268,9 +268,13 @@ export class Engine {
     }
     switch (e.type) {
       case 'grab': {
-        const h = this.handViews[e.hand];
-        const dir = h.pos.clone().sub(this.eye).normalize();
-        this.weapons.grab(h, { origin: this.eye.clone(), dir });
+        const ray = this.aimRay(e.hand);
+        if (!this.weapons.heldBy(e.hand)) this.weapons.grab(this.handViews[e.hand], ray);
+        else {
+          // already armed: the free hand takes what you point at (second blade → dual wield, aspis → sword & shield)
+          const other = e.hand === 'right' ? 'left' : 'right';
+          if (!this.weapons.heldBy(other) && !this.weapons.drawing) this.weapons.grab(this.handViews[other], ray, true);
+        }
         break;
       }
       case 'release': {
@@ -300,6 +304,17 @@ export class Engine {
   }
 
   private yaw = 0;
+  /** Where the player is pointing: the cursor ray (keyboard & mouse) or eye → hand (motion). */
+  private aimRay(hand: Hand) {
+    if (isKeyboardMouse(this.input)) {
+      const rc = new THREE.Raycaster();
+      rc.setFromCamera(new THREE.Vector2(this.input.cursor.x, this.input.cursor.y), this.camera);
+      return { origin: rc.ray.origin.clone(), dir: rc.ray.direction.clone() };
+    }
+    const h = this.handViews[hand];
+    return { origin: this.eye.clone(), dir: h.pos.clone().sub(this.eye).normalize() };
+  }
+
   private bodyToWorldDir(v: THREE.Vector3) { return v.applyAxisAngle(new THREE.Vector3(0, 1, 0), this.yaw); }
 
   // ── modes ──
@@ -694,7 +709,11 @@ export class Engine {
       const t = this.realT;
       // keyboard/mouse: pushing the cursor to the bottom edge tilts the view down (legs, dropped blades)
       const cy = isKeyboardMouse(this.input) ? this.input.cursor.y : 0;
-      this.lookDown = damp(this.lookDown, cy < -0.55 ? Math.min(1, (-0.55 - cy) / 0.4) * 0.42 : 0, 5, realDt);
+      // empty-handed with no wooer close: glance down at the weapon table so it's in view
+      const unarmed = !this.weapons.heldBy('left') && !this.weapons.heldBy('right');
+      const near = this.enemies.list.some((en) => !en.dead && en.kind !== 'hero' && en.state !== 'idle' && Math.hypot(en.pos.x - this.eye.x, en.pos.z - this.eye.z) < 2.6);
+      const glance = this.mode === 'match' && unarmed && !near ? 0.3 : 0;
+      this.lookDown = damp(this.lookDown, Math.max(glance, cy < -0.55 ? Math.min(1, (-0.55 - cy) / 0.4) * 0.42 : 0), 5, realDt);
       const pitch = -0.1 - this.lookDown + Math.sin(t * 0.7 * Math.PI * 2) * sway * 0.6 + (Math.sin(t * 37) * 0.5 + Math.sin(t * 23) * 0.5) * maxRot * sh;
       const yaw = this.yaw + Math.sin(t * 0.43 * Math.PI * 2) * sway + Math.sin(t * 31 + 1) * maxRot * sh;
       const roll = Math.sin(t * 29 + 2) * maxRot * 0.5 * sh;
@@ -707,7 +726,13 @@ export class Engine {
     }
     this.trauma = Math.max(0, this.trauma - realDt * 1.5);
     if (Math.abs(cam.fov - this.fov) > 0.01) { cam.fov = this.fov; cam.updateProjectionMatrix(); }
-    if (isKeyboardMouse(this.input)) this.input.setCamera({ fovY: THREE.MathUtils.degToRad(cam.fov), aspect: cam.aspect, pitch: -0.1 - this.lookDown });
+    if (isKeyboardMouse(this.input)) {
+      this.input.setCamera({ fovY: THREE.MathUtils.degToRad(cam.fov), aspect: cam.aspect, pitch: -0.1 - this.lookDown });
+      for (const h of ['left', 'right'] as const) {
+        const w = this.weapons.heldBy(h);
+        this.input.setArmed(h, !!w && w.cls !== 'bow' && w.cls !== 'shield', w ? w.segB.length() : undefined, !!w);
+      }
+    }
   }
 
   private updatePost(realDt: number) {

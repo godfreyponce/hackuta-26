@@ -12,13 +12,15 @@ const STEPS = [
 ];
 
 export const KEYMAP: [string, string][] = [
-  ['Mouse', 'Move your hand (wheel = reach)'],
-  ['LMB hold', 'Grip / grab · release to drop — flick to throw'],
-  ['F', 'Quick throw toward the cursor'],
-  ['RMB hold', 'Raise your guard (block)'],
+  ['Mouse', 'The blade’s point follows the cursor — swing by moving (wheel = reach)'],
+  ['LMB click', 'Take the weapon you point at · a second one goes to your other hand'],
+  ['LMB flick', 'Hold, flick and release to throw'],
+  ['W', 'Thrust'],
+  ['X / F', 'Set the weapon down / quick throw'],
+  ['RMB hold', 'Raise your guard — the aspis if you carry one'],
   ['B', 'Bow — then hold LMB or Space to draw, release to loose'],
   ['A / D', 'Lean to dodge · S crouch'],
-  ['Shift', 'Mouse drives your left hand'],
+  ['Shift', 'Mouse drives your left hand (dual wield)'],
   ['E', 'Drink a potion'],
   ['C', 'Phone a friend (call Telemachus)'],
   ['Q', 'Ask Telemachus for a weapon'],
