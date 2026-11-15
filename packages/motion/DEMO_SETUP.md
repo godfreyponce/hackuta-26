@@ -26,15 +26,19 @@ Open the Motion Lab once on the demo laptop and check that the header says **GPU
 - Use a **plain background** if you can. Busy posters and other people confuse the hand model.
 - Avoid sleeves that match the background, and gloves.
 
-## Per player (about 15 s)
+## Per player (about 15 s): always calibrate
+
+Every new player **must** calibrate. Without it, some people's open hand never reads as "open", so throws and drops don't release.
 
 1. Pause menu → **Recalibrate**, or **Calibrate** in the Motion Lab.
 2. "Step back until your hips are visible."
-3. "Raise your guard and hold still" (3 s). This records the neutral stance for lean and crouch.
-4. "String the bow": **left arm straight out to the side**. This measures arm length.
-5. "Make a fist, then open your hand", both hands, a few times. This sets the grip range.
+3. "Raise your guard: both fists up by your chin, hold still" (2 s). This records the neutral stance for lean and crouch.
+4. "String the bow": **left arm straight out to your LEFT side, at shoulder height**. This measures arm length.
+5. "Make a fist, then open your hand", 3 times. This sets the grip range.
 
-Calibration is saved per browser. Recalibrate whenever the player changes.
+Each step waits until it actually sees the move, shows a hint if something's off, and ends with **PASSED ✓** or **FAILED ✗** plus the reason. Calibration is saved per browser; recalibrate whenever the player changes.
+
+**Before the judges arrive:** in the Motion Lab press **Test gestures** and run all 12 moves (about 2 minutes). Anything that fails tells you why: light, distance, or the move itself.
 
 ## Laptop
 
@@ -42,6 +46,7 @@ Calibration is saved per browser. Recalibrate whenever the player changes.
 - Plug in the charger. Battery saver can throttle the GPU and halve the fps.
 - If the header says **CPU** (degraded), reload the page. If it stays on CPU, switch the pose model to **lite**.
 - If fps drops under 40, tracking switches itself to 960×540 and runs hands every other frame. The header shows `hands ½`.
+- The fps badge needs to stay **≥ 30**. The Windows dev laptop only managed 15–17 fps, so demo on the M-series Mac.
 
 ## Quick troubleshooting
 
@@ -52,5 +57,8 @@ Calibration is saved per browser. Recalibrate whenever the player changes.
 | Grab fires on its own | Recalibrate grip; raise `gripOn` |
 | Weapon drops by itself | Lower `gripOff`; more light on the hands |
 | `call_sign` won't trigger | Thumb and pinky out, other three fingers curled, hand right by the ear; raise `callEarDist` |
+| Throw doesn't register / "Too soft" | Keep the open hand in view after throwing, palm toward the camera; recalibrate |
+| Bow: "Arrow dropped" | Keep the left arm straight out while nocking and pulling |
+| Bow: full draw but no shot | Turn the right palm toward the camera and open it wide. The hint shows the grip number |
 | Left and right hands swapped | Make sure there's only one person in frame; recalibrate |
 | "Camera is in use by another app" | Quit Zoom, FaceTime or Photo Booth and reload |
