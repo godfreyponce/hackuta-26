@@ -1,11 +1,20 @@
-# Local team notes. Never commit: this repo is public.
+# Private team notes. Never commit: this repo goes public.
 event/
 .claude/skills/refresh-discord
 
-# Keys and installs stay out of git.
+# Keys stay out of git. The negation must stay below every .env line.
+.env
+.env.*
 .env*
+*.local
 !.env.example
-node_modules/
 
-# Call frames (faces) and logs from local test calls.
+# Installs and build output.
+node_modules/
+dist/
+out/
+
+# Recordings, frames and logs from local test calls.
+recordings/
+apps/agent/dev/captures/
 chert/agent/runs/
