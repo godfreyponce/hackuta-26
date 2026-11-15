@@ -9,6 +9,7 @@ import { redactPaths, scrub } from './log';
 import { hub } from './hub';
 import { apiRoutes } from './routes/api';
 import { devRoutes } from './routes/dev';
+import { prefabRoutes } from './routes/prefabs';
 
 function safeEq(a: string, b: string): boolean {
   const x = Buffer.from(a), y = Buffer.from(b);
@@ -52,6 +53,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   });
 
   await app.register(apiRoutes);
+  await app.register(prefabRoutes);
   if (isDev) await app.register(devRoutes);
   return app;
 }
