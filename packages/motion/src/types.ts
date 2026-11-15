@@ -71,6 +71,21 @@ export interface TrackerStats {
   handRoi?: boolean;
   /** Perf mode with crops: the left and right crops run on alternate frames. */
   handsAlternate?: boolean;
+  /** IMAGE retries skipped during the last second because pose + crops had used up the frame's budget. */
+  roiRetrySkips?: number;
+  /**
+   * Frames per second the camera really delivers, whether or not detection kept up (`fps` counts processed
+   * frames). A dim room drops it: macOS lengthens the exposure, 30 fps becomes ~15-20.
+   */
+  cameraFps?: number;
+  /** Mean luma of the camera image, 0 (black) … 1 (white), sampled about once a second. */
+  brightness?: number;
+  /**
+   * Advice the game can show the player, or null. 'lighting': the camera is starved for light (under
+   * config.lowLightFps delivered frames per second, or a very dark image, for config.lowLightWindows seconds) —
+   * hands are lost and blur first; "turn on a light / face a window".
+   */
+  hint?: 'lighting' | null;
 }
 
 export interface PendingGesture {

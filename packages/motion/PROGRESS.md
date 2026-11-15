@@ -42,7 +42,7 @@ pnpm --filter @ithaca/motion typecheck
 | C.7 | `createReplayController`, `runReplay`. Recordings now store the calibration; older ones get the grip range rebuilt from their own data (`replayProfile`) | `src/replay.ts`, `src/recording.ts` |
 | C.7 | 5 reference recordings: throw, bow, block, call, drink | `fixtures/` |
 | C.8 | fps, ms/frame (pose · hands), per-side hand hit rate and IMAGE retries in the Lab. Perf fallback only when detection is the bottleneck: alternate L/R hand crops (960×540 + hands every 2nd frame only on the old full-frame path); reset on stop | `tracker.ts` |
-| C.2 | Pose-guided hand crops: one VIDEO HandLandmarker per side on a 256² crop placed from the pose wrist (Holistic geometry), same-frame IMAGE retry, full-frame re-seed, duplicate-hand guard. Finds hands down to ~40 px that the full-frame palm detector misses below ~60–90 px | `handRoi.ts`, `tracker.ts` |
+| C.2 | Pose-guided hand crops: one VIDEO HandLandmarker per side on a 256² crop placed from the pose wrist (Holistic geometry), grown to the side's own hand when it reaches toward the camera; both crops first, then same-frame IMAGE retries sharing the frame budget fairly (the right hand used to get none); full-frame re-seed (also for a hand at the frame edge); duplicate-hand guard (also with alternating crops); one model download; stop() during start() leaks nothing. Finds hands down to ~40 px that the full-frame palm detector misses below ~60–90 px | `handRoi.ts`, `tracker.ts` |
 | C.9 | `degraded` when visibility < 0.5 or on CPU; venue guide | `engine.ts`, `DEMO_SETUP.md` |
 
 ## For Adam (A): wiring it in
@@ -62,8 +62,9 @@ import { createReplayController, replayProfile } from '@ithaca/motion';
 - **Expect extra events and ignore the ones that don't apply:**
   - The bow fires `grab`/`release` for the right hand too.
   - The phone gesture can fire `grab`.
-  - During a bow draw or a block, `drink` and `swing` can occasionally fire (both showed up in the recordings).
-  - Gate them on game state: no `drink` unless a potion is held, no `release` throw unless something is held.
+  - During a bow draw, `swing` can occasionally fire. `drink` no longer does: it needs ONE gripping hand at the mouth (palm ≤ 8.5 cm), held about still (< 0.8 m/s) for 600 ms, no block, no nocked arrow, the other hand not up by the face, no swing in the last 250 ms (the guard and the bow anchor read as drinks 5 times on the recordings, and mid-fight in the live play log; now 0, and the 3 real drinks still fire).
+  - Gate them on game state anyway: no `drink` unless a potion is held, no `release` throw unless something is held.
+- **`getStats().hint === 'lighting'`**: the camera is starved for light (under 24 fps delivered, or a very dark image, for 2 s). Tell the player to turn on a light / face a window; `cameraFps` and `brightness` say how bad.
 - **`release.vel` is fast but not precise in direction** (35–56° off in the recording). Use the speed for the throw and add aim assist toward the nearest suitor in front of the player.
 - Gameplay events are muted during calibration. Calibration starts by sending `release` for any gripping hand.
 - No changes to `packages/shared`. The extras live on `MotionController`, which extends `InputController`.

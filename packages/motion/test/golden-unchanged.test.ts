@@ -2,7 +2,9 @@
 // exactly the same events (type, hand, frame time, swing speed/dir) as before the throw/bow fix.
 // The snapshot was recorded on the pre-fix code (commit 8765147). The grab/release, sword swing and drink
 // snapshots were refreshed for the fused-curl grip (M3): same events, 17-67 ms earlier (hysteresis now runs on
-// the unfiltered grip, and a clear reading fires on its first frame).
+// the unfiltered grip, and a clear reading fires on its first frame). The drink snapshot was refreshed when drink
+// started needing a still hand and no swing in the last 250 ms: this script teleports the fist to the mouth (that
+// jump reads as a 17.9 m/s swing), so the same drink fires 250 ms later.
 import { describe, expect, it } from 'vitest';
 import type { InputEvent } from '@ithaca/shared';
 import { Engine } from '../src/engine';

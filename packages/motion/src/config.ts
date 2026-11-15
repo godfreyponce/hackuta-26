@@ -20,8 +20,24 @@ export const DEFAULT_CONFIG = {
   handRoiSticky: 0.12,
   /** Pose wrist visibility needed to place a crop from the pose (Holistic's gate). */
   handRoiMinWristVis: 0.1,
-  /** IMAGE retry only while the frame has used less than this (pose + crops so far). */
-  handRoiRetryBudgetMs: 20,
+  /**
+   * IMAGE retries (after both VIDEO crops ran) only while pose + crops + the retry fit in this share of the
+   * camera's frame interval (33 ms at 30 fps: 30 ms; a 20 fps dim-light camera leaves 45 ms). Past the interval
+   * the next camera frame would be dropped — pose and both hands — for one hand recovered a frame early.
+   */
+  handRoiRetryShare: 0.9,
+
+  // ── lighting hint (tracker.ts → stats.hint) ──
+  /** The camera delivering fewer frames per second than this (dim light: macOS lengthens the exposure) … */
+  lowLightFps: 24,
+  /** … or a mean frame luma below this (0..1) … */
+  lowLightLuma: 0.15,
+  /** … for this many 1 s windows in a row raises stats.hint = 'lighting' (cleared after as many good windows + 1). */
+  lowLightWindows: 2,
+  /** Hand crops are brightened (toward mean luma 0.4) while the image's mean luma is below this … */
+  cropBoostBelowLuma: 0.25,
+  /** … by at most this factor (≤ 1 = off). */
+  cropBoostMax: 3,
 
   // ── mapping (C.3) ──
   /** Game arm reach the player's measured arm length maps to. */
@@ -102,8 +118,15 @@ export const DEFAULT_CONFIG = {
   blockMaxForearmSlope: 0.6,
   blockHoldMs: 150,
   blockEndMs: 200,
-  drinkMouthDist: 0.12,
+  /** Palm within this of the mouth (m). A bow anchor sits ~0.10 m off, a real drink 0.03-0.06 m (fixtures). */
+  drinkMouthDist: 0.085,
   drinkHoldMs: 600,
+  /** The hand must be about still at the mouth (m/s); a fist passing the face mid-fight is not a drink. */
+  drinkMaxSpeed: 0.8,
+  /** No drink within this long after that hand swung (ms). */
+  drinkAfterSwingMs: 250,
+  /** The other hand also this close to the mouth (m) = a guard with both fists up, not a drink. */
+  drinkOtherHandDist: 0.2,
   bowElbowAngle: 150,
   /** Left wrist must be at least this far forward (game z). */
   bowWristForwardZ: -0.4,
@@ -161,7 +184,14 @@ export const CONFIG_RANGES: Record<string, Partial<Record<keyof MotionConfig, [n
     handRoiCenterAlong: [0, 2.5, 0.05],
     handRoiSticky: [0, 0.4, 0.01],
     handRoiMinWristVis: [0, 0.8, 0.05],
-    handRoiRetryBudgetMs: [0, 40, 1],
+    handRoiRetryShare: [0, 1.5, 0.05],
+  },
+  Lighting: {
+    lowLightFps: [0, 60, 1],
+    lowLightLuma: [0, 0.5, 0.01],
+    lowLightWindows: [1, 10, 1],
+    cropBoostBelowLuma: [0, 0.6, 0.01],
+    cropBoostMax: [1, 5, 0.1],
   },
   Mapping: {
     gameArmReach: [0.4, 1.2, 0.05],
@@ -219,8 +249,11 @@ export const CONFIG_RANGES: Record<string, Partial<Record<keyof MotionConfig, [n
     blockMaxForearmSlope: [0.1, 1, 0.05],
     blockHoldMs: [0, 600, 10],
     blockEndMs: [0, 800, 10],
-    drinkMouthDist: [0.04, 0.3, 0.01],
+    drinkMouthDist: [0.02, 0.3, 0.005],
     drinkHoldMs: [100, 2000, 50],
+    drinkMaxSpeed: [0.1, 3, 0.05],
+    drinkAfterSwingMs: [0, 2000, 50],
+    drinkOtherHandDist: [0, 0.5, 0.01],
     bowElbowAngle: [110, 180, 1],
     bowWristForwardZ: [-0.8, -0.1, 0.01],
     bowNockDist: [0.05, 0.4, 0.01],
