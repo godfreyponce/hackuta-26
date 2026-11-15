@@ -69,3 +69,5 @@ The game keeps the template. No other action.
 ## Measured so far
 
 Stable Fast 3D on one mug crop from a real call: 2.5 s (512 texture, 287 KB GLB) and 3.7 s (1024 texture, 360 KB GLB), round trip from the laptop. Script: `forge/sf3d.mjs`.
+
+That raw crop (hand in it) gave a lumpy shape. With a cleanup first, it looks like a mug: `forge/clean.mjs` (SD3.5 Large Turbo image-to-image, strength 0.8, 3.5 s, 4 credits) then Stable Point Aware 3D (4.9 s, 4 credits). About 8.4 s and 8 credits per weapon.
