@@ -65,4 +65,14 @@ export interface CalibrationStep {
   progress: number;
   /** Player-facing instruction. */
   message: string;
+  /** 1-based position of this step among the 4 real steps (0 for done/failed). */
+  index: number;
+  total: number;
+  /** Live feedback on what the tracker sees right now ("Raise your left arm higher"). */
+  hint: string;
+  /** Steps already passed, in order. */
+  passed: CalibrationStepName[];
+  /** When step === 'failed': which step failed and why. */
+  failedStep?: CalibrationStepName;
+  failedReason?: string;
 }

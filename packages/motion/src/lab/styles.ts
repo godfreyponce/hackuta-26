@@ -32,7 +32,7 @@ export const LAB_CSS = `
 .ithaca-lab .stage video, .ithaca-lab .stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
 .ithaca-lab .placeholder { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); }
 .ithaca-lab .placeholder[hidden] { display: none; }
-.ithaca-lab .ring { position: absolute; top: 12px; left: 12px; width: 72px; height: 72px; border-radius: 50%;
+.ithaca-lab .ring { position: absolute; bottom: 12px; left: 12px; width: 72px; height: 72px; border-radius: 50%;
   display: grid; place-items: center; font-size: 10px; text-align: center; font-weight: 600;
   background: conic-gradient(var(--accent) calc(var(--p) * 1turn), #0008 0); }
 .ithaca-lab .ring span { background: #000c; border-radius: 50%; width: 58px; height: 58px; display: grid; place-items: center; }
@@ -67,4 +67,43 @@ export const LAB_CSS = `
 .ithaca-lab label.file input { display: none; }
 .ithaca-lab .badge[hidden] { display: none; }
 .ithaca-lab video[hidden] { display: none; }
+.ithaca-lab .calib { top: auto; padding: 12px 16px 14px; }
+.ithaca-lab .calib-head { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+.ithaca-lab .calib[data-result="pass"] .calib-head { color: var(--ok); font-size: 20px; }
+.ithaca-lab .calib[data-result="fail"] .calib-head { color: var(--bad); font-size: 20px; }
+.ithaca-lab .calib[data-result="pass"] { box-shadow: inset 0 3px 0 var(--ok); }
+.ithaca-lab .calib[data-result="fail"] { box-shadow: inset 0 3px 0 var(--bad); }
+.ithaca-lab .calib-steps { list-style: none; display: flex; justify-content: center; gap: 6px; padding: 0; margin: 6px 0; flex-wrap: wrap; }
+.ithaca-lab .calib-steps li { font-size: 12px; font-weight: 600; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+.ithaca-lab .calib-steps li.active { border-color: var(--accent); color: var(--accent); }
+.ithaca-lab .calib-steps li.pass { background: var(--ok); border-color: var(--ok); color: #08150e; }
+.ithaca-lab .calib-steps li.fail { background: var(--bad); border-color: var(--bad); color: #fff; }
+.ithaca-lab .calib-msg { font-size: 20px; }
+.ithaca-lab .calib-hint { font-size: 14px; font-weight: 500; color: var(--warn); min-height: 1.4em; }
+.ithaca-lab .calib-actions { margin-top: 8px; }
+.ithaca-lab .calib-actions[hidden] { display: none; }
+.ithaca-lab .coach { position: absolute; left: 50%; top: 12px; transform: translateX(-50%); width: min(92%, 640px);
+  background: #000c; border-radius: 10px; padding: 10px 14px 12px; text-align: center; box-shadow: inset 0 3px 0 var(--accent); }
+.ithaca-lab .coach[hidden] { display: none; }
+.ithaca-lab .coach[data-flash="pass"] { box-shadow: inset 0 3px 0 var(--ok); background: #0d2a1bdd; }
+.ithaca-lab .coach[data-flash="fail"] { box-shadow: inset 0 3px 0 var(--bad); background: #3a1208dd; }
+.ithaca-lab .coach-head { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+.ithaca-lab .coach-say { font-size: 22px; font-weight: 700; margin: 4px 0; }
+.ithaca-lab .coach[data-flash="pass"] .coach-say { color: var(--ok); }
+.ithaca-lab .coach[data-flash="fail"] .coach-say { color: var(--bad); }
+.ithaca-lab .coach-hint { font-size: 14px; color: var(--warn); min-height: 1.4em; }
+.ithaca-lab .coach-timer { height: 4px; background: #ffffff20; border-radius: 2px; margin: 8px 0; overflow: hidden; }
+.ithaca-lab .coach-timer i { display: block; height: 100%; background: var(--accent); }
+.ithaca-lab .coach-actions { display: flex; gap: 6px; justify-content: center; }
+.ithaca-lab .coach-actions [hidden] { display: none; }
+.ithaca-lab .muted { color: var(--muted); margin: 0 0 6px; }
+.ithaca-lab .checklist { list-style: none; margin: 0; padding: 4px; background: var(--panel); border-radius: 6px; }
+.ithaca-lab .checklist li { display: grid; grid-template-columns: 20px 190px 1fr; gap: 6px; padding: 4px 6px; border-radius: 4px; cursor: pointer; align-items: baseline; }
+.ithaca-lab .checklist li:hover { background: #ffffff0a; }
+.ithaca-lab .checklist .ic { font-weight: 700; text-align: center; }
+.ithaca-lab .checklist .dt { color: var(--muted); font-size: 12px; }
+.ithaca-lab .checklist li.active { background: #f8961e1a; }
+.ithaca-lab .checklist li.active .ic { color: var(--accent); }
+.ithaca-lab .checklist li.pass .ic { color: var(--ok); }
+.ithaca-lab .checklist li.fail .ic, .ithaca-lab .checklist li.fail .dt { color: var(--bad); }
 `;

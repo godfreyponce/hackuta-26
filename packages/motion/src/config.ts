@@ -80,7 +80,15 @@ export const DEFAULT_CONFIG = {
   bowCancelMs: 400,
 
   // ── calibration (C.6) ──
-  calibTimeoutMs: 30000,
+  /** Wall-clock safety net for the whole calibration (frames stopped arriving). */
+  calibTimeoutMs: 90000,
+  /** Each step fails if the movement is not seen within this. */
+  calibStepTimeoutMs: 15000,
+  /** Raw mean finger curl that counts as a fist / an open hand during the grip step. */
+  calibFistRaw: 0.6,
+  calibOpenRaw: 0.3,
+  /** Hands must move slower than this (m/s) for "hold still" steps. */
+  calibStillSpeed: 0.6,
   calibHipVisibility: 0.6,
   /** A hand's raw curl must span at least this during the fist/open step to replace the default range. */
   calibMinGripRange: 0.25,

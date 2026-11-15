@@ -105,7 +105,7 @@ export class Engine {
     if (this.calibrator) {
       const pi = frame.poseImage;
       const hipVis = pi ? Math.min(pi[23]?.visibility ?? 0, pi[24]?.visibility ?? 0) : 0;
-      this.calibrator.update(body, hipVis);
+      this.calibrator.update(body, hipVis, this.state);
     }
     this.state.t = frame.t;
   }

@@ -25,7 +25,7 @@ pnpm --filter @ithaca/motion typecheck
 | C.4 | Finger-curl grip, 0.65/0.35 hysteresis × 2 frames, hold-through-blips, 80 ms release velocity | `src/grip.ts` |
 | C.5 | swing, block, bow (nock/draw/release), drink, call_sign (+ progress ring), request_weapon, tracking_lost/ok | `src/gestures.ts`, `engine.ts` |
 | C.5 | Every threshold in `config.ts`, with live sliders in the Lab (saved per browser; "copy JSON" button) | `src/config.ts`, `src/lab/panels.ts` |
-| C.6 | 4-step calibration with `onCalibrationStep`, saved to localStorage, ~10 s end-to-end, 30 s timeout | `src/calibration.ts` |
+| C.6 | 4-step calibration. Each step **only advances while you do the move** (guard pose held still, arm straight out at shoulder height, 3 real fist→open cycles), with live hints. A step fails after 15 s with the reason. PASS/FAIL panel in the Lab. Saved to localStorage | `src/calibration.ts` |
 | C.7 | Motion Lab: skeleton overlay, front/top game-space view, state readout, event log, detector chips, sliders, calibrate, record → download, load replay | `src/lab/*`, `lab/` |
 | C.7 | `createReplayController(json)` (real time, loops) + `runReplay()` (instant, deterministic) | `src/replay.ts`, `src/recording.ts` |
 | C.8 | ms/frame + fps in the Lab header; auto-drop to 960×540 + hands every 2nd frame when fps < 40 | `tracker.ts` |
@@ -48,6 +48,8 @@ import { createReplayController } from '@ithaca/motion';            // VITE_INPU
 - No changes to `packages/shared`. The extras live on `MotionController`, which extends `InputController`.
 
 ## To test by hand in the Motion Lab
+
+**Fastest way:** press **Test gestures**. It asks for all 12 moves one at a time (right/left grab, throw, swing, block, bow, drink, call sign, request weapon, lean left/right, crouch). Each one shows the instruction, a live hint of what the tracker sees, and a 15 s timer, then **PASS ✓** (with numbers, e.g. throw speed and angle) or **FAIL ✗** (with the reason) and Retry / Next. The checklist under the video keeps the score; click any row to redo just that move.
 
 Stand 2 m back with light in front of you (see `DEMO_SETUP.md`). Watch the event log and the **Detectors** chips.
 

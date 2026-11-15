@@ -8,6 +8,7 @@ import { downloadRecording, parseRecording } from '../recording';
 import { createReplayController } from '../replay';
 import type { CalibrationStep, PendingGesture, RawLandmark, Recording } from '../types';
 import type { Profile } from '../profile';
+import { GestureGuide, type GuideView } from './guide';
 import { buildSliders, drawGameSpace } from './panels';
 import { LAB_CSS } from './styles';
 
@@ -51,6 +52,7 @@ export function mountMotionLab(root: HTMLElement, opts: MotionLabOptions = {}): 
       <button data-a="stop" disabled>Stop</button>
       <button data-a="calibrate" disabled>Calibrate</button>
       <button data-a="uncalibrate">Reset calibration</button>
+      <button data-a="guide" disabled>Test gestures</button>
       <span class="sep"></span>
       <input data-a="label" placeholder="label (throw, bow…)" size="14">
       <button data-a="record" disabled>● Record</button>
@@ -69,7 +71,26 @@ export function mountMotionLab(root: HTMLElement, opts: MotionLabOptions = {}): 
           <canvas class="overlay"></canvas>
         </div>
         <div class="ring" hidden><span></span></div>
-        <div class="calib" hidden><div data-k="calibMsg"></div><progress max="1" value="0"></progress></div>
+        <div class="calib" hidden>
+          <div class="calib-head" data-k="calibHead"></div>
+          <ol class="calib-steps" data-k="calibSteps"></ol>
+          <div class="calib-msg" data-k="calibMsg"></div>
+          <div class="calib-hint" data-k="calibHint"></div>
+          <progress max="1" value="0"></progress>
+          <div class="calib-actions" hidden><button data-a="calibRetry" class="primary">Try again</button> <button data-a="calibClose">Close</button></div>
+        </div>
+        <div class="coach" hidden>
+          <div class="coach-head"><span data-k="coachTitle"></span><span data-k="coachStage"></span></div>
+          <div class="coach-say" data-k="coachSay"></div>
+          <div class="coach-hint" data-k="coachHint"></div>
+          <div class="coach-timer"><i data-k="coachTimer"></i></div>
+          <div class="coach-actions">
+            <button data-a="guideRetry" hidden>Retry</button>
+            <button data-a="guideNext" hidden>Next ▶</button>
+            <button data-a="guideSkip">Skip</button>
+            <button data-a="guideStop">Stop test</button>
+          </div>
+        </div>
         <div class="placeholder">Camera off. Press <b>Start camera</b>.</div>
       </section>
       <aside>
@@ -84,6 +105,9 @@ export function mountMotionLab(root: HTMLElement, opts: MotionLabOptions = {}): 
       </aside>
     </main>
     <div class="below">
+      <section class="guide-panel"><h2>Gesture test <span data-k="guideScore"></span></h2>
+        <p class="muted">Press <b>Test gestures</b>. Each move is asked for one at a time and marked PASS or FAIL. Click a row to redo just that move.</p>
+        <ol class="checklist" data-k="checklist"></ol></section>
       <section><h2>Thresholds <small>(double-click a slider to reset it)</small></h2><div class="sliders"></div></section>
     </div>`;
 
@@ -111,6 +135,14 @@ export function mountMotionLab(root: HTMLElement, opts: MotionLabOptions = {}): 
   const calibMsg = badge('calibMsg');
   const calibBar = q<HTMLProgressElement>('.calib progress');
   let calibUnsub: (() => void) | null = null;
+  const calibHead = badge('calibHead');
+  const calibSteps = badge('calibSteps');
+  const calibHint = badge('calibHint');
+  const calibActions = q<HTMLElement>('.calib-actions');
+  const coach = q<HTMLElement>('.coach');
+  const btnGuide = q<HTMLButtonElement>('[data-a="guide"]');
+  const checklist = badge('checklist');
+  let guide: GestureGuide | null = null;
   const btnRec = q<HTMLButtonElement>('[data-a="record"]');
   const labelIn = q<HTMLInputElement>('[data-a="label"]');
   const loadIn = q<HTMLInputElement>('[data-a="load"]');
@@ -151,6 +183,7 @@ export function mountMotionLab(root: HTMLElement, opts: MotionLabOptions = {}): 
     video.hidden = true;
     btnStop.disabled = false;
     btnCal.disabled = false;
+    btnGuide.disabled = false;
     replayBadge.hidden = false;
     logLine('replay', `${file.name}: ${rec.frames.length} frames${rec.meta.label ? ' · ' + rec.meta.label : ''}`);
   }
@@ -161,19 +194,45 @@ export function mountMotionLab(root: HTMLElement, opts: MotionLabOptions = {}): 
     btnCal.disabled = true;
     calibBox.hidden = false;
     calibUnsub?.();
-    calibUnsub = c.onCalibrationStep?.((s) => {
-      calibMsg.textContent = s.message;
-      calibBar.value = s.progress;
-    }) ?? null;
+    guide?.stop();
+    calibBox.dataset.result = '';
+    calibActions.hidden = true;
+    calibUnsub = c.onCalibrationStep?.(renderCalibStep) ?? null;
     const t0c = performance.now();
     const res = await c.calibrate();
-    logLine('calibration', `${res.ok ? 'ok' : 'FAILED'} in ${((performance.now() - t0c) / 1000).toFixed(1)}s · arm ${res.armLengthM.toFixed(2)} m · shoulders ${res.shoulderWidthM.toFixed(2)} m`);
+    const secs = ((performance.now() - t0c) / 1000).toFixed(1);
+    logLine('calibration', res.ok ? `PASSED in ${secs}s · arm ${res.armLengthM.toFixed(2)} m · shoulders ${res.shoulderWidthM.toFixed(2)} m` : `FAILED after ${secs}s`);
     calibUnsub?.();
     calibUnsub = null;
-    setTimeout(() => {
-      calibBox.hidden = true;
-    }, 1200);
+    calibActions.hidden = false;
+    if (res.ok) setTimeout(() => { if (calibBox.dataset.result === 'pass') calibBox.hidden = true; }, 5000);
     btnCal.disabled = !controller;
+  }
+
+  const CALIB_ORDER = ['step_back', 'guard', 'bow', 'grip'] as const;
+  const CALIB_LABEL: Record<(typeof CALIB_ORDER)[number], string> = {
+    step_back: 'Hips in view',
+    guard: 'Guard',
+    bow: 'Arm out',
+    grip: 'Fist / open',
+  };
+  function renderCalibStep(s: CalibrationStep): void {
+    const failed = s.step === 'failed';
+    const done = s.step === 'done';
+    calibBox.dataset.result = done ? 'pass' : failed ? 'fail' : '';
+    calibHead.textContent = done
+      ? 'Calibration PASSED ✓'
+      : failed
+        ? `Calibration FAILED ✗ at "${CALIB_LABEL[s.failedStep as (typeof CALIB_ORDER)[number]] ?? s.failedStep}"`
+        : `Calibration · step ${s.index} of ${s.total}`;
+    calibSteps.innerHTML = CALIB_ORDER.map((k) => {
+      const st = s.passed.includes(k) ? 'pass' : failed && s.failedStep === k ? 'fail' : s.step === k ? 'active' : 'pending';
+      const icon = { pass: '✓', fail: '✗', active: '▶', pending: '○' }[st];
+      return `<li class="${st}">${icon} ${CALIB_LABEL[k]}</li>`;
+    }).join('');
+    calibMsg.textContent = done ? 'All 4 steps passed.' : failed ? (s.failedReason ?? '') : s.message;
+    calibHint.textContent = done ? s.hint : failed ? 'Fix that and press Try again.' : s.hint;
+    calibBar.value = done ? 1 : s.progress;
   }
   buildSliders(q<HTMLElement>('.sliders'));
 
@@ -215,6 +274,7 @@ export function mountMotionLab(root: HTMLElement, opts: MotionLabOptions = {}): 
       btnStop.disabled = false;
       btnCal.disabled = false;
       btnRec.disabled = false;
+      btnGuide.disabled = false;
     } catch (err) {
       errorEl.textContent = err instanceof Error ? err.message : String(err);
       stop();
@@ -233,6 +293,10 @@ export function mountMotionLab(root: HTMLElement, opts: MotionLabOptions = {}): 
     btnStop.disabled = true;
     btnCal.disabled = true;
     btnRec.disabled = true;
+    btnGuide.disabled = true;
+    guide?.stop();
+    guide = null;
+    coach.hidden = true;
     btnRec.classList.remove('on');
     btnRec.textContent = '● Record';
     replayBadge.hidden = true;
@@ -291,6 +355,10 @@ export function mountMotionLab(root: HTMLElement, opts: MotionLabOptions = {}): 
   function loop(now: number): void {
     raf = requestAnimationFrame(loop);
     drawOverlay();
+    if (guide) {
+      guide.tick(now);
+      renderGuide(guide.view());
+    }
     const pg = controller?.getPendingGesture?.() ?? null;
     ring.hidden = !pg;
     if (pg) {
@@ -314,6 +382,24 @@ export function mountMotionLab(root: HTMLElement, opts: MotionLabOptions = {}): 
   btnStop.addEventListener('click', stop);
   btnCal.addEventListener('click', () => void runCalibration());
   btnRec.addEventListener('click', toggleRecording);
+  btnGuide.addEventListener('click', () => startGuide(0));
+  q<HTMLButtonElement>('[data-a="guideSkip"]').addEventListener('click', () => guide?.skip());
+  q<HTMLButtonElement>('[data-a="guideRetry"]').addEventListener('click', () => guide?.retry());
+  q<HTMLButtonElement>('[data-a="guideNext"]').addEventListener('click', () => guide?.next());
+  q<HTMLButtonElement>('[data-a="guideStop"]').addEventListener('click', () => {
+    guide?.stop();
+    coach.hidden = true;
+  });
+  checklist.addEventListener('click', (ev) => {
+    const li = (ev.target as HTMLElement).closest<HTMLElement>('li[data-i]');
+    if (!li || !controller) return;
+    if (!guide) startGuide(-1);
+    guide?.runStep(Number(li.dataset.i));
+  });
+  q<HTMLButtonElement>('[data-a="calibRetry"]').addEventListener('click', () => void runCalibration());
+  q<HTMLButtonElement>('[data-a="calibClose"]').addEventListener('click', () => {
+    calibBox.hidden = true;
+  });
   loadIn.addEventListener('change', () => {
     const f = loadIn.files?.[0];
     if (f) void loadReplay(f);
@@ -326,6 +412,53 @@ export function mountMotionLab(root: HTMLElement, opts: MotionLabOptions = {}): 
   q<HTMLButtonElement>('[data-a="clear"]').addEventListener('click', () => {
     logEl.innerHTML = '';
   });
+  function startGuide(from: number): void {
+    const c = controller;
+    if (!c) return;
+    calibBox.hidden = true;
+    guide?.stop();
+    guide = new GestureGuide(c, (title, ok, detail) => logLine(ok ? 'PASS' : 'FAIL', `${title}: ${detail}`));
+    if (from >= 0) guide.start(from);
+    renderGuide(guide.view());
+  }
+
+  let lastChecklist = '';
+  function renderGuide(v: GuideView): void {
+    const cur = v.current;
+    coach.hidden = !cur;
+    if (cur) {
+      coach.dataset.flash = cur.flash ?? '';
+      badge('coachTitle').textContent = cur.title;
+      badge('coachStage').textContent = cur.stages > 1 ? `part ${cur.stage} of ${cur.stages}` : '';
+      badge('coachSay').textContent = cur.flash === 'pass' ? 'PASSED ✓' : cur.flash === 'fail' ? 'FAILED ✗' : cur.say;
+      badge('coachHint').textContent = cur.hint;
+      badge('coachTimer').style.width = `${(cur.remainingMs / cur.totalMs) * 100}%`;
+      const failed = guide?.currentStatus === 'fail' && !cur.flash;
+      if (failed) {
+        badge('coachSay').textContent = 'FAILED ✗';
+        badge('coachHint').textContent = v.steps[v.index]?.detail ?? '';
+        coach.dataset.flash = 'fail';
+      }
+      q<HTMLButtonElement>('[data-a="guideRetry"]').hidden = !failed;
+      q<HTMLButtonElement>('[data-a="guideNext"]').hidden = !failed;
+      q<HTMLButtonElement>('[data-a="guideSkip"]').hidden = failed;
+    }
+    const passed = v.steps.filter((s) => s.status === 'pass').length;
+    const tried = v.steps.filter((s) => s.status === 'pass' || s.status === 'fail').length;
+    badge('guideScore').textContent = tried ? `${passed} / ${v.steps.length} passed` : '';
+    const html = v.steps
+      .map((s, i) => {
+        const icon = { pending: '○', active: '▶', pass: '✓', fail: '✗', skipped: '–' }[s.status];
+        return `<li data-i="${i}" class="${s.status}"><span class="ic">${icon}</span><span class="tt">${escapeHtml(s.title)}</span><span class="dt">${escapeHtml(s.detail)}</span></li>`;
+      })
+      .join('');
+    if (html !== lastChecklist) {
+      checklist.innerHTML = html;
+      lastChecklist = html;
+    }
+  }
+  renderGuide(new GestureGuide({ on: () => () => {}, getState: () => ({ t: 0, tracking: 'off', hands: { left: blankHand(), right: blankHand() }, body: { lean: 0, crouch: 0, yaw: 0 }, bowDraw: 0 }) }).view());
+
   raf = requestAnimationFrame(loop);
 
   return () => {
@@ -378,4 +511,9 @@ export function round2(_k: string, v: unknown): unknown {
 
 function escapeHtml(s: string): string {
   return s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] ?? c);
+}
+
+function blankHand() {
+  const z = () => ({ x: 0, y: 0, z: 0 });
+  return { visible: false, confidence: 0, pos: z(), vel: z(), grip: 0, forward: z(), up: z() };
 }
