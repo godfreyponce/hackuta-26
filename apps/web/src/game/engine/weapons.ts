@@ -639,10 +639,13 @@ export class WeaponManager {
       if ((w.state !== 'racked' && w.state !== 'free') || w.cls === 'arrow' || w.cls === 'bow' || this.inFlight(w)) continue;
       const gp = this.gripWorld(w, _v);
       const d = gp.distanceTo(h.pos);
-      if (w.state === 'free' && d > 2.5) continue;
+      // a webcam player can't walk over to a thrown blade: loose weapons anywhere in the hall come back to a fist
+      // ("gravity gloves"), but the table and anything close are still preferred
+      if (w.state === 'free' && d > 12) continue;
+      const farBias = w.state === 'free' ? Math.max(0, d - 2.5) * 0.5 : 0;
       const sideBias = (h.side === 'left' ? gp.x - h.pos.x : h.pos.x - gp.x) > 0 ? 0.25 : 0; // wrong side of the hand
       const shieldBias = w.cls === 'shield' ? (h.side === 'left' ? -0.4 : 0.6) : 0;
-      const score = d + sideBias + shieldBias;
+      const score = d + farBias + sideBias + shieldBias;
       if (score < bestScore) { bestScore = score; best = w; }
     }
     return best;

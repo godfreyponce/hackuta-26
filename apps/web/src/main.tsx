@@ -27,7 +27,7 @@ if (import.meta.env.DEV || params.get('debug') === '1') {
 }
 void setupInput(kind);
 // dev only: a local play log (errors, fps, tracking, combat) so a teammate can watch a session — see dev/playLog.ts
-if (import.meta.env.DEV) void import('./dev/playLog').then((m) => m.startPlayLog());
+if (import.meta.env.DEV || params.get('playlog') === '1') void import('./dev/playLog').then((m) => m.startPlayLog());
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
