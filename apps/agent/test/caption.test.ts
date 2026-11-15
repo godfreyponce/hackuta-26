@@ -23,7 +23,8 @@ async function textBox(lines: string[]) {
 
 const SIDE = 16; // text must not touch the frame edges
 const quip = 'Behold, the Enchanted Golden Frying Pan of the Western Isles, forged in fire and fury, heavier than it looks and twice as mean as a suitor on a bad day!';
-const TEXTS = [...Object.values(LINES).flat(), quip, 'Your Enchanted Golden Frying Pan of Ithaca just flattened a suitor. Ha!'];
+const longWord = 'Behold the Antidisestablishmentarianismophobicbroomstickofdoom, Telemachus!';
+const TEXTS = [...Object.values(LINES).flat(), quip, longWord, 'Your Enchanted Golden Frying Pan of Ithaca just flattened a suitor. Ha!'];
 
 test('every fixed line and a long forge quip: pages of at most 2 lines, whole inside the game, nothing in the bottom bar', async () => {
   for (const text of TEXTS) {
@@ -37,8 +38,10 @@ test('every fixed line and a long forge quip: pages of at most 2 lines, whole in
   }
 });
 
-test('paging keeps every word of the line', () => {
-  for (const text of TEXTS) assert.equal(captionPages(text).flat().join(' '), text.split(/\s+/).join(' '));
+test('the pages together are the web subtitle text: nothing cut, no ellipsis added', () => {
+  const letters = (t: string) => t.replace(/\s+/g, '');
+  for (const text of TEXTS) assert.equal(letters(captionPages(text).flat().join('')), letters(text));
+  assert.equal(quip.length, 152);
 });
 
 test('the caption leaves every row above its band unchanged', async () => {
@@ -71,6 +74,42 @@ test('agent-video: caption pixels while a line plays, still there just after its
     relay.showCaption('A double! Ha!'); // the old line's clear must not take the new line down
     await sleep(CAPTION_LINGER_MS + 300);
     assert.ok(!frame().equals(plain), 'a newer line was cleared by the older line\'s end');
+  } finally {
+    await relay.close();
+  }
+});
+
+test('agent-video: a long line pages through its audio by character share, and the last page clears after the linger', async () => {
+  const pages = captionPages(quip);
+  assert.ok(pages.length >= 3, `${pages.length} pages`);
+  const ms = 1_800, perChar = ms / quip.length;
+  const starts = pages.map((_, i) => pages.slice(0, i).reduce((n, p) => n + p.join(' ').length * perChar, 0));
+  const relay = new VideoRelay();
+  let last: VideoFrame | null = null;
+  relay.source.captureFrame = (f: VideoFrame) => { last = f; };
+  const frame = () => Buffer.from(last!.data);
+  await relay.start('Telemachus');
+  await sleep(200);
+  const plain = frame();
+  try {
+    const t0 = Date.now();
+    relay.showCaption(quip, ms);
+    const seen: Buffer[] = [];
+    for (let i = 0; i < pages.length; i++) {
+      const end = i + 1 < pages.length ? starts[i + 1]! : ms;
+      await sleep(t0 + (starts[i]! + end) / 2 - Date.now());
+      seen.push(frame());
+    }
+    for (const [i, f] of seen.entries()) {
+      assert.ok(!f.equals(plain), `page ${i + 1}: no caption`);
+      if (i) assert.ok(!f.equals(seen[i - 1]!), `page ${i + 1} still shows page ${i}`);
+    }
+    await sleep(t0 + ms - Date.now());
+    relay.endCaption();
+    await sleep(CAPTION_LINGER_MS - 300);
+    assert.ok(frame().equals(seen.at(-1)!), 'the last page left before the linger ended');
+    await sleep(600);
+    assert.ok(frame().equals(plain), 'caption pixels left after the last page cleared');
   } finally {
     await relay.close();
   }

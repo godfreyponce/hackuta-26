@@ -104,7 +104,7 @@ export class CallSession {
     this.scanner = new CallerScanner(this.sid);
     this.narrator = new Narrator(
       this.mixer,
-      (text, priority) => { this.video.showCaption(text); this.hub.send({ type: 'narration', sessionId: this.sid, text, priority }); },
+      (text, priority, durationMs) => { this.video.showCaption(text, durationMs); this.hub.send({ type: 'narration', sessionId: this.sid, text, priority }); },
       () => this.video.endCaption(),
     );
   }

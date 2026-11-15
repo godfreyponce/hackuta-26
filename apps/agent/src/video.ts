@@ -41,7 +41,7 @@ const CAPTION_INSET = 32; // text inset from each side
 const EM_PER_CHAR = 0.6;
 /** First row of the bottom letterbox bar: friend-view is OUT_W x OUT_H (640x360 by contract, callMedia.ts), centered. */
 export const GAME_BOTTOM = (AGENT_H + OUT_H) / 2;
-/** Measured: the 22 cached ElevenLabs lines run 11 to 19 characters per second, 16.1 over all of them. */
+/** For a streamed line, whose length is unknown. Measured: the 22 cached ElevenLabs lines run 11 to 19 characters per second, 16.1 over all. */
 export const SPEECH_CHARS_PER_S = 16;
 /**
  * Guess: how long a caption stays after mixer.play resolves. The mixer's AudioSource still holds up to 100 ms, the
@@ -52,13 +52,14 @@ export const CAPTION_LINGER_MS = 700;
 function wrap(text: string, maxChars: number): string[] {
   const lines: string[] = [];
   let line = '';
-  for (const word of text.split(/\s+/).filter(Boolean)) {
+  for (let word of text.split(/\s+/).filter(Boolean)) {
+    for (; word.length > maxChars; word = word.slice(maxChars)) { if (line) lines.push(line); line = ''; lines.push(word.slice(0, maxChars)); }
     const next = line ? `${line} ${word}` : word;
     if (next.length <= maxChars || !line) line = next;
     else { lines.push(line); line = word; }
   }
   if (line) lines.push(line);
-  return lines.map((l) => (l.length > maxChars ? `${l.slice(0, maxChars - 1)}…` : l));
+  return lines;
 }
 
 /** A line wrapped for agent-video and cut into pages of at most CAPTION_MAX_LINES lines, shown one after another. */
@@ -129,10 +130,11 @@ export class VideoRelay {
   }
 
   /**
-   * Shows a line as captions: its pages in turn, each for its share of the line at SPEECH_CHARS_PER_S. The last page
-   * stays until endCaption or the next line.
+   * Shows a line as captions: its pages in turn, each for its character share of the line's audio (durationMs for a
+   * cached line, else SPEECH_CHARS_PER_S). The last page stays until endCaption or the next line.
    */
-  showCaption(text: string): void {
+  showCaption(text: string, durationMs?: number): void {
+    const msPerChar = durationMs ? durationMs / text.length : 1000 / SPEECH_CHARS_PER_S;
     this.clearCaption();
     const gen = this.captionGen;
     let at = 0;
@@ -143,7 +145,7 @@ export class VideoRelay {
         (e) => { if (gen === this.captionGen) this.caption = null; warn('caption_render_failed', { error: errText(e) }); },
       );
       if (at === 0) show(); else this.captionTimers.push(setTimeout(show, at));
-      at += (lines.join(' ').length / SPEECH_CHARS_PER_S) * 1000;
+      at += lines.join(' ').length * msPerChar;
     }
   }
 

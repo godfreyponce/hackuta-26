@@ -1,7 +1,7 @@
 // Narration scheduler (spec B.6): priority queue, 2.5 s gap, stale lines dropped, interrupts only at >= 90.
 import { log } from './log.ts';
 import type { Mixer } from './mixer.ts';
-import { ttsStream } from './tts.ts';
+import { TTS_SAMPLE_RATE, ttsStream } from './tts.ts';
 
 export const PRIORITY = { greeting: 100, scan: 90, weapon: 80, danger: 70, trickshot: 50, flavor: 10 } as const;
 const MIN_GAP_MS = 2_500;
@@ -18,7 +18,8 @@ export class Narrator {
 
   constructor(
     private mixer: Mixer,
-    private onSpoken: (text: string, priority: number) => void,
+    /** durationMs: known only for a cached line. */
+    private onSpoken: (text: string, priority: number, durationMs?: number) => void,
     /** Not called for a line that another line interrupted. */
     private onFinished: (text: string) => void = () => {},
   ) {}
@@ -72,7 +73,7 @@ export class Narrator {
 
   private async speak(item: Item): Promise<void> {
     this.current = item;
-    this.onSpoken(item.text, item.priority);
+    this.onSpoken(item.text, item.priority, item.pcm ? (item.pcm.length / TTS_SAMPLE_RATE) * 1000 : undefined);
     log('narration', { text: item.text, priority: item.priority, cached: !!item.pcm });
     await this.mixer.play(item.pcm ?? ttsStream(item.text));
     if (this.current === item) { this.current = null; this.lastEnd = Date.now(); this.onFinished(item.text); }
